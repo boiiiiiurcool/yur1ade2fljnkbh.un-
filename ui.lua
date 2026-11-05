@@ -267,17 +267,27 @@ function UI.new(opts)
 		BackgroundTransparency = 1,
 	}, window)
 
-	local mainPage = new("Frame", {
+	-- pages are canvas groups so they can fade; the 2px inset keeps outlines from being clipped
+	local PAGE_POS = UDim2.fromOffset(2, 2)
+	local PAGE_SIZE_UD = UDim2.new(1, -4, 1, -4)
+
+	local mainPage = new("CanvasGroup", {
 		Name = "MainPage",
-		Size = UDim2.fromScale(1, 1),
+		Position = PAGE_POS,
+		Size = PAGE_SIZE_UD,
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 0,
 		Visible = true,
 	}, content)
 
-	local settingsPage = new("Frame", {
+	local settingsPage = new("CanvasGroup", {
 		Name = "SettingsPage",
-		Size = UDim2.fromScale(1, 1),
+		Position = PAGE_POS,
+		Size = PAGE_SIZE_UD,
 		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
 		Visible = false,
 	}, content)
 
@@ -328,14 +338,27 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- SIDEBAR ICONS (server icon = main page, gear icon = Settings)
+	-- SIDEBAR ICONS (server icon sits just above the gear, one marker slides between them)
 	---------------------------------------------------------------------
 	do
 		local TIP_X = 14 + TILE + 10
-		local GROW = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local GROW = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 		local navIcons = {}   -- page name -> function(isActive)
+		local navPos = {}     -- page name -> marker position
 
-		-- o.page / o.tip / o.tipW / o.anchorY (0 = from the top, 1 = from the bottom) / o.yScale / o.yOffset
+		local marker = new("Frame", {
+			Name = "NavMarker",
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 8, 0, 80),
+			Size = UDim2.fromOffset(3, 18),
+			BackgroundColor3 = ICON_HOVER,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, window)
+		corner(marker, 2)
+		table.insert(bodyParts, marker)
+
+		-- o.page / o.tip / o.tipW / o.anchorY / o.yScale / o.yOffset
 		-- o.build(glyph) draws the icon and returns the frames that take the icon colour
 		local function makeNavIcon(o)
 			local slot = new("Frame", {
@@ -352,22 +375,9 @@ function UI.new(opts)
 			if o.anchorY == 1 then
 				centerY = o.yOffset - TILE / 2
 			end
+			navPos[o.page] = UDim2.new(0, 8, o.yScale, centerY)
 
-			-- small marker on the sidebar edge for the page you are on
-			local marker = new("Frame", {
-				Name = o.page .. "Marker",
-				AnchorPoint = Vector2.new(0, 0.5),
-				Position = UDim2.new(0, 8, o.yScale, centerY),
-				Size = UDim2.fromOffset(3, 18),
-				BackgroundColor3 = ICON_HOVER,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, window)
-			corner(marker, 2)
-			table.insert(bodyParts, marker)
-
-			-- everything drawn lives in "glyph" so one UIScale can grow it from the middle on hover
+			-- everything drawn lives in "glyph" so one UIScale can grow it from the middle
 			local glyph = new("Frame", {
 				Name = "Glyph",
 				AnchorPoint = Vector2.new(0.5, 0.5),
@@ -414,7 +424,7 @@ function UI.new(opts)
 				BorderSizePixel = 0,
 				ZIndex = 8,
 			}, window)
-			corner(tip, RADIUS + 1)
+			corner(tip, RADIUS + 3)
 			local tipStroke = stroke(tip, BORDER, 1, 1)
 			local tipText = new("TextLabel", {
 				BackgroundTransparency = 1,
@@ -456,19 +466,24 @@ function UI.new(opts)
 				TweenService:Create(glyphScale, GROW, { Scale = 1 }):Play()
 				paint()
 			end)
+			hit.MouseButton1Down:Connect(function()
+				TweenService:Create(glyphScale, FAST, { Scale = 0.9 }):Play()
+			end)
+			hit.MouseButton1Up:Connect(function()
+				local s = 1
+				if hovering then
+					s = 1.2
+				end
+				TweenService:Create(glyphScale, GROW, { Scale = s }):Play()
+			end)
 
 			navIcons[o.page] = function(isActive)
 				active = isActive
-				local t = 1
-				if isActive then
-					t = 0
-				end
-				TweenService:Create(marker, FAST, { BackgroundTransparency = t }):Play()
 				paint()
 			end
 		end
 
-		-- server icon: two stacked units, each with a status dot and a dash
+		-- server icon: two stacked rounded units, each with a status dot and a dash
 		local function buildServer(glyph)
 			local inks = {}
 			local function unit(y)
@@ -480,7 +495,7 @@ function UI.new(opts)
 					BorderSizePixel = 0,
 					ZIndex = 3,
 				}, glyph)
-				corner(f, 3)
+				corner(f, 4)
 				table.insert(inks, f)
 				local dot = new("Frame", {
 					AnchorPoint = Vector2.new(0.5, 0.5),
@@ -506,7 +521,7 @@ function UI.new(opts)
 			return inks
 		end
 
-		-- scalloped gear: two rounded squares (straight + rotated 45 degrees) + a hollow centre
+		-- rounded gear: two rounded squares (straight + rotated 45 degrees) + a hollow centre
 		local function buildGear(glyph)
 			local function shape(w, rot, r, color)
 				local f = new("Frame", {
@@ -521,19 +536,31 @@ function UI.new(opts)
 				corner(f, r)
 				return f
 			end
-			local sq1 = shape(22, 0, 3, ICON)
-			local sq2 = shape(22, 45, 3, ICON)
+			local sq1 = shape(22, 0, 5, ICON)
+			local sq2 = shape(22, 45, 5, ICON)
 			shape(10, 0, 5, SIDEBAR_BG)
 			return { sq1, sq2 }
 		end
 
 		local tipW = math.max(66, #mainTip * 7 + 20)
-		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 0, yScale = 0, yOffset = 60, build = buildServer })
-		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = -(14 + TILE + 8), build = buildGear })
+		local GEAR_Y = -(14 + TILE + 8)       -- bottom edge of the gear tile
+		local SERVER_Y = GEAR_Y - TILE - 6    -- server tile sits a tiny bit above the gear
+		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
+		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
+		local placed = false
 		ui.navUpdate = function()
 			for page, setActive in pairs(navIcons) do
 				setActive(page == currentPage)
+			end
+			local p = navPos[currentPage]
+			if p then
+				if placed then
+					TweenService:Create(marker, SMOOTH, { Position = p }):Play()
+				else
+					marker.Position = p
+					placed = true
+				end
 			end
 		end
 		ui.navUpdate()
@@ -716,7 +743,7 @@ function UI.new(opts)
 			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
 		}, bar)
-		corner(cluster, RADIUS + 1)
+		corner(cluster, RADIUS + 2)
 
 		local function makeControl(kind, hoverColor)
 			local btn = new("TextButton", {
@@ -727,7 +754,7 @@ function UI.new(opts)
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 			}, cluster)
-			corner(btn, 3)
+			corner(btn, 4)
 
 			local parts = {}
 			local function line(w, h, rot)
@@ -753,7 +780,7 @@ function UI.new(opts)
 					BackgroundTransparency = 1,
 					BorderSizePixel = 0,
 				}, btn)
-				corner(sq, 2)
+				corner(sq, 3)
 				local s = stroke(sq, ICON, 1.5, 0)
 				table.insert(parts, { s, "Color" })
 			else
@@ -819,7 +846,7 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- PAGE TITLE CARD + BACK ARROW
+	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
 		local PAGE_TITLES = { Main = mainTitle, Settings = "Settings" }
@@ -831,7 +858,7 @@ function UI.new(opts)
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, window)
-		corner(titleChip, RADIUS + 1)
+		corner(titleChip, RADIUS + 2)
 
 		label(titleChip, "Tab", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
 			Enum.Font.Gotham, 11, DIM_TEXT)
@@ -850,7 +877,7 @@ function UI.new(opts)
 			Visible = false,
 			ZIndex = 3,
 		}, window)
-		corner(backBtn, RADIUS + 1)
+		corner(backBtn, RADIUS + 2)
 		ui.back = backBtn
 
 		-- the arrow lives in a 24x24 holder so it can be scaled up in Touch Mode
@@ -901,18 +928,37 @@ function UI.new(opts)
 		ui.layoutBack()
 
 		local titleToken = 0
+		local pageToken = 0
+		local pages = { Main = mainPage, Settings = settingsPage }
 
 		showPage = function(name)
 			if name == currentPage then
 				return
 			end
 			currentPage = name
-			mainPage.Visible = (name == "Main")
-			settingsPage.Visible = (name == "Settings")
 			backBtn.Visible = (name ~= "Main") and not minimized
 			if ui.navUpdate then
 				ui.navUpdate()
 			end
+
+			-- old page fades out, new page fades in while sliding up a little
+			pageToken = pageToken + 1
+			local pt = pageToken
+			local nxt = pages[name]
+			for _, p in pairs(pages) do
+				if p ~= nxt then
+					TweenService:Create(p, FAST, { GroupTransparency = 1 }):Play()
+					task.delay(0.14, function()
+						if pt == pageToken then
+							p.Visible = false
+						end
+					end)
+				end
+			end
+			nxt.Position = PAGE_POS + UDim2.fromOffset(0, 10)
+			nxt.GroupTransparency = 1
+			nxt.Visible = true
+			TweenService:Create(nxt, SMOOTH, { Position = PAGE_POS, GroupTransparency = 0 }):Play()
 
 			titleToken = titleToken + 1
 			local token = titleToken
@@ -958,7 +1004,7 @@ function UI.new(opts)
 			Visible = false,
 			ZIndex = 22,
 		}, window)
-		corner(toastLbl, RADIUS + 2)
+		corner(toastLbl, RADIUS + 4)
 		stroke(toastLbl, BORDER, 1, 0)
 		pad(toastLbl, 14, 0, 14, 0)
 
@@ -995,7 +1041,7 @@ function UI.new(opts)
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, settingsPage)
-		corner(keyRow, RADIUS + 2)
+		corner(keyRow, RADIUS + 4)
 
 		local keyTitle = label(keyRow, "UI Toggle Keybind", UDim2.fromOffset(14, 10), UDim2.new(1, -150, 0, 16),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
@@ -1016,7 +1062,7 @@ function UI.new(opts)
 			Text = keybind.Name,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 		}, keyRow)
-		corner(keyBtn, RADIUS + 1)
+		corner(keyBtn, RADIUS + 2)
 
 		local function paintKeyBtn(isOver)
 			local bg = CLUSTER_BG
@@ -1050,7 +1096,7 @@ function UI.new(opts)
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, settingsPage)
-		corner(touchRow, RADIUS + 2)
+		corner(touchRow, RADIUS + 4)
 
 		local touchTitle = label(touchRow, "Touch Mode", UDim2.fromOffset(14, 10), UDim2.new(1, -150, 0, 16),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
@@ -1265,7 +1311,7 @@ function UI.new(opts)
 			BorderSizePixel = 0,
 			ZIndex = 31,
 		}, overlay)
-		corner(dialog, RADIUS + 1)
+		corner(dialog, RADIUS + 3)
 		stroke(dialog, BORDER, 1, 0)
 
 		local dialogScale = new("UIScale", { Scale = 0.9 }, dialog)
@@ -1289,7 +1335,7 @@ function UI.new(opts)
 			BorderSizePixel = 0,
 			ZIndex = 32,
 		}, dialog)
-		corner(trayFrame, RADIUS + 1)
+		corner(trayFrame, RADIUS + 2)
 
 		local function dialogButton(text, x, hoverColor)
 			local b = new("TextButton", {
@@ -1305,7 +1351,7 @@ function UI.new(opts)
 				BorderSizePixel = 0,
 				ZIndex = 33,
 			}, trayFrame)
-			corner(b, 3)
+			corner(b, 4)
 			b.MouseEnter:Connect(function()
 				TweenService:Create(b, FAST, { BackgroundTransparency = 0, TextColor3 = ICON_HOVER }):Play()
 			end)
