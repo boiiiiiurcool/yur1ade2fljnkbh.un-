@@ -476,7 +476,7 @@ function Finder.new(win, opts)
 		TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, mainPage)
-	corner(box, RADIUS + 1)
+	corner(box, RADIUS + 2)
 	stroke(box, BORDER, 1, 0)
 	pad(box, 12, 0, 12, 0)
 
@@ -493,7 +493,7 @@ function Finder.new(win, opts)
 		TextSize = 13,
 		Visible = false,
 	}, mainPage)
-	corner(loadBtn, RADIUS + 1)
+	corner(loadBtn, RADIUS + 2)
 	stroke(loadBtn, BORDER, 1, 0)
 	hoverable(loadBtn, CLUSTER_BG, HOVER_GREY, ICON_HOVER, ICON_HOVER)
 
@@ -504,7 +504,7 @@ function Finder.new(win, opts)
 		BackgroundColor3 = CLUSTER_BG,
 		BorderSizePixel = 0,
 	}, mainPage)
-	corner(tray, RADIUS + 1)
+	corner(tray, RADIUS + 2)
 
 	local function makeTab(text)
 		local b = new("TextButton", {
@@ -519,7 +519,7 @@ function Finder.new(win, opts)
 			Font = Enum.Font.GothamMedium,
 			TextSize = 12,
 		}, tray)
-		corner(b, 3)
+		corner(b, 4)
 		return b
 	end
 	local tabServers = makeTab("Servers")
@@ -586,7 +586,7 @@ function Finder.new(win, opts)
 		TextSize = 12,
 		Visible = false,
 	}, list)
-	corner(moreBtn, RADIUS + 1)
+	corner(moreBtn, RADIUS + 2)
 	hoverable(moreBtn, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
 
 	---------------------------------------------------------------------
@@ -662,7 +662,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = 11,
 			}, parent)
-			corner(b, RADIUS + 1)
+			corner(b, RADIUS + 2)
 			hoverable(b, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
 			return b
 		end
@@ -706,7 +706,7 @@ function Finder.new(win, opts)
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 			}, nil)
-			corner(frame, RADIUS + 2)
+			corner(frame, RADIUS + 4)
 			stroke(frame, BORDER, 1, 0)
 			new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, frame)
 
@@ -718,15 +718,26 @@ function Finder.new(win, opts)
 				AutoButtonColor = false,
 			}, frame)
 
-			local arrow = new("TextLabel", {
+			-- custom chevron: two rounded bars, rotates when the card opens
+			local arrow = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0, 18, 0.5, 0),
+				Size = UDim2.fromOffset(14, 14),
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 10, 0, 0),
-				Size = UDim2.new(0, 16, 1, 0),
-				Text = ">",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.GothamBold,
-				TextSize = 14,
 			}, header)
+			local function chevArm(y, rot)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(6.7, y),
+					Size = UDim2.fromOffset(8, 2),
+					Rotation = rot,
+					BackgroundColor3 = DIM_TEXT,
+					BorderSizePixel = 0,
+				}, arrow)
+				corner(f, 1)
+			end
+			chevArm(4.2, 45)
+			chevArm(9.8, -45)
 
 			local title = new("TextLabel", {
 				BackgroundTransparency = 1,
@@ -764,7 +775,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = 12,
 			}, header)
-			corner(joinBtn, RADIUS + 1)
+			corner(joinBtn, RADIUS + 2)
 
 			-- clip frame: its height is animated, the content inside keeps its full size
 			local clipFrame = new("Frame", {
@@ -907,7 +918,7 @@ function Finder.new(win, opts)
 				Text = "",
 				AutoButtonColor = false,
 			}, nil)
-			corner(frame, RADIUS + 2)
+			corner(frame, RADIUS + 4)
 			local rowStroke = stroke(frame, ICON, 1, 1)
 
 			local pic = new("ImageLabel", {
@@ -970,7 +981,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = 10,
 			}, frame)
-			corner(idBtn, RADIUS + 1)
+			corner(idBtn, RADIUS + 2)
 
 			r = {
 				frame = frame, pic = pic, display = display, user = user, role = role,
@@ -1077,7 +1088,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = M.chipText,
 			}, regionRow)
-			corner(b, RADIUS + 1)
+			corner(b, 100)
 			pad(b, 10, 0, 10, 0)
 			local chip = { btn = b, key = key, label = "", stats = "", over = false, sig = "" }
 			b.MouseEnter:Connect(function()
