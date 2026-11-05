@@ -6,20 +6,30 @@
 --
 --   local Finder = <this file>
 --   local finder = Finder.new(win, {
---       RefreshEvery = 2, PageSize = 40,
---       Options = <options.lua table>,   -- optional: gear button, sort pill, filters
+--       RefreshEvery = 2,
+--       Options = <options.lua table>,   -- optional: gear button, sort, filters
 --       Profile = <profile.lua table>,   -- optional: player profile card
 --   })
 --   finder:Stop()      -- optional, it also stops by itself when the window unloads
 --
--- Servers tab: every server in the game's list. Click a server to open it (animated) and see its players.
---   Type in the search box: any server with a matching player opens automatically and the match is highlighted.
---   Search a display name, username, user ID, or the start of a Job ID.
---   Region picker above the list: click it, pick a region (Texas etc.) to only show servers there.
--- Group tab: enter a group ID (or paste the group URL) and press Load to see servers with group members in them.
--- Options (gear): sort, hide full servers, free slots needed, friends only, group role filter, recent groups.
--- Buttons: Join (teleport), Copy Link / Job ID / Script per server, click a player to open their profile card,
---   the ID button copies their user ID.
+-- API for your own modules:
+--   finder:GetServers()      jobId -> server table { jobId, name, players, count, max, ping, rname, startedAt }
+--   finder:GetServer(jobId)
+--   finder:Locate(userId)    the server table a player is in (or nil)
+--   finder:GetName(userId)   { name, display } or nil
+--   finder:Refresh()         read the server list again and redraw
+--   finder:Join(jobId)
+--
+-- Servers tab: square server tiles. Each tile shows the server name, region + ping, five player
+--   heads, the player count and a Join button. Click a tile to open a drawer under its row with
+--   every player in that server.
+--   Search a display name, username, user ID, or the start of a Job ID. Matching servers open.
+--   Region pill: pick a region (Texas etc.) to only show servers there.
+-- Group tab: enter a group ID (or paste the group URL) and press Load.
+-- Options (gear): sort, hide full servers, free slots needed, friends only, role filter, recent groups.
+--
+-- Speed: tiles and player rows are virtual. Only what is on screen exists as an Instance, and
+--   everything is pooled and reused while you scroll.
 
 local Finder = {}
 
@@ -31,12 +41,12 @@ function Finder.new(win, opts)
 	local HttpService = game:GetService("HttpService")
 	local TeleportService = game:GetService("TeleportService")
 	local TweenService = game:GetService("TweenService")
+	local RunService = game:GetService("RunService")
 	local player = Players.LocalPlayer
 
-	local REFRESH_EVERY = opts.RefreshEvery or 2        -- seconds between server list reads
-	local PAGE_SIZE = opts.PageSize or 40               -- servers shown at a time
-	local MAX_PLAYER_ROWS = opts.MaxPlayerRows or 100   -- players shown inside one open server
-	local GROUP_MEMBER_CAP = opts.GroupMemberCap or 5000 -- groups bigger than this are checked player by player
+	local REFRESH_EVERY = opts.RefreshEvery or 2
+	local MAX_PLAYER_ROWS = opts.MaxPlayerRows or 100
+	local GROUP_MEMBER_CAP = opts.GroupMemberCap or 5000
 
 	local running = true
 	local self = {}
@@ -54,8 +64,7 @@ function Finder.new(win, opts)
 	local BLACK = T.BLACK
 	local BORDER = T.BORDER
 	local SIDEBAR_BG = T.SIDEBAR_BG
-	local CARD_BG = T.CARD_BG
-	local CARD_HOVER = T.CARD_HOVER
+	local POPUP_BG = T.POPUP_BG
 	local CLUSTER_BG = T.CLUSTER_BG
 	local ICON = T.ICON
 	local ICON_HOVER = T.ICON_HOVER
@@ -67,8 +76,7 @@ function Finder.new(win, opts)
 	local MATCH_BG = T.MATCH_BG
 	local RADIUS = T.RADIUS
 	local FAST = T.FAST
-	local EXPAND = T.EXPAND
-	local COLLAPSE = T.COLLAPSE
+	local SMOOTH = T.SMOOTH
 
 	local function toast(msg)
 		win:Toast(msg)
@@ -151,150 +159,8 @@ function Finder.new(win, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- DATA: server list
+	-- small helpers
 	---------------------------------------------------------------------
-	local servers = {}       -- jobId -> { jobId, players = {userIds}, count, max, ping, region, startedAt }
-	local located = {}       -- userId -> the server table they are in
-	local locatedCount = 0
-	local serverCount = 0
-	local version = 0        -- bumps whenever servers or their players change
-	local refreshServers = function() end
-
-	do
-		local function playersIn(entry)
-			local seen = {}
-			local list = {}
-			local raw = tostring(entry:GetAttribute("players") or "")
-			for piece in string.gmatch(raw, "[^,]+") do
-				local n = tonumber(piece)
-				if n and n > 0 and n % 1 == 0 and not seen[n] then
-					seen[n] = true
-					table.insert(list, n)
-				end
-			end
-			return list
-		end
-
-		local function getNewest()
-			local newest = {}
-			if not Servers then
-				return newest
-			end
-			local children = Servers:GetChildren()
-			for i = 1, #children do
-				local entry = children[i]
-				local serverId = entry:GetAttribute("serverId")
-				if type(serverId) == "string" and serverId ~= "" and entry:GetAttribute("placeId") == game.PlaceId then
-					local old = newest[serverId]
-					local newTicker = tonumber(entry:GetAttribute("Ticker")) or 0
-					if old == nil then
-						newest[serverId] = entry
-					else
-						local oldTicker = tonumber(old:GetAttribute("Ticker")) or 0
-						if newTicker >= oldTicker then
-							newest[serverId] = entry
-						end
-					end
-				end
-			end
-			return newest
-		end
-
-		local function sigOf(srv)
-			local sum = 0
-			for i = 1, #srv.players do
-				sum = (sum + srv.players[i]) % 1000000007
-			end
-			return tostring(srv.count) .. ":" .. tostring(sum)
-		end
-
-		refreshServers = function()
-			local newServers = {}
-			local newLocated = {}
-			local newest = getNewest()
-
-			for _, entry in pairs(newest) do
-				local list = playersIn(entry)
-				local srv = {
-					jobId = tostring(entry:GetAttribute("serverId")),
-					players = list,
-					count = #list,
-					max = tonumber(entry:GetAttribute("maxPlayers")) or Players.MaxPlayers,
-					ping = tonumber(entry:GetAttribute("ping")),
-					region = entry:GetAttribute("region"),
-					startedAt = tonumber(entry:GetAttribute("startedAt")),
-				}
-				newServers[srv.jobId] = srv
-				for i = 1, #list do
-					newLocated[list[i]] = srv
-				end
-			end
-
-			-- your own server always comes from live data
-			local own = Players:GetPlayers()
-			local ownIds = {}
-			for i = 1, #own do
-				table.insert(ownIds, own[i].UserId)
-			end
-			local prev = newServers[game.JobId]
-			local ownSrv = {
-				jobId = game.JobId,
-				players = ownIds,
-				count = #ownIds,
-				max = Players.MaxPlayers,
-				ping = nil,
-				region = "Your server",
-				startedAt = nil,
-			}
-			if prev then
-				ownSrv.ping = prev.ping
-				ownSrv.region = prev.region
-				ownSrv.startedAt = prev.startedAt
-				if prev.max then
-					ownSrv.max = prev.max
-				end
-			end
-			local okPing, livePing = pcall(function()
-				return player:GetNetworkPing() * 2000
-			end)
-			if okPing then
-				ownSrv.ping = livePing
-			end
-			newServers[game.JobId] = ownSrv
-			for i = 1, #ownIds do
-				newLocated[ownIds[i]] = ownSrv
-			end
-
-			local n = 0
-			for _ in pairs(newLocated) do
-				n = n + 1
-			end
-			local sc = 0
-			for _ in pairs(newServers) do
-				sc = sc + 1
-			end
-
-			local changed = (n ~= locatedCount) or (sc ~= serverCount)
-			if not changed then
-				for jid, srv in pairs(newServers) do
-					local old = servers[jid]
-					if old == nil or sigOf(old) ~= sigOf(srv) then
-						changed = true
-						break
-					end
-				end
-			end
-
-			servers = newServers
-			located = newLocated
-			locatedCount = n
-			serverCount = sc
-			if changed then
-				version = version + 1
-			end
-		end
-	end
-
 	local function niceRegion(r)
 		local s = tostring(r or "")
 		if s == "" or s == "N/A" then
@@ -321,18 +187,201 @@ function Finder.new(win, opts)
 		return "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=150&h=150"
 	end
 
-	-- servers per region + average ping (sorted: most servers first)
+	---------------------------------------------------------------------
+	-- DATA: server list
+	-- Parsed player lists are reused while a server's raw text is unchanged,
+	-- and the player -> server map is only rebuilt when something really changed.
+	---------------------------------------------------------------------
+	local servers = {}       -- jobId -> server table
+	local located = {}       -- userId -> the server table they are in
+	local locatedCount = 0
+	local serverCount = 0
+	local version = 0        -- bumps whenever servers or their players change
+	local refreshServers = function() end
+
+	do
+		local function parsePlayers(raw)
+			local seen = {}
+			local list = {}
+			for piece in string.gmatch(raw, "[^,]+") do
+				local n = tonumber(piece)
+				if n and n > 0 and n % 1 == 0 and not seen[n] then
+					seen[n] = true
+					list[#list + 1] = n
+				end
+			end
+			return list
+		end
+
+		local function getNewest()
+			local newest = {}
+			if not Servers then
+				return newest
+			end
+			local children = Servers:GetChildren()
+			for i = 1, #children do
+				local entry = children[i]
+				local serverId = entry:GetAttribute("serverId")
+				if type(serverId) == "string" and serverId ~= "" and entry:GetAttribute("placeId") == game.PlaceId then
+					local old = newest[serverId]
+					if old == nil then
+						newest[serverId] = entry
+					else
+						local newTicker = tonumber(entry:GetAttribute("Ticker")) or 0
+						local oldTicker = tonumber(old:GetAttribute("Ticker")) or 0
+						if newTicker >= oldTicker then
+							newest[serverId] = entry
+						end
+					end
+				end
+			end
+			return newest
+		end
+
+		-- uses a "serverName" / "name" attribute when the game provides one
+		local function nameFor(entry, jid)
+			if entry then
+				local nm = entry:GetAttribute("serverName")
+				if type(nm) ~= "string" or nm == "" then
+					nm = entry:GetAttribute("name")
+				end
+				if type(nm) == "string" and nm ~= "" then
+					return nm
+				end
+			end
+			if jid == "" then
+				return "This server"
+			end
+			return "Server " .. string.sub(jid, 1, 8)
+		end
+
+		refreshServers = function()
+			local newest = getNewest()
+			local newServers = {}
+			local changed = false
+			local ownJob = game.JobId
+
+			for jid, entry in pairs(newest) do
+				if jid ~= ownJob then
+					local raw = tostring(entry:GetAttribute("players") or "")
+					local maxP = tonumber(entry:GetAttribute("maxPlayers")) or Players.MaxPlayers
+					local region = entry:GetAttribute("region")
+					local srv = servers[jid]
+					if srv == nil or srv.raw ~= raw or srv.max ~= maxP or srv.region ~= region then
+						local list = parsePlayers(raw)
+						srv = {
+							jobId = jid,
+							jl = string.lower(jid),
+							raw = raw,
+							players = list,
+							count = #list,
+							max = maxP,
+							region = region,
+							rname = niceRegion(region),
+							name = nameFor(entry, jid),
+						}
+						changed = true
+					end
+					srv.ping = tonumber(entry:GetAttribute("ping"))
+					srv.startedAt = tonumber(entry:GetAttribute("startedAt"))
+					newServers[jid] = srv
+				end
+			end
+
+			-- your own server always comes from live data
+			local own = Players:GetPlayers()
+			local ownIds = {}
+			local sum = 0
+			for i = 1, #own do
+				local id = own[i].UserId
+				ownIds[i] = id
+				sum = (sum + id) % 1000000007
+			end
+			local ownSig = #ownIds .. ":" .. sum
+			local ownSrv = servers[ownJob]
+			if ownSrv == nil or ownSrv.sig ~= ownSig then
+				ownSrv = {
+					jobId = ownJob,
+					jl = string.lower(ownJob),
+					sig = ownSig,
+					players = ownIds,
+					count = #ownIds,
+					max = Players.MaxPlayers,
+					region = "Your server",
+					rname = "Your server",
+					name = nameFor(nil, ownJob),
+				}
+				changed = true
+			end
+			local ownEntry = newest[ownJob]
+			if ownEntry then
+				local mp = tonumber(ownEntry:GetAttribute("maxPlayers"))
+				if mp then
+					ownSrv.max = mp
+				end
+				local rg = ownEntry:GetAttribute("region")
+				if rg ~= nil then
+					ownSrv.region = rg
+					ownSrv.rname = niceRegion(rg)
+				end
+				ownSrv.startedAt = tonumber(ownEntry:GetAttribute("startedAt"))
+				ownSrv.name = nameFor(ownEntry, ownJob)
+			end
+			local okPing, livePing = pcall(function()
+				return player:GetNetworkPing() * 2000
+			end)
+			if okPing then
+				ownSrv.ping = livePing
+			end
+			newServers[ownJob] = ownSrv
+
+			if not changed then
+				for jid, _ in pairs(servers) do
+					if newServers[jid] == nil then
+						changed = true
+						break
+					end
+				end
+			end
+
+			servers = newServers
+			if changed then
+				local newLocated = {}
+				local n = 0
+				local sc = 0
+				for _, srv in pairs(newServers) do
+					sc = sc + 1
+					local list = srv.players
+					for i = 1, #list do
+						local uid = list[i]
+						if newLocated[uid] == nil then
+							n = n + 1
+						end
+						newLocated[uid] = srv
+					end
+				end
+				located = newLocated
+				locatedCount = n
+				serverCount = sc
+				version = version + 1
+			end
+		end
+	end
+
+	-- servers per region + average ping
 	local function regionSummary()
 		local agg = {}
+		local arr = {}
 		local total = 0
 		local pSum = 0
 		local pN = 0
 		for _, srv in pairs(servers) do
-			local name = niceRegion(srv.region)
+			local name = srv.rname
 			local a = agg[name]
 			if a == nil then
 				a = { name = name, count = 0, pSum = 0, pN = 0 }
 				agg[name] = a
+				arr[#arr + 1] = a
 			end
 			a.count = a.count + 1
 			total = total + 1
@@ -343,21 +392,12 @@ function Finder.new(win, opts)
 				pN = pN + 1
 			end
 		end
-		local arr = {}
-		for _, a in pairs(agg) do
-			table.insert(arr, a)
-		end
-		table.sort(arr, function(x, y)
-			if x.count ~= y.count then
-				return x.count > y.count
-			end
-			return x.name < y.name
-		end)
 		return arr, total, pSum, pN
 	end
 
 	---------------------------------------------------------------------
 	-- DATA: names (loaded in the background, everything shows immediately)
+	-- lowercase copies are stored once so searching does not allocate.
 	---------------------------------------------------------------------
 	local names = {}
 	local namesCount = 0
@@ -366,21 +406,30 @@ function Finder.new(win, opts)
 
 	do
 		local tried = {}
+		local idleVersion = -1
 
 		setName = function(id, username, display)
 			if names[id] == nil then
 				namesCount = namesCount + 1
 			end
-			names[id] = { name = username, display = display }
+			local user = tostring(username or "")
+			local disp = tostring(display or username or "")
+			names[id] = { name = user, display = disp, nl = string.lower(user), dl = string.lower(disp) }
 		end
 
 		-- loads one batch of 100; returns true if more are waiting
 		resolveNames = function()
 			local own = Players:GetPlayers()
 			for i = 1, #own do
-				setName(own[i].UserId, own[i].Name, own[i].DisplayName)
+				local p = own[i]
+				if names[p.UserId] == nil then
+					setName(p.UserId, p.Name, p.DisplayName)
+				end
 			end
 			if not httpRequest then
+				return false
+			end
+			if idleVersion == version then
 				return false
 			end
 
@@ -389,7 +438,7 @@ function Finder.new(win, opts)
 			for id, _ in pairs(located) do
 				if names[id] == nil and not tried[id] then
 					if #batch < 100 then
-						table.insert(batch, id)
+						batch[#batch + 1] = id
 					else
 						more = true
 						break
@@ -397,6 +446,7 @@ function Finder.new(win, opts)
 				end
 			end
 			if #batch == 0 then
+				idleVersion = version
 				return false
 			end
 
@@ -425,53 +475,83 @@ function Finder.new(win, opts)
 	---------------------------------------------------------------------
 	-- SIZES (switch with Touch Mode)
 	---------------------------------------------------------------------
-	local METRICS_NORMAL = {
-		boxH = 34, boxText = 13, loadW = 64,
-		trayH = 30, tabW = 84, tabH = 24, tabText = 12,
-		chipH = 24, chipText = 11,
-		headerH = 54, titleY = 10, subY = 30, titleText = 13, subText = 11,
-		joinW = 54, joinH = 28, joinText = 12,
-		smallH = 26, smallText = 11, smallW1 = 88, smallW2 = 92, smallW3 = 92,
-		rowH = 40, avatar = 26, nameText = 13, userText = 11, roleText = 10,
-		idW = 36, idH = 22, idText = 10,
-		moreH = 32, moreText = 12,
-	}
-	local METRICS_TOUCH = {
-		boxH = 44, boxText = 14, loadW = 76,
-		trayH = 40, tabW = 96, tabH = 34, tabText = 13,
-		chipH = 34, chipText = 12,
-		headerH = 66, titleY = 13, subY = 36, titleText = 14, subText = 12,
-		joinW = 68, joinH = 40, joinText = 13,
-		smallH = 38, smallText = 12, smallW1 = 100, smallW2 = 108, smallW3 = 108,
-		rowH = 54, avatar = 38, nameText = 14, userText = 12, roleText = 11,
-		idW = 48, idH = 34, idText = 11,
-		moreH = 44, moreText = 13,
-	}
 	local M = {}
-	local function setMetrics(on)
-		local src = METRICS_NORMAL
-		if on then
-			src = METRICS_TOUCH
-		end
-		for k, v in pairs(src) do
-			M[k] = v
+	local setMetrics = function(_on) end
+	do
+		local NORMAL = {
+			boxH = 34, boxText = 13, loadW = 64,
+			trayH = 30, tabW = 84, tabH = 24, tabText = 12,
+			pillW = 190, pillText = 12,
+			pad = 12, gap = 10, tileMin = 150,
+			titleText = 13, subText = 11, infoText = 11, countText = 13,
+			joinW = 54, joinH = 26, joinText = 12,
+			head = 58, smallH = 26, smallText = 11, smallW1 = 88, smallW2 = 92, smallW3 = 92,
+			rowH = 44, rowMin = 196, avatar = 30, nameText = 13, userText = 11, idW = 32, idH = 22, idText = 10,
+		}
+		local TOUCH = {
+			boxH = 44, boxText = 14, loadW = 76,
+			trayH = 40, tabW = 96, tabH = 34, tabText = 13,
+			pillW = 210, pillText = 13,
+			pad = 14, gap = 12, tileMin = 170,
+			titleText = 14, subText = 12, infoText = 12, countText = 14,
+			joinW = 66, joinH = 36, joinText = 13,
+			head = 68, smallH = 38, smallText = 12, smallW1 = 100, smallW2 = 108, smallW3 = 108,
+			rowH = 56, rowMin = 220, avatar = 38, nameText = 14, userText = 12, idW = 44, idH = 34, idText = 11,
+		}
+		setMetrics = function(on)
+			local src = NORMAL
+			if on then
+				src = TOUCH
+			end
+			for k, v in pairs(src) do
+				M[k] = v
+			end
 		end
 	end
 	local touchNow = win.Touch
 	setMetrics(touchNow)
 
 	---------------------------------------------------------------------
-	-- WIDGETS (inside the main page of the window)
+	-- PAGE WIDGETS
 	---------------------------------------------------------------------
 	local mainPage = win.MainPage
 	local render = function(_force) end
 	local layoutFinder = function() end
-	local stopGroup = function() end
+	local stopAll = function() end
 
-	local box = new("TextBox", {
+	-- search box: dark pill with a drawn magnifier
+	local boxBack = new("Frame", {
 		Position = UDim2.fromOffset(0, 8),
 		Size = UDim2.new(1, 0, 0, 34),
 		BackgroundColor3 = SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, mainPage)
+	corner(boxBack, RADIUS + 2)
+	local boxStroke = stroke(boxBack, BORDER, 1, 0)
+
+	local ring = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, 19, 0.5, -1),
+		Size = UDim2.fromOffset(10, 10),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, boxBack)
+	corner(ring, 100)
+	stroke(ring, DIM_TEXT, 1.5, 0)
+	local handle = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, 25, 0.5, 5),
+		Size = UDim2.fromOffset(5, 2),
+		Rotation = 45,
+		BackgroundColor3 = DIM_TEXT,
+		BorderSizePixel = 0,
+	}, boxBack)
+	corner(handle, 1)
+
+	local box = new("TextBox", {
+		Position = UDim2.fromOffset(36, 0),
+		Size = UDim2.new(1, -48, 1, 0),
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		TextColor3 = TEXT_COLOR,
 		PlaceholderText = "Search a player: display name, username or ID...",
@@ -481,10 +561,8 @@ function Finder.new(win, opts)
 		Font = Enum.Font.Gotham,
 		TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left,
-	}, mainPage)
-	corner(box, RADIUS + 2)
-	stroke(box, BORDER, 1, 0)
-	pad(box, 12, 0, 12, 0)
+		ClipsDescendants = true,
+	}, boxBack)
 
 	local loadBtn = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0),
@@ -503,7 +581,7 @@ function Finder.new(win, opts)
 	stroke(loadBtn, BORDER, 1, 0)
 	hoverable(loadBtn, CLUSTER_BG, HOVER_GREY, ICON_HOVER, ICON_HOVER)
 
-	-- tab tray (same look as the button tray in the unload dialog)
+	-- tabs: a tray with one highlight that slides between the two
 	local tray = new("Frame", {
 		Position = UDim2.fromOffset(0, 50),
 		Size = UDim2.fromOffset(176, 30),
@@ -512,11 +590,18 @@ function Finder.new(win, opts)
 	}, mainPage)
 	corner(tray, RADIUS + 2)
 
+	local slider = new("Frame", {
+		Position = UDim2.fromOffset(3, 3),
+		Size = UDim2.fromOffset(84, 24),
+		BackgroundColor3 = HOVER_GREY,
+		BorderSizePixel = 0,
+	}, tray)
+	corner(slider, 4)
+
 	local function makeTab(text)
-		local b = new("TextButton", {
+		return new("TextButton", {
 			Position = UDim2.fromOffset(3, 3),
 			Size = UDim2.fromOffset(84, 24),
-			BackgroundColor3 = HOVER_GREY,
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			AutoButtonColor = false,
@@ -525,26 +610,47 @@ function Finder.new(win, opts)
 			Font = Enum.Font.GothamMedium,
 			TextSize = 12,
 		}, tray)
-		corner(b, 4)
-		return b
 	end
 	local tabServers = makeTab("Servers")
 	local tabGroup = makeTab("Group")
 
-	local status = label(mainPage, "", UDim2.fromOffset(188, 50), UDim2.new(1, -188, 0, 30),
+	local status = label(mainPage, "", UDim2.fromOffset(200, 50), UDim2.new(1, -200, 0, 30),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
 
-	-- region picker row (Servers tab only): one button, the list opens under it
-	local regionRow = new("Frame", {
-		Position = UDim2.fromOffset(0, 88),
-		Size = UDim2.new(1, 0, 0, 30),
-		BackgroundTransparency = 1,
+	-- region pill (Servers tab only) + its dropdown
+	local regionBtn = new("TextButton", {
+		Position = UDim2.fromOffset(184, 50),
+		Size = UDim2.fromOffset(190, 30),
+		BackgroundColor3 = CLUSTER_BG,
 		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Text = "",
 	}, mainPage)
+	corner(regionBtn, RADIUS + 2)
+	local regionTitle = label(regionBtn, "Region", UDim2.fromOffset(12, 0), UDim2.new(0, 48, 1, 0),
+		Enum.Font.Gotham, 12, DIM_TEXT)
+	local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(60, 0), UDim2.new(1, -84, 1, 0),
+		Enum.Font.GothamMedium, 12, TEXT_COLOR)
+	label(regionBtn, "v", UDim2.new(1, -22, 0, 0), UDim2.new(0, 14, 1, 0),
+		Enum.Font.GothamMedium, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 
+	local regionMenu = new("CanvasGroup", {
+		Name = "RegionMenu",
+		Position = UDim2.fromOffset(184, 86),
+		Size = UDim2.fromOffset(300, 200),
+		BackgroundColor3 = POPUP_BG,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+		Visible = false,
+		ZIndex = 31,
+	}, mainPage)
+	corner(regionMenu, RADIUS + 4)
+	stroke(regionMenu, BORDER, 1, 0)
+
+	-- the server grid (virtual: only what is on screen exists)
 	local list = new("ScrollingFrame", {
-		Position = UDim2.fromOffset(0, 124),
-		Size = UDim2.new(1, 0, 1, -124),
+		Position = UDim2.fromOffset(0, 90),
+		Size = UDim2.new(1, 0, 1, -90),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ScrollBarThickness = 3,
@@ -552,9 +658,8 @@ function Finder.new(win, opts)
 		ScrollBarImageTransparency = 0.5,
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		CanvasSize = UDim2.new(0, 0, 0, 0),
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ElasticBehavior = Enum.ElasticBehavior.Never,
 	}, mainPage)
-	new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder }, list)
 
 	local emptyLabel = new("TextLabel", {
 		AnchorPoint = Vector2.new(0.5, 0),
@@ -569,27 +674,12 @@ function Finder.new(win, opts)
 		Visible = false,
 	}, mainPage)
 
-	local moreBtn = new("TextButton", {
-		LayoutOrder = 999999,
-		Size = UDim2.new(1, -8, 0, 32),
-		BackgroundColor3 = CLUSTER_BG,
-		BorderSizePixel = 0,
-		AutoButtonColor = false,
-		Text = "Show more servers",
-		TextColor3 = ICON,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
-		Visible = false,
-	}, list)
-	corner(moreBtn, RADIUS + 2)
-	hoverable(moreBtn, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
-
 	---------------------------------------------------------------------
 	-- LOADING SCREEN (covers the page until enough names are loaded)
 	---------------------------------------------------------------------
 	do
-		local LOAD_SLACK = opts.LoadSlack or 150     -- ready when this many (or fewer) players are still unloaded
-		local LOAD_TIMEOUT = opts.LoadTimeout or 60  -- safety: open anyway after this many seconds
+		local LOAD_SLACK = opts.LoadSlack or 150
+		local LOAD_TIMEOUT = opts.LoadTimeout or 60
 
 		local overlay = new("CanvasGroup", {
 			Name = "LoadingOverlay",
@@ -601,7 +691,6 @@ function Finder.new(win, opts)
 			ZIndex = 50,
 		}, mainPage)
 
-		-- spinner: a faint full ring with a bright arc that rotates on top of it
 		local function ringFrame()
 			local f = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
@@ -647,7 +736,6 @@ function Finder.new(win, opts)
 			local ready = false
 			while running and not ready do
 				task.wait(0.4)
-				-- serverCount > 0 means the first server list read has happened
 				if serverCount > 0 then
 					local resolved = 0
 					for id, _ in pairs(located) do
@@ -670,30 +758,64 @@ function Finder.new(win, opts)
 			spin:Cancel()
 			TweenService:Create(overlay, OPEN_INFO, { GroupTransparency = 1 }):Play()
 			task.delay(OPEN_INFO.Time + 0.05, function()
-				overlay.Visible = false
+				overlay:Destroy()
 			end)
 		end)
 	end
 
 	---------------------------------------------------------------------
-	-- LOGIC: cards, rendering, regions, groups, inputs
+	-- LOGIC
 	---------------------------------------------------------------------
 	do
-		local cards = {}
-		local opt = nil       -- options module instance (gear, sort, filters)
-		local profile = nil   -- profile module instance (player card)
-		local expanded = {}   -- jobId -> true/false when you toggled it by hand
-		local expandRev = 0
+		local opt = nil       -- options module instance
+		local profile = nil   -- profile module instance
 		local group = nil     -- { id, name, members = {userId = roleName}, checked, status, rev }
 		local groupToken = 0
 		local tab = "servers"
-		local shown = PAGE_SIZE
+		local regionFilter = nil
+		local regionVersion = -1
+		local expanded = {}   -- jobId -> true/false when you toggled it by hand
+		local savedText = { servers = "", group = "" }
+		local styleRev = 0    -- bumps when sizes change (touch mode, resize)
+		local contentRev = 0  -- bumps whenever the data on screen has to be redrawn
 		local lastSig = ""
 		local lastMatchCount = 0
-		local shownCards = {}
-		local savedText = { servers = "", group = "" }
-		local styleRev = 0
-		local regionFilter = nil   -- nil = all regions
+		local searchToken = 0
+
+		-- geometry
+		local entries = {}
+		local cols = 1
+		local tileS = 150
+		local contentW = 676
+		local pcols = 1
+		local colW = 600
+		local geoKey = ""
+
+		-- drawer animation (0 = closed, 1 = open), driven by one Heartbeat while something moves
+		local frac = {}
+		local goal = {}
+		local animating = {}
+		local animConn = nil
+
+		local EMPTY = {}
+		local scaleObj = win.Window:FindFirstChildOfClass("UIScale")
+
+		local layout = function() end
+		local toggleOpen = function(_jid) end
+		local updateRegions = function() end
+		local closeRegionMenu = function() end
+
+		-- the window can be scaled; sizes we place are in unscaled units
+		local function unit()
+			local s = 1
+			if scaleObj then
+				s = scaleObj.Scale
+			end
+			if s < 0.05 then
+				s = 1
+			end
+			return s
+		end
 
 		-------------------------------------------------------------
 		-- Actions
@@ -723,6 +845,10 @@ function Finder.new(win, opts)
 				toast("You are already in this server")
 				return
 			end
+			if srv.count >= srv.max then
+				toast("This server is full")
+				return
+			end
 			toast("Teleporting...")
 			local ok, err = pcall(function()
 				TeleportService:TeleportToPlaceInstance(game.PlaceId, srv.jobId, player)
@@ -733,668 +859,1216 @@ function Finder.new(win, opts)
 			end
 		end
 
-		-------------------------------------------------------------
-		-- Server rows (created once per server, then reused)
-		-- flat list: no boxes, a thin line between servers, players indented underneath
-		-------------------------------------------------------------
-		local function smallBtn(text, order, parent)
-			local b = new("TextButton", {
-				LayoutOrder = order,
-				Size = UDim2.new(0, 88, 1, 0),
-				BackgroundColor3 = CLUSTER_BG,
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = text,
-				TextColor3 = ICON,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 11,
-			}, parent)
-			corner(b, RADIUS)
-			hoverable(b, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
-			return b
-		end
-
-		-- sizes that depend on Touch Mode
-		local function styleCard(c)
-			c.styleRev = styleRev
-			c.header.Size = UDim2.new(1, 0, 0, M.headerH)
-			local rightW = M.joinW + 84
-			c.title.Position = UDim2.new(0, 34, 0, M.titleY)
-			c.title.Size = UDim2.new(1, -(34 + rightW), 0, M.titleText + 5)
-			c.title.TextSize = M.titleText
-			c.sub.Position = UDim2.new(0, 34, 0, M.subY)
-			c.sub.Size = UDim2.new(1, -(34 + rightW), 0, M.subText + 5)
-			c.sub.TextSize = M.subText
-			c.count.Position = UDim2.new(1, -(M.joinW + 22), 0.5, 0)
-			c.count.TextSize = M.titleText
-			c.joinBtn.Size = UDim2.fromOffset(M.joinW, M.joinH)
-			c.joinBtn.TextSize = M.joinText
-			c.actions.Size = UDim2.new(1, 0, 0, M.smallH)
-			local widths = { M.smallW1, M.smallW2, M.smallW3 }
-			for i = 1, 3 do
-				c.smalls[i].Size = UDim2.new(0, widths[i], 1, 0)
-				c.smalls[i].TextSize = M.smallText
+		local function openProfile(uid)
+			local n = names[uid]
+			if profile then
+				if n then
+					profile:Open(uid, { name = n.name, display = n.display })
+				else
+					profile:Open(uid)
+				end
+			elseif n then
+				copyText(n.name, "Copied username: " .. n.name)
+			else
+				toast("Name still loading, try again in a moment")
 			end
 		end
 
-		-- height of the player area follows the animated fraction (0 = closed, 1 = open)
-		local function applyClip(c)
-			local h = math.floor(c.target * c.frac.Value + 0.5)
-			c.clip.Size = UDim2.new(1, 0, 0, h)
+		-- players of one server in display order: search matches, friends, then A-Z
+		local function sortedPlayers(e)
+			local source = e.ids or e.srv.players
+			local out = {}
+			for i = 1, #source do
+				out[i] = source[i]
+			end
+			local ms = e.matchSet
+			local o = opt
+			table.sort(out, function(a, b)
+				local ma = (ms[a] == true)
+				local mb = (ms[b] == true)
+				if ma ~= mb then
+					return ma
+				end
+				if o then
+					local fa = o:IsFriend(a)
+					local fb = o:IsFriend(b)
+					if fa ~= fb then
+						return fa
+					end
+				end
+				local na = names[a]
+				local nb = names[b]
+				if (na ~= nil) ~= (nb ~= nil) then
+					return na ~= nil
+				end
+				if na and nb and na.dl ~= nb.dl then
+					return na.dl < nb.dl
+				end
+				return a < b
+			end)
+			return out
 		end
 
-		local function getCard(jobId)
-			local c = cards[jobId]
-			if c then
+		-- the 5 heads shown on a tile: matches first, then friends, then list order
+		local function pickPreview(e, out)
+			local src = e.ids or e.srv.players
+			local total = #src
+			local n = 0
+			local ms = e.matchSet
+			if e.matches > 0 then
+				for i = 1, total do
+					if n >= 5 then
+						break
+					end
+					local id = src[i]
+					if ms[id] == true then
+						n = n + 1
+						out[n] = id
+					end
+				end
+			end
+			if n < 5 and opt and opt.friendStatus == "ready" then
+				for i = 1, total do
+					if n >= 5 then
+						break
+					end
+					local id = src[i]
+					if opt:IsFriend(id) then
+						local dup = false
+						for k = 1, n do
+							if out[k] == id then
+								dup = true
+							end
+						end
+						if not dup then
+							n = n + 1
+							out[n] = id
+						end
+					end
+				end
+			end
+			for i = 1, total do
+				if n >= 5 then
+					break
+				end
+				local id = src[i]
+				local dup = false
+				for k = 1, n do
+					if out[k] == id then
+						dup = true
+					end
+				end
+				if not dup then
+					n = n + 1
+					out[n] = id
+				end
+			end
+			return n
+		end
+
+		-------------------------------------------------------------
+		-- Drawer animation
+		-------------------------------------------------------------
+		local function stepAnim(dt)
+			if not running then
+				if animConn then
+					animConn:Disconnect()
+					animConn = nil
+				end
+				return
+			end
+			local k = 1 - math.exp(-dt * 15)
+			for jid, _ in pairs(animating) do
+				local f = frac[jid] or 0
+				local g = goal[jid] or 0
+				f = f + (g - f) * k
+				if math.abs(g - f) < 0.003 then
+					f = g
+					animating[jid] = nil
+				end
+				frac[jid] = f
+			end
+			layout()
+			if next(animating) == nil and animConn then
+				animConn:Disconnect()
+				animConn = nil
+			end
+		end
+
+		local function startAnim(jid)
+			animating[jid] = true
+			if animConn == nil then
+				animConn = RunService.Heartbeat:Connect(stepAnim)
+			end
+		end
+
+		toggleOpen = function(jid)
+			local isOpen = (goal[jid] or 0) > 0.5
+			local nextOpen = not isOpen
+			expanded[jid] = nextOpen
+			if nextOpen then
+				goal[jid] = 1
+			else
+				goal[jid] = 0
+			end
+			if frac[jid] == nil then
+				frac[jid] = 0
+			end
+			startAnim(jid)
+		end
+
+		-------------------------------------------------------------
+		-- VIEW: tiles, drawers and player rows (all pooled)
+		-------------------------------------------------------------
+		do
+			local MAXR = MAX_PLAYER_ROWS
+			local ROW_GAP_X = 6
+			local OVER_STROKE = Color3.fromRGB(58, 58, 65)
+
+			local tileOf = {}
+			local tilePool = {}
+			local drawerOf = {}
+			local drawerPool = {}
+			local rowPool = {}
+			local stamp = 0
+			local totalH = 0
+
+			---------------- tile ----------------
+			local function paintTile(c)
+				local col = BORDER
+				local arrowCol = DIM_TEXT
+				if c.open then
+					col = HOVER_GREY
+					arrowCol = ICON_HOVER
+				elseif c.over then
+					col = OVER_STROKE
+					arrowCol = ICON
+				end
+				if c.strokeCol ~= col then
+					c.strokeCol = col
+					TweenService:Create(c.stroke, FAST, { Color = col }):Play()
+				end
+				c.arrow.TextColor3 = arrowCol
+			end
+
+			-- every inner position follows the tile size, so one tile design fits any window width
+			local function styleTile(c)
+				c.styleRev = styleRev
+				local S = tileS
+				local P = M.pad
+				local ty = P
+				local sy = ty + M.titleText + 5
+				local ay = sy + M.subText + 10
+				local av = math.floor(S * 0.2)
+				local step = math.floor((S - 2 * P - av) / 4)
+				local iy = ay + av + 7
+				local by = S - P - M.joinH
+
+				c.frame.Size = UDim2.fromOffset(S, S)
+				c.title.Position = UDim2.fromOffset(P, ty)
+				c.title.Size = UDim2.fromOffset(S - 2 * P - 20, M.titleText + 4)
+				c.title.TextSize = M.titleText
+				c.sub.Position = UDim2.fromOffset(P, sy)
+				c.sub.Size = UDim2.fromOffset(S - 2 * P, M.subText + 4)
+				c.sub.TextSize = M.subText
+				c.arrow.Position = UDim2.fromOffset(S - P - 6, ty + 8)
+				for i = 1, 5 do
+					local img = c.avs[i]
+					img.Position = UDim2.fromOffset(P + (i - 1) * step, ay)
+					img.Size = UDim2.fromOffset(av, av)
+				end
+				c.info.Position = UDim2.fromOffset(P, iy)
+				c.info.Size = UDim2.fromOffset(S - 2 * P, M.infoText + 4)
+				c.info.TextSize = M.infoText
+
+				local leftW = S - 2 * P - M.joinW - 8
+				local blockTop = by + math.floor((M.joinH - 23) / 2)
+				c.count.Position = UDim2.fromOffset(P, blockTop)
+				c.count.Size = UDim2.fromOffset(leftW, 16)
+				c.count.TextSize = M.countText
+				c.barBg.Position = UDim2.fromOffset(P, blockTop + 20)
+				c.barBg.Size = UDim2.fromOffset(leftW, 3)
+				c.barW = leftW
+				c.join.Position = UDim2.fromOffset(S - P - M.joinW, by)
+				c.join.Size = UDim2.fromOffset(M.joinW, M.joinH)
+				c.join.TextSize = M.joinText
+			end
+
+			local function makeTile()
+				local c = {
+					uids = {}, avs = {}, preview = {},
+					styleRev = -1, boundRev = -1, stamp = 0,
+					over = false, open = false, strokeCol = BORDER, rot = -1, joinMode = "",
+				}
+				local f = new("TextButton", {
+					Size = UDim2.fromOffset(150, 150),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "",
+				}, nil)
+				corner(f, RADIUS + 4)
+				c.frame = f
+				c.stroke = stroke(f, BORDER, 1, 0)
+
+				c.title = label(f, "", UDim2.fromOffset(12, 12), UDim2.fromOffset(100, 17),
+					Enum.Font.GothamMedium, 13, TEXT_COLOR)
+				c.sub = label(f, "", UDim2.fromOffset(12, 30), UDim2.fromOffset(100, 15),
+					Enum.Font.Gotham, 11, DIM_TEXT)
+				c.arrow = new("TextLabel", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Size = UDim2.fromOffset(16, 16),
+					BackgroundTransparency = 1,
+					Text = ">",
+					TextColor3 = DIM_TEXT,
+					Font = Enum.Font.GothamMedium,
+					TextSize = 14,
+				}, f)
+
+				-- five heads, each one overlaps the one before it and cuts a thin ring into it
+				for i = 1, 5 do
+					local img = new("ImageLabel", {
+						BackgroundColor3 = CLUSTER_BG,
+						BorderSizePixel = 0,
+						Image = "",
+						Visible = false,
+					}, f)
+					corner(img, 8)
+					stroke(img, SIDEBAR_BG, 2, 0)
+					c.avs[i] = img
+				end
+
+				c.info = label(f, "", UDim2.fromOffset(12, 90), UDim2.fromOffset(100, 15),
+					Enum.Font.Gotham, 11, DIM_TEXT)
+				c.count = label(f, "", UDim2.fromOffset(12, 112), UDim2.fromOffset(60, 16),
+					Enum.Font.GothamMedium, 13, TEXT_COLOR)
+				c.barBg = new("Frame", {
+					BackgroundColor3 = CLUSTER_BG,
+					BorderSizePixel = 0,
+				}, f)
+				corner(c.barBg, 2)
+				c.barFill = new("Frame", {
+					Size = UDim2.new(0, 0, 1, 0),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+				}, c.barBg)
+				corner(c.barFill, 2)
+
+				c.join = new("TextButton", {
+					BackgroundColor3 = JOIN_BG,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "Join",
+					TextColor3 = BLACK,
+					Font = Enum.Font.GothamMedium,
+					TextSize = 12,
+				}, f)
+				corner(c.join, RADIUS)
+
+				f.MouseEnter:Connect(function()
+					c.over = true
+					paintTile(c)
+				end)
+				f.MouseLeave:Connect(function()
+					c.over = false
+					paintTile(c)
+				end)
+				f.Activated:Connect(function()
+					if c.srv then
+						toggleOpen(c.srv.jobId)
+					end
+				end)
+				c.join.MouseEnter:Connect(function()
+					if c.joinMode == "join" then
+						TweenService:Create(c.join, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+					end
+				end)
+				c.join.MouseLeave:Connect(function()
+					if c.joinMode == "join" then
+						TweenService:Create(c.join, FAST, { BackgroundColor3 = JOIN_BG }):Play()
+					end
+				end)
+				c.join.Activated:Connect(function()
+					if c.srv then
+						joinServer(c.srv)
+					end
+				end)
 				return c
 			end
 
-			local frame = new("Frame", {
-				Size = UDim2.new(1, -8, 0, 0),
-				AutomaticSize = Enum.AutomaticSize.Y,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-			}, nil)
-			new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, frame)
-
-			local header = new("TextButton", {
-				LayoutOrder = 0,
-				Size = UDim2.new(1, 0, 0, 52),
-				BackgroundColor3 = HOVER_GREY,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				Text = "",
-				AutoButtonColor = false,
-			}, frame)
-			corner(header, RADIUS)
-
-			-- plain ">" that turns down when the server is open
-			local arrow = new("TextLabel", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0, 16, 0.5, 0),
-				Size = UDim2.fromOffset(16, 16),
-				BackgroundTransparency = 1,
-				Text = ">",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 14,
-			}, header)
-
-			local title = new("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 34, 0, 9),
-				Size = UDim2.new(1, -150, 0, 18),
-				Text = "",
-				TextColor3 = TEXT_COLOR,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 13,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, header)
-
-			local sub = new("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 34, 0, 29),
-				Size = UDim2.new(1, -150, 0, 16),
-				Text = "",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.Gotham,
-				TextSize = 11,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, header)
-
-			-- players in the server, e.g. 12/30
-			local count = new("TextLabel", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -76, 0.5, 0),
-				Size = UDim2.fromOffset(60, 20),
-				BackgroundTransparency = 1,
-				Text = "",
-				TextColor3 = TEXT_COLOR,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 13,
-				TextXAlignment = Enum.TextXAlignment.Right,
-			}, header)
-
-			local joinBtn = new("TextButton", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -8, 0.5, 0),
-				Size = UDim2.fromOffset(54, 28),
-				BackgroundColor3 = JOIN_BG,
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = "Join",
-				TextColor3 = BLACK,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 12,
-			}, header)
-			corner(joinBtn, RADIUS)
-
-			-- clip frame: its height is animated, the content inside keeps its full size
-			local clipFrame = new("Frame", {
-				LayoutOrder = 1,
-				Size = UDim2.new(1, 0, 0, 0),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ClipsDescendants = true,
-			}, frame)
-
-			local content = new("Frame", {
-				Size = UDim2.new(1, 0, 0, 0),
-				AutomaticSize = Enum.AutomaticSize.Y,
-				BackgroundTransparency = 1,
-			}, clipFrame)
-			new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, content)
-			pad(content, 34, 4, 8, 8)
-
-			local actions = new("Frame", {
-				LayoutOrder = 0,
-				Size = UDim2.new(1, 0, 0, 26),
-				BackgroundTransparency = 1,
-			}, content)
-			new("UIListLayout", {
-				FillDirection = Enum.FillDirection.Horizontal,
-				Padding = UDim.new(0, 6),
-				SortOrder = Enum.SortOrder.LayoutOrder,
-			}, actions)
-
-			local linkBtn = smallBtn("Copy Link", 1, actions)
-			local idBtn = smallBtn("Copy Job ID", 2, actions)
-			local scriptBtn = smallBtn("Copy Script", 3, actions)
-
-			-- thin line between servers
-			new("Frame", {
-				LayoutOrder = 2,
-				Size = UDim2.new(1, 0, 0, 1),
-				BackgroundColor3 = BORDER,
-				BorderSizePixel = 0,
-			}, frame)
-
-			local frac = new("NumberValue", { Value = 0 }, frame)
-
-			c = {
-				frame = frame,
-				header = header,
-				arrow = arrow,
-				title = title,
-				sub = sub,
-				count = count,
-				joinBtn = joinBtn,
-				clip = clipFrame,
-				content = content,
-				actions = actions,
-				smalls = { linkBtn, idBtn, scriptBtn },
-				frac = frac,
-				target = 0,
-				rows = {},
-				srv = nil,
-				open = false,
-				mine = nil,
-				tween = nil,
-				arrowTween = nil,
-				styleRev = -1,
-			}
-			cards[jobId] = c
-
-			frac.Changed:Connect(function()
-				applyClip(c)
-			end)
-
-			header.Activated:Connect(function()
-				expanded[jobId] = not c.open
-				expandRev = expandRev + 1
-				render(true)
-			end)
-			header.MouseEnter:Connect(function()
-				TweenService:Create(header, FAST, { BackgroundTransparency = 0.6 }):Play()
-			end)
-			header.MouseLeave:Connect(function()
-				TweenService:Create(header, FAST, { BackgroundTransparency = 1 }):Play()
-			end)
-			joinBtn.MouseEnter:Connect(function()
-				if not c.mine then
-					TweenService:Create(joinBtn, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+			local function takeTile()
+				local c = tilePool[#tilePool]
+				if c then
+					tilePool[#tilePool] = nil
+				else
+					c = makeTile()
 				end
-			end)
-			joinBtn.MouseLeave:Connect(function()
-				if not c.mine then
-					TweenService:Create(joinBtn, FAST, { BackgroundColor3 = JOIN_BG }):Play()
-				end
-			end)
-			joinBtn.Activated:Connect(function()
-				if c.srv then
-					joinServer(c.srv)
-				end
-			end)
-			linkBtn.Activated:Connect(function()
-				if c.srv then
-					copyText(joinLink(c.srv), "Join link copied")
-				end
-			end)
-			idBtn.Activated:Connect(function()
-				if c.srv then
-					copyText(c.srv.jobId, "Job ID copied")
-				end
-			end)
-			scriptBtn.Activated:Connect(function()
-				if c.srv then
-					copyText(joinScript(c.srv), "Join script copied")
-				end
-			end)
+				c.over = false
+				c.open = false
+				c.strokeCol = BORDER
+				c.stroke.Color = BORDER
+				c.joinMode = ""
+				c.rot = -1
+				c.px = nil
+				c.py = nil
+				c.frame.Parent = list
+				return c
+			end
 
-			styleCard(c)
-			return c
-		end
+			local function releaseTile(c)
+				c.frame.Parent = nil
+				c.entry = nil
+				c.srv = nil
+				tilePool[#tilePool + 1] = c
+			end
 
-		-- sizes of one player row that depend on Touch Mode
-		local function styleRow(r)
-			r.styleRev = styleRev
-			r.frame.Size = UDim2.new(1, 0, 0, M.rowH)
-			r.pic.Position = UDim2.new(0, 10, 0.5, 0)
-			r.pic.Size = UDim2.new(0, M.avatar, 0, M.avatar)
-			local textX = 10 + M.avatar + 10
-			local idRight = 6 + M.idW + 8
-			local block = M.nameText + M.userText + 7
-			local top = math.floor((M.rowH - block) / 2)
-			r.display.Position = UDim2.new(0, textX, 0, top)
-			r.display.Size = UDim2.new(1, -(textX + idRight + 48), 0, M.nameText + 4)
-			r.display.TextSize = M.nameText
-			r.user.Position = UDim2.new(0, textX, 0, top + M.nameText + 4)
-			r.user.Size = UDim2.new(1, -(textX + idRight + 48), 0, M.userText + 3)
-			r.user.TextSize = M.userText
-			r.role.Position = UDim2.new(1, -idRight, 0.5, 0)
-			r.role.TextSize = M.roleText
-			r.idBtn.Size = UDim2.new(0, M.idW, 0, M.idH)
-			r.idBtn.TextSize = M.idText
-		end
+			local function bindTile(c, e)
+				local srv = e.srv
+				c.srv = srv
+				c.boundRev = contentRev
+				if c.styleRev ~= styleRev then
+					styleTile(c)
+				end
+				local mine = (srv.jobId == game.JobId)
 
-		local function getPlayerRow(card, userId)
-			local r = card.rows[userId]
-			if r then
+				c.title.Text = srv.name
+				if mine then
+					c.title.TextColor3 = GREEN
+				else
+					c.title.TextColor3 = TEXT_COLOR
+				end
+				local sub = srv.rname
+				if srv.ping then
+					sub = sub .. "  -  " .. math.floor(srv.ping + 0.5) .. " ms"
+				end
+				c.sub.Text = sub
+
+				local pv = c.preview
+				local n = pickPreview(e, pv)
+				for i = 1, 5 do
+					local img = c.avs[i]
+					if i <= n then
+						local uid = pv[i]
+						if c.uids[i] ~= uid then
+							c.uids[i] = uid
+							img.Image = thumbUrl(uid)
+						end
+						img.Visible = true
+					else
+						c.uids[i] = nil
+						img.Visible = false
+					end
+				end
+
+				local total = e.cnt
+				local info = ""
+				local infoColor = DIM_TEXT
+				if tab == "servers" and e.matches > 0 then
+					info = e.matches .. " found"
+					infoColor = GREEN
+				elseif total == 0 then
+					info = "Empty"
+				elseif tab == "group" then
+					info = total .. " in group"
+				elseif total > n then
+					info = "+" .. (total - n) .. " more"
+				end
+				c.info.Text = info
+				c.info.TextColor3 = infoColor
+
+				local full = (srv.count >= srv.max)
+				c.count.Text = srv.count .. "/" .. srv.max
+				if full then
+					c.count.TextColor3 = DIM_TEXT
+				else
+					c.count.TextColor3 = TEXT_COLOR
+				end
+				local ratio = srv.count / math.max(1, srv.max)
+				if ratio > 1 then
+					ratio = 1
+				end
+				c.barFill.Size = UDim2.new(0, math.floor(c.barW * ratio + 0.5), 1, 0)
+				if mine then
+					c.barFill.BackgroundColor3 = GREEN
+				elseif full then
+					c.barFill.BackgroundColor3 = DIM_TEXT
+				else
+					c.barFill.BackgroundColor3 = ICON
+				end
+
+				local mode = "join"
+				if mine then
+					mode = "here"
+				elseif full then
+					mode = "full"
+				end
+				if c.joinMode ~= mode then
+					c.joinMode = mode
+					if mode == "join" then
+						c.join.Text = "Join"
+						c.join.BackgroundColor3 = JOIN_BG
+						c.join.TextColor3 = BLACK
+					elseif mode == "here" then
+						c.join.Text = "Here"
+						c.join.BackgroundColor3 = CLUSTER_BG
+						c.join.TextColor3 = DIM_TEXT
+					else
+						c.join.Text = "Full"
+						c.join.BackgroundColor3 = CLUSTER_BG
+						c.join.TextColor3 = DIM_TEXT
+					end
+				end
+			end
+
+			---------------- player row (inside a drawer) ----------------
+			local function styleRow(r)
+				r.styleRev = styleRev
+				local h = M.rowH
+				local pic = M.avatar
+				r.frame.Size = UDim2.fromOffset(colW, h)
+				r.pic.Position = UDim2.fromOffset(8, math.floor((h - pic) / 2))
+				r.pic.Size = UDim2.fromOffset(pic, pic)
+				local tx = 8 + pic + 10
+				local right = M.idW + 12
+				local block = M.nameText + M.userText + 5
+				local top = math.floor((h - block) / 2)
+				r.display.Position = UDim2.fromOffset(tx, top)
+				r.display.Size = UDim2.fromOffset(colW - tx - right, M.nameText + 3)
+				r.display.TextSize = M.nameText
+				r.user.Position = UDim2.fromOffset(tx, top + M.nameText + 3)
+				r.user.Size = UDim2.fromOffset(colW - tx - right, M.userText + 3)
+				r.user.TextSize = M.userText
+				r.idBtn.Position = UDim2.fromOffset(colW - M.idW - 6, math.floor((h - M.idH) / 2))
+				r.idBtn.Size = UDim2.fromOffset(M.idW, M.idH)
+				r.idBtn.TextSize = M.idText
+			end
+
+			local function makeRow()
+				local r = { styleRev = -1, boundRev = -1, baseT = 1, over = false }
+				local f = new("TextButton", {
+					Size = UDim2.fromOffset(200, 44),
+					BackgroundColor3 = HOVER_GREY,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "",
+				}, nil)
+				corner(f, RADIUS + 2)
+				r.frame = f
+				r.pic = new("ImageLabel", {
+					BackgroundColor3 = CLUSTER_BG,
+					BorderSizePixel = 0,
+					Image = "",
+				}, f)
+				corner(r.pic, 8)
+				r.display = label(f, "", UDim2.fromOffset(48, 6), UDim2.fromOffset(100, 16),
+					Enum.Font.GothamMedium, 13, TEXT_COLOR)
+				r.user = label(f, "", UDim2.fromOffset(48, 23), UDim2.fromOffset(100, 14),
+					Enum.Font.Gotham, 11, DIM_TEXT)
+				r.idBtn = new("TextButton", {
+					BackgroundColor3 = HOVER_GREY,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "ID",
+					TextColor3 = DIM_TEXT,
+					Font = Enum.Font.GothamMedium,
+					TextSize = 10,
+				}, f)
+				corner(r.idBtn, RADIUS)
+
+				f.MouseEnter:Connect(function()
+					r.over = true
+					if r.baseT >= 1 then
+						TweenService:Create(f, FAST, { BackgroundTransparency = 0.6 }):Play()
+					end
+				end)
+				f.MouseLeave:Connect(function()
+					r.over = false
+					TweenService:Create(f, FAST, { BackgroundTransparency = r.baseT }):Play()
+				end)
+				r.idBtn.MouseEnter:Connect(function()
+					TweenService:Create(r.idBtn, FAST, { BackgroundTransparency = 0.4, TextColor3 = ICON_HOVER }):Play()
+				end)
+				r.idBtn.MouseLeave:Connect(function()
+					TweenService:Create(r.idBtn, FAST, { BackgroundTransparency = 1, TextColor3 = DIM_TEXT }):Play()
+				end)
+				f.Activated:Connect(function()
+					if r.uid then
+						openProfile(r.uid)
+					end
+				end)
+				r.idBtn.Activated:Connect(function()
+					if r.uid then
+						copyText(tostring(r.uid), "Copied user ID")
+					end
+				end)
 				return r
 			end
 
-			-- flat row: no outline, only a light tint on hover and a green mark when it is a search match
-			local frame = new("TextButton", {
-				Size = UDim2.new(1, 0, 0, 40),
-				BackgroundColor3 = HOVER_GREY,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				Text = "",
-				AutoButtonColor = false,
-			}, nil)
-			corner(frame, RADIUS)
-
-			local mark = new("Frame", {
-				AnchorPoint = Vector2.new(0, 0.5),
-				Position = UDim2.new(0, 0, 0.5, 0),
-				Size = UDim2.new(0, 3, 0.6, 0),
-				BackgroundColor3 = GREEN,
-				BorderSizePixel = 0,
-				Visible = false,
-			}, frame)
-			corner(mark, 2)
-
-			local pic = new("ImageLabel", {
-				AnchorPoint = Vector2.new(0, 0.5),
-				Position = UDim2.new(0, 10, 0.5, 0),
-				Size = UDim2.new(0, 28, 0, 28),
-				BackgroundColor3 = CLUSTER_BG,
-				BorderSizePixel = 0,
-				Image = thumbUrl(userId),
-			}, frame)
-			corner(pic, 100)
-
-			local display = new("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 48, 0, 4),
-				Size = UDim2.new(1, -140, 0, 17),
-				Text = "",
-				TextColor3 = TEXT_COLOR,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 13,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, frame)
-
-			local user = new("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 48, 0, 21),
-				Size = UDim2.new(1, -140, 0, 14),
-				Text = "",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.Gotham,
-				TextSize = 11,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, frame)
-
-			local role = new("TextLabel", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -50, 0.5, 0),
-				Size = UDim2.new(0, 80, 0, 16),
-				BackgroundTransparency = 1,
-				Text = "",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.Gotham,
-				TextSize = 10,
-				TextXAlignment = Enum.TextXAlignment.Right,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}, frame)
-
-			local idBtn = new("TextButton", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -6, 0.5, 0),
-				Size = UDim2.new(0, 36, 0, 22),
-				BackgroundColor3 = HOVER_GREY,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = "ID",
-				TextColor3 = DIM_TEXT,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 10,
-			}, frame)
-			corner(idBtn, RADIUS)
-
-			r = {
-				frame = frame, pic = pic, display = display, user = user, role = role,
-				idBtn = idBtn, mark = mark, base = HOVER_GREY, baseT = 1, styleRev = -1,
-			}
-			card.rows[userId] = r
-
-			frame.MouseEnter:Connect(function()
-				if r.baseT >= 1 then
-					TweenService:Create(frame, FAST, { BackgroundTransparency = 0.6 }):Play()
-				end
-			end)
-			frame.MouseLeave:Connect(function()
-				TweenService:Create(frame, FAST, { BackgroundTransparency = r.baseT }):Play()
-			end)
-			idBtn.MouseEnter:Connect(function()
-				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 0.4, TextColor3 = ICON_HOVER }):Play()
-			end)
-			idBtn.MouseLeave:Connect(function()
-				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 1, TextColor3 = DIM_TEXT }):Play()
-			end)
-			-- click a player: open the profile card (falls back to copying the username)
-			frame.Activated:Connect(function()
-				local n = names[userId]
-				if profile then
-					if n then
-						profile:Open(userId, { name = n.name, display = n.display })
-					else
-						profile:Open(userId)
-					end
-				elseif n then
-					copyText(n.name, "Copied username: " .. n.name)
+			local function takeRow()
+				local r = rowPool[#rowPool]
+				if r then
+					rowPool[#rowPool] = nil
 				else
-					toast("Name still loading, try again in a moment")
+					r = makeRow()
 				end
-			end)
-			idBtn.Activated:Connect(function()
-				copyText(tostring(userId), "Copied user ID")
-			end)
-
-			styleRow(r)
-			return r
-		end
-
-		-------------------------------------------------------------
-		-- Region picker (button + dropdown list)
-		-------------------------------------------------------------
-		local ALL_KEY = "*"
-		local regionOpen = false
-		local regionRows = {}
-		local allRow = nil
-		local regionToken = 0
-
-		local function statsText(count, ps, pn)
-			local s = count .. " servers"
-			if pn > 0 then
-				s = s .. "  |  " .. math.floor(ps / pn + 0.5) .. " ms"
-			end
-			return s
-		end
-
-		local regionBtn = new("TextButton", {
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = CLUSTER_BG,
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-			Text = "",
-		}, regionRow)
-		corner(regionBtn, RADIUS + 2)
-		local regionTitle = label(regionBtn, "Region", UDim2.fromOffset(14, 0), UDim2.new(0, 56, 1, 0),
-			Enum.Font.Gotham, 13, DIM_TEXT)
-		local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(72, 0), UDim2.new(1, -250, 1, 0),
-			Enum.Font.GothamMedium, 13, TEXT_COLOR)
-		regionValue.TextTruncate = Enum.TextTruncate.AtEnd
-		local regionStats = label(regionBtn, "", UDim2.new(1, -178, 0, 0), UDim2.new(0, 164, 1, 0),
-			Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
-
-		local regionOver = false
-		local function paintRegionBtn()
-			local bg = CLUSTER_BG
-			if regionOver or regionOpen then
-				bg = HOVER_GREY
-			end
-			TweenService:Create(regionBtn, FAST, { BackgroundColor3 = bg }):Play()
-		end
-		regionBtn.MouseEnter:Connect(function()
-			regionOver = true
-			paintRegionBtn()
-		end)
-		regionBtn.MouseLeave:Connect(function()
-			regionOver = false
-			paintRegionBtn()
-		end)
-
-		local regionCatcher = new("TextButton", {
-			Text = "",
-			AutoButtonColor = false,
-			BackgroundTransparency = 1,
-			Size = UDim2.fromScale(1, 1),
-			Visible = false,
-			ZIndex = 30,
-		}, mainPage)
-
-		local regionMenu = new("CanvasGroup", {
-			Name = "RegionMenu",
-			Position = UDim2.fromOffset(0, 130),
-			Size = UDim2.new(1, 0, 0, 200),
-			BackgroundColor3 = T.POPUP_BG,
-			BorderSizePixel = 0,
-			GroupTransparency = 1,
-			Visible = false,
-			ZIndex = 31,
-		}, mainPage)
-		corner(regionMenu, RADIUS + 4)
-		stroke(regionMenu, BORDER, 1, 0)
-
-		local menuScroll = new("ScrollingFrame", {
-			Size = UDim2.fromScale(1, 1),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ScrollBarThickness = 2,
-			ScrollBarImageColor3 = ICON,
-			ScrollBarImageTransparency = 0.5,
-			ScrollingDirection = Enum.ScrollingDirection.Y,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		}, regionMenu)
-		pad(menuScroll, 10, 10, 10, 10)
-		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, menuScroll)
-
-		local function closeRegionMenu()
-			if not regionOpen then
-				return
-			end
-			regionOpen = false
-			regionToken = regionToken + 1
-			local token = regionToken
-			regionCatcher.Visible = false
-			TweenService:Create(regionMenu, FAST, { GroupTransparency = 1 }):Play()
-			task.delay(FAST.Time + 0.02, function()
-				if token == regionToken then
-					regionMenu.Visible = false
-				end
-			end)
-			paintRegionBtn()
-		end
-
-		local function openRegionMenu()
-			if regionOpen then
-				return
-			end
-			regionOpen = true
-			regionToken = regionToken + 1
-			regionCatcher.Visible = true
-			regionMenu.GroupTransparency = 1
-			regionMenu.Visible = true
-			TweenService:Create(regionMenu, FAST, { GroupTransparency = 0 }):Play()
-			paintRegionBtn()
-		end
-
-		regionBtn.Activated:Connect(function()
-			if regionOpen then
-				closeRegionMenu()
-			else
-				openRegionMenu()
-			end
-		end)
-		regionCatcher.Activated:Connect(closeRegionMenu)
-
-		local function setRegion(key)
-			if key == ALL_KEY or key == regionFilter then
-				regionFilter = nil
-			else
-				regionFilter = key
-			end
-			shown = PAGE_SIZE
-			closeRegionMenu()
-			render(true)
-		end
-
-		local function paintRow(r)
-			local sel = false
-			if r.key == ALL_KEY then
-				sel = (regionFilter == nil)
-			else
-				sel = (regionFilter == r.key)
-			end
-			local bgT = 1
-			local tc = ICON
-			if sel then
-				bgT = 0
-				tc = ICON_HOVER
-			elseif r.over then
-				bgT = 0.55
-				tc = ICON_HOVER
-			end
-			TweenService:Create(r.btn, FAST, { BackgroundTransparency = bgT }):Play()
-			r.name.TextColor3 = tc
-		end
-
-		local function makeRow(key)
-			local b = new("TextButton", {
-				Size = UDim2.new(1, 0, 0, 36),
-				BackgroundColor3 = HOVER_GREY,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = "",
-			}, menuScroll)
-			corner(b, RADIUS)
-			local nameLabel = label(b, "", UDim2.fromOffset(12, 0), UDim2.new(1, -170, 1, 0),
-				Enum.Font.GothamMedium, 13, ICON)
-			nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
-			local statLabel = label(b, "", UDim2.new(1, -164, 0, 0), UDim2.new(0, 152, 1, 0),
-				Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
-			local r = { btn = b, key = key, name = nameLabel, stats = statLabel, over = false }
-			b.MouseEnter:Connect(function()
-				r.over = true
-				paintRow(r)
-			end)
-			b.MouseLeave:Connect(function()
 				r.over = false
-				paintRow(r)
-			end)
-			b.Activated:Connect(function()
-				setRegion(r.key)
-			end)
-			return r
-		end
-
-		local function restyleChips()
-			regionTitle.TextSize = M.chipText + 2
-			regionValue.TextSize = M.chipText + 2
-			regionStats.TextSize = M.chipText + 1
-		end
-
-		-- rows are reused, only their text changes
-		local function updateRegions()
-			local arr, total, pSum, pN = regionSummary()
-
-			-- alphabetical in the list so a region is easy to find
-			table.sort(arr, function(x, y)
-				return x.name < y.name
-			end)
-
-			if allRow == nil then
-				allRow = makeRow(ALL_KEY)
-				allRow.btn.LayoutOrder = 0
-			end
-			allRow.name.Text = "All regions"
-			allRow.stats.Text = statsText(total, pSum, pN)
-			paintRow(allRow)
-
-			local seen = {}
-			local current = nil
-			for i = 1, #arr do
-				local a = arr[i]
-				local r = regionRows[a.name]
-				if r == nil then
-					r = makeRow(a.name)
-					regionRows[a.name] = r
-				end
-				r.name.Text = a.name
-				r.stats.Text = statsText(a.count, a.pSum, a.pN)
-				r.btn.LayoutOrder = i
-				seen[a.name] = true
-				if regionFilter == a.name then
-					current = a
-				end
-				paintRow(r)
+				return r
 			end
 
-			for name, r in pairs(regionRows) do
-				if not seen[name] then
-					r.btn:Destroy()
-					regionRows[name] = nil
-					if regionFilter == name then
-						regionFilter = nil
-						task.defer(function()
-							render(true)
-						end)
+			local function releaseRow(r)
+				r.frame.Parent = nil
+				r.holder = nil
+				r.uid = nil
+				rowPool[#rowPool + 1] = r
+			end
+
+			local function bindRow(r, uid, e)
+				r.uid = uid
+				r.boundRev = contentRev
+				if r.styleRev ~= styleRev then
+					styleRow(r)
+				end
+				local role = nil
+				if tab == "group" and group then
+					role = group.members[uid]
+				end
+				local n = names[uid]
+				if n then
+					r.display.Text = n.display
+					local u = "@" .. n.name
+					if role then
+						u = u .. "  -  " .. role
+					end
+					r.user.Text = u
+				else
+					r.display.Text = "Loading..."
+					local u = "ID " .. tostring(uid)
+					if role then
+						u = u .. "  -  " .. role
+					end
+					r.user.Text = u
+				end
+				if r.picUid ~= uid then
+					r.picUid = uid
+					r.pic.Image = thumbUrl(uid)
+				end
+				if tab == "servers" and e.matchSet[uid] == true then
+					r.baseT = 0
+					r.frame.BackgroundColor3 = MATCH_BG
+					r.display.TextColor3 = GREEN
+				else
+					r.baseT = 1
+					r.frame.BackgroundColor3 = HOVER_GREY
+					r.display.TextColor3 = TEXT_COLOR
+				end
+				r.frame.BackgroundTransparency = r.baseT
+			end
+
+			---------------- drawer (all players of one server) ----------------
+			local function styleDrawer(d)
+				d.styleRev = styleRev
+				local W = contentW
+				local w1 = M.smallW1
+				local w2 = M.smallW2
+				local w3 = M.smallW3
+				local total = w1 + w2 + w3 + 12
+				local bx = W - 14 - total
+				local by = math.floor((M.head - M.smallH) / 2)
+				d.btns[1].Position = UDim2.fromOffset(bx, by)
+				d.btns[1].Size = UDim2.fromOffset(w1, M.smallH)
+				d.btns[2].Position = UDim2.fromOffset(bx + w1 + 6, by)
+				d.btns[2].Size = UDim2.fromOffset(w2, M.smallH)
+				d.btns[3].Position = UDim2.fromOffset(bx + w1 + w2 + 12, by)
+				d.btns[3].Size = UDim2.fromOffset(w3, M.smallH)
+				for i = 1, 3 do
+					d.btns[i].TextSize = M.smallText
+				end
+				local titleH = M.titleText + 5
+				local subH = M.subText + 4
+				local top = math.floor((M.head - (titleH + 2 + subH)) / 2)
+				local textW = math.max(60, bx - 28)
+				d.title.Position = UDim2.fromOffset(14, top)
+				d.title.Size = UDim2.fromOffset(textW, titleH)
+				d.title.TextSize = M.titleText + 1
+				d.sub.Position = UDim2.fromOffset(14, top + titleH + 2)
+				d.sub.Size = UDim2.fromOffset(textW, subH)
+				d.sub.TextSize = M.subText
+				d.line.Position = UDim2.fromOffset(12, M.head)
+				d.line.Size = UDim2.fromOffset(W - 24, 1)
+				d.more.Size = UDim2.fromOffset(W - 28, 18)
+			end
+
+			local function makeDrawer()
+				local d = { rows = {}, btns = {}, styleRev = -1, boundRev = -1, stamp = 0 }
+				local f = new("Frame", {
+					Size = UDim2.fromOffset(676, 0),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					ClipsDescendants = true,
+				}, nil)
+				corner(f, RADIUS + 4)
+				stroke(f, BORDER, 1, 0)
+				d.frame = f
+				d.title = label(f, "", UDim2.fromOffset(14, 10), UDim2.fromOffset(300, 18),
+					Enum.Font.GothamMedium, 14, TEXT_COLOR)
+				d.sub = label(f, "", UDim2.fromOffset(14, 31), UDim2.fromOffset(300, 15),
+					Enum.Font.Gotham, 11, DIM_TEXT)
+				d.line = new("Frame", {
+					BackgroundColor3 = BORDER,
+					BorderSizePixel = 0,
+				}, f)
+				d.more = label(f, "", UDim2.fromOffset(14, 80), UDim2.fromOffset(600, 18),
+					Enum.Font.Gotham, 12, DIM_TEXT)
+				d.more.Visible = false
+
+				local texts = { "Copy Link", "Copy Job ID", "Copy Script" }
+				for i = 1, 3 do
+					local b = new("TextButton", {
+						BackgroundColor3 = CLUSTER_BG,
+						BorderSizePixel = 0,
+						AutoButtonColor = false,
+						Text = texts[i],
+						TextColor3 = ICON,
+						Font = Enum.Font.GothamMedium,
+						TextSize = 11,
+					}, f)
+					corner(b, RADIUS)
+					hoverable(b, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
+					d.btns[i] = b
+				end
+				d.btns[1].Activated:Connect(function()
+					if d.srv then
+						copyText(joinLink(d.srv), "Join link copied")
+					end
+				end)
+				d.btns[2].Activated:Connect(function()
+					if d.srv then
+						copyText(d.srv.jobId, "Job ID copied")
+					end
+				end)
+				d.btns[3].Activated:Connect(function()
+					if d.srv then
+						copyText(joinScript(d.srv), "Join script copied")
+					end
+				end)
+				return d
+			end
+
+			local function takeDrawer()
+				local d = drawerPool[#drawerPool]
+				if d then
+					drawerPool[#drawerPool] = nil
+				else
+					d = makeDrawer()
+				end
+				d.frame.Parent = list
+				return d
+			end
+
+			local function releaseDrawer(d)
+				for k, r in pairs(d.rows) do
+					d.rows[k] = nil
+					releaseRow(r)
+				end
+				d.frame.Parent = nil
+				d.entry = nil
+				d.srv = nil
+				d.sorted = nil
+				drawerPool[#drawerPool + 1] = d
+			end
+
+			local function bindDrawer(d, e)
+				local srv = e.srv
+				d.srv = srv
+				d.boundRev = contentRev
+				if d.styleRev ~= styleRev then
+					styleDrawer(d)
+				end
+				d.title.Text = srv.name
+				local parts = { srv.rname }
+				if srv.ping then
+					parts[#parts + 1] = math.floor(srv.ping + 0.5) .. " ms"
+				end
+				local up = formatUptime(srv.startedAt)
+				if up ~= "Unknown" then
+					parts[#parts + 1] = "up " .. up
+				end
+				parts[#parts + 1] = srv.count .. "/" .. srv.max .. " players"
+				d.sub.Text = table.concat(parts, "  -  ")
+				d.sorted = sortedPlayers(e)
+
+				local cnt = e.cnt
+				if cnt == 0 then
+					d.more.Text = "Nobody in this server"
+					d.more.Position = UDim2.fromOffset(14, M.head + 12)
+					d.more.Visible = true
+				elseif cnt > MAXR then
+					d.more.Text = "+" .. (cnt - MAXR) .. " more players not shown"
+					local rowsN = math.ceil(MAXR / pcols)
+					d.more.Position = UDim2.fromOffset(14, M.head + 10 + rowsN * (M.rowH + 4) + 2)
+					d.more.Visible = true
+				else
+					d.more.Visible = false
+				end
+			end
+
+			-- only the rows inside the viewport are real
+			local function fillRows(d, e, top, bottom)
+				local sorted = d.sorted
+				if sorted == nil then
+					return
+				end
+				local cnt = #sorted
+				if cnt > MAXR then
+					cnt = MAXR
+				end
+				local rstep = M.rowH + 4
+				local base = e.dy + M.head + 10
+				local r0 = math.floor((top - base) / rstep)
+				local r1 = math.floor((bottom - base) / rstep)
+				if r0 < 0 then
+					r0 = 0
+				end
+				local maxR = math.ceil(cnt / pcols) - 1
+				if r1 > maxR then
+					r1 = maxR
+				end
+				local k0 = r0 * pcols + 1
+				local k1 = (r1 + 1) * pcols
+				if k1 > cnt then
+					k1 = cnt
+				end
+				for k, r in pairs(d.rows) do
+					if k < k0 or k > k1 then
+						d.rows[k] = nil
+						releaseRow(r)
+					end
+				end
+				for k = k0, k1 do
+					local uid = sorted[k]
+					local r = d.rows[k]
+					if r == nil then
+						r = takeRow()
+						d.rows[k] = r
+						r.boundRev = -1
+					end
+					if r.boundRev ~= contentRev or r.styleRev ~= styleRev or r.uid ~= uid then
+						bindRow(r, uid, e)
+					end
+					local rr = math.floor((k - 1) / pcols)
+					local cc = (k - 1) % pcols
+					r.frame.Position = UDim2.fromOffset(12 + cc * (colW + ROW_GAP_X), M.head + 10 + rr * rstep)
+					if r.holder ~= d then
+						r.holder = d
+						r.frame.Parent = d.frame
 					end
 				end
 			end
 
-			-- the button shows the current pick
-			if current then
-				regionValue.Text = current.name
-				regionValue.TextColor3 = ICON_HOVER
-				regionStats.Text = statsText(current.count, current.pSum, current.pN)
-			else
-				regionValue.Text = "All regions"
-				regionValue.TextColor3 = TEXT_COLOR
-				regionStats.Text = statsText(total, pSum, pN)
+			---------------- geometry + placement ----------------
+			local function measure()
+				local u = unit()
+				local W = math.floor(list.AbsoluteSize.X / u) - 8
+				if W < 220 then
+					W = 676
+				end
+				local gap = M.gap
+				local c = math.floor((W + gap) / (M.tileMin + gap))
+				if c < 1 then
+					c = 1
+				end
+				local S = math.floor((W - (c - 1) * gap) / c)
+				local avail = W - 24
+				local pc = math.floor((avail + ROW_GAP_X) / (M.rowMin + ROW_GAP_X))
+				if pc < 1 then
+					pc = 1
+				end
+				local cw = math.floor((avail - (pc - 1) * ROW_GAP_X) / pc)
+				local key = S .. ":" .. cw .. ":" .. M.rowH .. ":" .. W
+				if key ~= geoKey then
+					geoKey = key
+					styleRev = styleRev + 1
+				end
+				cols = c
+				tileS = S
+				contentW = W
+				pcols = pc
+				colW = cw
 			end
 
-			local h = math.min((#arr + 1) * 40 + 20, 300)
-			regionMenu.Size = UDim2.new(1, 0, 0, h)
+			-- tiles go in a grid; a drawer opens under the row of the tile that owns it
+			local function geometry()
+				local S = tileS
+				local gap = M.gap
+				local y = 0
+				local n = #entries
+				local i = 1
+				while i <= n do
+					local last = i + cols - 1
+					if last > n then
+						last = n
+					end
+					for k = i, last do
+						local e = entries[k]
+						e.x = (k - i) * (S + gap)
+						e.y = y
+					end
+					y = y + S + gap
+					for k = i, last do
+						local e = entries[k]
+						local cnt = e.cnt
+						if cnt > MAXR then
+							cnt = MAXR
+						end
+						local body = 28
+						if cnt > 0 then
+							body = math.ceil(cnt / pcols) * (M.rowH + 4)
+						end
+						local extra = 0
+						if e.cnt > MAXR then
+							extra = 22
+						end
+						e.dfull = M.head + 10 + body + extra + 8
+						local f = frac[e.srv.jobId] or 0
+						e.dy = y
+						if f > 0.001 then
+							local dh = math.floor(e.dfull * f + 0.5)
+							e.dh = dh
+							if dh > 0 then
+								y = y + dh + 8
+							end
+						else
+							e.dh = 0
+						end
+					end
+					i = last + 1
+				end
+				totalH = y
+				list.CanvasSize = UDim2.fromOffset(0, totalH)
+			end
+
+			local function place()
+				if not running then
+					return
+				end
+				local u = unit()
+				local pos = list.CanvasPosition.Y
+				local vh = list.AbsoluteWindowSize.Y / u
+				if vh < 50 then
+					vh = 400
+				end
+				local top = pos - tileS
+				local bottom = pos + vh + tileS
+				stamp = stamp + 1
+				local S = tileS
+
+				for i = 1, #entries do
+					local e = entries[i]
+					local jid = e.srv.jobId
+
+					if e.y + S >= top and e.y <= bottom then
+						local c = tileOf[jid]
+						if c == nil then
+							c = takeTile()
+							tileOf[jid] = c
+							c.boundRev = -1
+						end
+						c.stamp = stamp
+						c.entry = e
+						if c.boundRev ~= contentRev or c.styleRev ~= styleRev or c.srv ~= e.srv then
+							bindTile(c, e)
+						end
+						if c.px ~= e.x or c.py ~= e.y then
+							c.px = e.x
+							c.py = e.y
+							c.frame.Position = UDim2.fromOffset(e.x, e.y)
+						end
+						local f = frac[jid] or 0
+						local rot = math.floor(f * 90 + 0.5)
+						if c.rot ~= rot then
+							c.rot = rot
+							c.arrow.Rotation = rot
+						end
+						local isOpen = (goal[jid] or 0) > 0.5
+						if c.open ~= isOpen then
+							c.open = isOpen
+							paintTile(c)
+						end
+					end
+
+					if e.dh > 0 and e.dy + e.dh >= top and e.dy <= bottom then
+						local d = drawerOf[jid]
+						if d == nil then
+							d = takeDrawer()
+							drawerOf[jid] = d
+							d.boundRev = -1
+						end
+						d.stamp = stamp
+						d.entry = e
+						if d.boundRev ~= contentRev or d.styleRev ~= styleRev or d.srv ~= e.srv then
+							bindDrawer(d, e)
+						end
+						d.frame.Position = UDim2.fromOffset(0, e.dy)
+						d.frame.Size = UDim2.fromOffset(contentW, e.dh)
+						fillRows(d, e, top, bottom)
+					end
+				end
+
+				for jid, c in pairs(tileOf) do
+					if c.stamp ~= stamp then
+						tileOf[jid] = nil
+						releaseTile(c)
+					end
+				end
+				for jid, d in pairs(drawerOf) do
+					if d.stamp ~= stamp then
+						drawerOf[jid] = nil
+						releaseDrawer(d)
+					end
+				end
+			end
+
+			layout = function()
+				measure()
+				geometry()
+				place()
+			end
+
+			list:GetPropertyChangedSignal("CanvasPosition"):Connect(place)
+			list:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+				layout()
+			end)
+		end
+
+		-------------------------------------------------------------
+		-- Region picker (pill + dropdown)
+		-------------------------------------------------------------
+		do
+			local ALL_KEY = "*"
+			local regionOpen = false
+			local regionOver = false
+			local regionRows = {}
+			local allRow = nil
+			local regionToken = 0
+
+			local function statsText(count, ps, pn)
+				local s = count .. " servers"
+				if pn > 0 then
+					s = s .. "  |  " .. math.floor(ps / pn + 0.5) .. " ms"
+				end
+				return s
+			end
+
+			local function paintRegionBtn()
+				local bg = CLUSTER_BG
+				if regionOver or regionOpen then
+					bg = HOVER_GREY
+				end
+				TweenService:Create(regionBtn, FAST, { BackgroundColor3 = bg }):Play()
+			end
+			regionBtn.MouseEnter:Connect(function()
+				regionOver = true
+				paintRegionBtn()
+			end)
+			regionBtn.MouseLeave:Connect(function()
+				regionOver = false
+				paintRegionBtn()
+			end)
+
+			local regionCatcher = new("TextButton", {
+				Text = "",
+				AutoButtonColor = false,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				Visible = false,
+				ZIndex = 30,
+			}, mainPage)
+
+			local menuScroll = new("ScrollingFrame", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ScrollBarThickness = 2,
+				ScrollBarImageColor3 = ICON,
+				ScrollBarImageTransparency = 0.5,
+				ScrollingDirection = Enum.ScrollingDirection.Y,
+				CanvasSize = UDim2.new(0, 0, 0, 0),
+				AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			}, regionMenu)
+			pad(menuScroll, 8, 8, 8, 8)
+			new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, menuScroll)
+
+			closeRegionMenu = function()
+				if not regionOpen then
+					return
+				end
+				regionOpen = false
+				regionToken = regionToken + 1
+				local token = regionToken
+				regionCatcher.Visible = false
+				TweenService:Create(regionMenu, FAST, { GroupTransparency = 1 }):Play()
+				task.delay(FAST.Time + 0.02, function()
+					if token == regionToken then
+						regionMenu.Visible = false
+					end
+				end)
+				paintRegionBtn()
+			end
+
+			local function openRegionMenu()
+				if regionOpen then
+					return
+				end
+				regionOpen = true
+				regionToken = regionToken + 1
+				regionCatcher.Visible = true
+				regionMenu.GroupTransparency = 1
+				regionMenu.Visible = true
+				TweenService:Create(regionMenu, FAST, { GroupTransparency = 0 }):Play()
+				paintRegionBtn()
+			end
+
+			regionBtn.Activated:Connect(function()
+				if regionOpen then
+					closeRegionMenu()
+				else
+					openRegionMenu()
+				end
+			end)
+			regionCatcher.Activated:Connect(closeRegionMenu)
+
+			local function setRegion(key)
+				if key == ALL_KEY or key == regionFilter then
+					regionFilter = nil
+				else
+					regionFilter = key
+				end
+				regionVersion = -1
+				closeRegionMenu()
+				list.CanvasPosition = Vector2.new(0, 0)
+				render(true)
+			end
+
+			local function paintRow(r)
+				local sel = false
+				if r.key == ALL_KEY then
+					sel = (regionFilter == nil)
+				else
+					sel = (regionFilter == r.key)
+				end
+				local state = 0
+				if sel then
+					state = 2
+				elseif r.over then
+					state = 1
+				end
+				if r.state == state then
+					return
+				end
+				r.state = state
+				local bgT = 1
+				local tc = ICON
+				if state == 2 then
+					bgT = 0
+					tc = ICON_HOVER
+				elseif state == 1 then
+					bgT = 0.55
+					tc = ICON_HOVER
+				end
+				TweenService:Create(r.btn, FAST, { BackgroundTransparency = bgT }):Play()
+				r.name.TextColor3 = tc
+			end
+
+			local function makeRegionRow(key)
+				local b = new("TextButton", {
+					Size = UDim2.new(1, 0, 0, 36),
+					BackgroundColor3 = HOVER_GREY,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "",
+				}, menuScroll)
+				corner(b, RADIUS)
+				local nameLabel = label(b, "", UDim2.fromOffset(12, 0), UDim2.new(1, -170, 1, 0),
+					Enum.Font.GothamMedium, 13, ICON)
+				local statLabel = label(b, "", UDim2.new(1, -164, 0, 0), UDim2.new(0, 152, 1, 0),
+					Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
+				local r = { btn = b, key = key, name = nameLabel, stats = statLabel, over = false, state = -1 }
+				b.MouseEnter:Connect(function()
+					r.over = true
+					paintRow(r)
+				end)
+				b.MouseLeave:Connect(function()
+					r.over = false
+					paintRow(r)
+				end)
+				b.Activated:Connect(function()
+					setRegion(r.key)
+				end)
+				return r
+			end
+
+			updateRegions = function()
+				regionVersion = version
+				local arr, total, pSum, pN = regionSummary()
+				table.sort(arr, function(x, y)
+					return x.name < y.name
+				end)
+
+				if allRow == nil then
+					allRow = makeRegionRow(ALL_KEY)
+					allRow.btn.LayoutOrder = 0
+				end
+				allRow.name.Text = "All regions"
+				allRow.stats.Text = statsText(total, pSum, pN)
+				paintRow(allRow)
+
+				local seen = {}
+				local current = nil
+				for i = 1, #arr do
+					local a = arr[i]
+					local r = regionRows[a.name]
+					if r == nil then
+						r = makeRegionRow(a.name)
+						regionRows[a.name] = r
+					end
+					r.name.Text = a.name
+					r.stats.Text = statsText(a.count, a.pSum, a.pN)
+					r.btn.LayoutOrder = i
+					seen[a.name] = true
+					if regionFilter == a.name then
+						current = a
+					end
+					paintRow(r)
+				end
+
+				for name, r in pairs(regionRows) do
+					if not seen[name] then
+						r.btn:Destroy()
+						regionRows[name] = nil
+						if regionFilter == name then
+							regionFilter = nil
+							regionVersion = -1
+							task.defer(function()
+								render(true)
+							end)
+						end
+					end
+				end
+
+				if current then
+					regionValue.Text = current.name
+					regionValue.TextColor3 = ICON_HOVER
+				else
+					regionValue.Text = "All regions"
+					regionValue.TextColor3 = TEXT_COLOR
+				end
+
+				local h = math.min((#arr + 1) * 38 + 16, 300)
+				regionMenu.Size = UDim2.fromOffset(300, h)
+			end
 		end
 
 		-------------------------------------------------------------
@@ -1407,13 +2081,7 @@ function Finder.new(win, opts)
 				if q then
 					status.Text = lastMatchCount .. " server(s) found"
 				elseif httpRequest then
-					local resolved = 0
-					for id, _ in pairs(located) do
-						if names[id] then
-							resolved = resolved + 1
-						end
-					end
-					status.Text = resolved .. "/" .. locatedCount .. " names loaded"
+					status.Text = math.min(namesCount, locatedCount) .. "/" .. locatedCount .. " names loaded"
 				else
 					status.Text = "names need an executor request function"
 				end
@@ -1427,7 +2095,9 @@ function Finder.new(win, opts)
 		end
 
 		render = function(force)
-			updateRegions()
+			if version ~= regionVersion then
+				updateRegions()
+			end
 
 			local q = string.lower(box.Text)
 			q = string.match(q, "^%s*(.-)%s*$") or ""
@@ -1440,12 +2110,13 @@ function Finder.new(win, opts)
 			if opt then
 				optSig = opt:Sig()
 			end
-			local sig = tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. shown .. "|" .. expandRev .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev .. "|" .. optSig
+			local sig = tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev .. "|" .. optSig
 			if not force and sig == lastSig then
 				updateStatus()
 				return
 			end
 			lastSig = sig
+			contentRev = contentRev + 1
 
 			-- role chips for the group tab (count of in-game members per role)
 			if opt and tab == "group" then
@@ -1460,7 +2131,7 @@ function Finder.new(win, opts)
 				end
 				local roleList = {}
 				for rname, n in pairs(counts) do
-					table.insert(roleList, { name = rname, count = n })
+					roleList[#roleList + 1] = { name = rname, count = n }
 				end
 				table.sort(roleList, function(x, y)
 					if x.count ~= y.count then
@@ -1472,54 +2143,68 @@ function Finder.new(win, opts)
 			end
 
 			-- 1) pick the servers to show
-			local entries = {}
+			local isServers = (tab == "servers")
+			local st = nil
+			if opt then
+				st = opt.state
+			end
+			local qn = tonumber(q)
+			if qn and qn % 1 ~= 0 then
+				qn = nil
+			end
+			local built = {}
+
 			for jid, srv in pairs(servers) do
 				local include = false
 				local matches = 0
-				local matchSet = {}
+				local matchSet = EMPTY
 				local ids = nil
 
-				if tab == "servers" then
+				if isServers then
 					if q == "" then
 						include = true
 					else
-						for i = 1, #srv.players do
-							local id = srv.players[i]
+						local pl = srv.players
+						for i = 1, #pl do
+							local id = pl[i]
 							local hit = false
-							if tostring(id) == q then
+							if qn and id == qn then
 								hit = true
 							else
 								local n = names[id]
-								if n then
-									if string.find(string.lower(n.display), q, 1, true) or string.find(string.lower(n.name), q, 1, true) then
-										hit = true
-									end
+								if n and (string.find(n.dl, q, 1, true) or string.find(n.nl, q, 1, true)) then
+									hit = true
 								end
 							end
 							if hit then
+								if matchSet == EMPTY then
+									matchSet = {}
+								end
 								matchSet[id] = true
 								matches = matches + 1
 							end
 						end
 						if matches > 0 then
 							include = true
-						elseif string.sub(string.lower(jid), 1, #q) == q then
+						elseif string.sub(srv.jl, 1, #q) == q then
 							include = true
 						end
 					end
-					if include and regionFilter ~= nil then
-						if niceRegion(srv.region) ~= regionFilter then
-							include = false
-						end
+					if include and regionFilter ~= nil and srv.rname ~= regionFilter then
+						include = false
 					end
 				else
 					if group then
-						ids = {}
-						for i = 1, #srv.players do
-							local id = srv.players[i]
-							local memberRole = group.members[id]
-							if memberRole ~= nil and (opt == nil or opt.state.role == nil or opt.state.role == memberRole) then
-								table.insert(ids, id)
+						local pl = srv.players
+						for i = 1, #pl do
+							local id = pl[i]
+							local role = group.members[id]
+							if role ~= nil and (st == nil or st.role == nil or st.role == role) then
+								if ids == nil then
+									ids = {}
+									matchSet = {}
+								end
+								ids[#ids + 1] = id
 								matchSet[id] = true
 								matches = matches + 1
 							end
@@ -1531,15 +2216,15 @@ function Finder.new(win, opts)
 				end
 
 				-- options: hide full servers + friends only (your own server is never hidden for being full)
-				if include and opt then
-					local st = opt.state
+				if include and st then
 					if st.hideFull and srv.jobId ~= game.JobId and (srv.max - srv.count) < st.minFree then
 						include = false
 					end
 					if include and st.friendsOnly then
 						local hasFriend = false
-						for i = 1, #srv.players do
-							if opt:IsFriend(srv.players[i]) then
+						local pl = srv.players
+						for i = 1, #pl do
+							if opt:IsFriend(pl[i]) then
 								hasFriend = true
 								break
 							end
@@ -1551,12 +2236,19 @@ function Finder.new(win, opts)
 				end
 
 				if include then
-					table.insert(entries, { srv = srv, matches = matches, matchSet = matchSet, ids = ids })
+					local cnt = #srv.players
+					if ids then
+						cnt = #ids
+					end
+					built[#built + 1] = {
+						srv = srv, matches = matches, matchSet = matchSet, ids = ids, cnt = cnt,
+						x = 0, y = 0, dy = 0, dh = 0, dfull = 0,
+					}
 				end
 			end
 
-			table.sort(entries, function(a, b)
-				if tab == "servers" and q == "" then
+			table.sort(built, function(a, b)
+				if isServers and q == "" then
 					local am = (a.srv.jobId == game.JobId)
 					local bm = (b.srv.jobId == game.JobId)
 					if am ~= bm then
@@ -1578,210 +2270,46 @@ function Finder.new(win, opts)
 				return a.srv.jobId < b.srv.jobId
 			end)
 
-			lastMatchCount = #entries
-			local limit = math.min(#entries, shown)
-			local autoOpen = (tab == "servers" and q ~= "") or (tab == "group")
-			local newShown = {}
+			entries = built
+			lastMatchCount = #built
 
-			-- 2) update the cards
-			for i = 1, limit do
-				local e = entries[i]
-				local srv = e.srv
-				local c = getCard(srv.jobId)
-				local wasShown = (c.frame.Parent == list)
-				c.srv = srv
-				if c.styleRev ~= styleRev then
-					styleCard(c)
-				end
-				local mine = (srv.jobId == game.JobId)
-
-				c.title.Text = "Server " .. string.sub(srv.jobId, 1, 8)
-				if mine then
-					c.title.TextColor3 = GREEN
-				else
-					c.title.TextColor3 = TEXT_COLOR
-				end
-				c.count.Text = srv.count .. "/" .. srv.max
-				if srv.count >= srv.max then
-					c.count.TextColor3 = DIM_TEXT
-				else
-					c.count.TextColor3 = TEXT_COLOR
-				end
-
-				if c.mine ~= mine then
-					c.mine = mine
-					if mine then
-						c.joinBtn.Text = "Here"
-						c.joinBtn.BackgroundColor3 = CLUSTER_BG
-						c.joinBtn.TextColor3 = DIM_TEXT
-					else
-						c.joinBtn.Text = "Join"
-						c.joinBtn.BackgroundColor3 = JOIN_BG
-						c.joinBtn.TextColor3 = BLACK
-					end
-				end
-
-				local parts = {}
-				if e.matches > 0 then
-					table.insert(parts, e.matches .. " found")
-				end
-				if mine then
-					table.insert(parts, "you are here")
-				end
-				table.insert(parts, niceRegion(srv.region))
-				if srv.ping then
-					table.insert(parts, math.floor(srv.ping + 0.5) .. " ms")
-				end
-				local up = formatUptime(srv.startedAt)
-				if up ~= "Unknown" then
-					table.insert(parts, up)
-				end
-				c.sub.Text = table.concat(parts, "  -  ")
-
+			-- 2) open state of every drawer (new ones snap, known ones slide)
+			local autoOpen = (isServers and q ~= "") or (tab == "group")
+			for i = 1, #built do
+				local jid = built[i].srv.jobId
 				local open = autoOpen
-				if expanded[srv.jobId] ~= nil then
-					open = expanded[srv.jobId]
+				if expanded[jid] ~= nil then
+					open = expanded[jid]
 				end
-				local wasOpen = c.open
-
+				local g = 0
 				if open then
-					local source = e.ids or srv.players
-					local sorted = {}
-					for k = 1, #source do
-						sorted[k] = source[k]
-					end
-					table.sort(sorted, function(a, b)
-						local ma = (e.matchSet[a] == true)
-						local mb = (e.matchSet[b] == true)
-						if ma ~= mb then
-							return ma
-						end
-						local na = names[a]
-						local nb = names[b]
-						if (na ~= nil) ~= (nb ~= nil) then
-							return na ~= nil
-						end
-						if na and nb then
-							local da = string.lower(na.display)
-							local db = string.lower(nb.display)
-							if da ~= db then
-								return da < db
-							end
-						end
-						return a < b
-					end)
-
-					local used = {}
-					local rowCount = math.min(#sorted, MAX_PLAYER_ROWS)
-					for k = 1, rowCount do
-						local id = sorted[k]
-						local r = getPlayerRow(c, id)
-						if r.styleRev ~= styleRev then
-							styleRow(r)
-						end
-						local n = names[id]
-						if n then
-							r.display.Text = n.display
-							r.user.Text = "@" .. n.name
-						else
-							r.display.Text = "Loading..."
-							r.user.Text = "ID " .. tostring(id)
-						end
-						if tab == "group" and group and group.members[id] then
-							r.role.Text = group.members[id]
-						else
-							r.role.Text = ""
-						end
-						if e.matchSet[id] == true and tab == "servers" then
-							r.base = MATCH_BG
-							r.baseT = 0
-							r.mark.Visible = true
-						else
-							r.base = HOVER_GREY
-							r.baseT = 1
-							r.mark.Visible = false
-						end
-						r.frame.BackgroundColor3 = r.base
-						r.frame.BackgroundTransparency = r.baseT
-						r.frame.LayoutOrder = k
-						r.frame.Parent = c.content
-						used[id] = true
-					end
-					for id, r in pairs(c.rows) do
-						if not used[id] then
-							r.frame.Parent = nil
-						end
-					end
-					-- actions row + rows + gaps between them + bottom padding
-					c.target = 4 + M.smallH + rowCount * (M.rowH + 4) + 8
+					g = 1
 				end
-
-				-- open / close animation (same easing as the account popup); snaps if the card was not on screen
-				c.open = open
-				if open ~= wasOpen then
-					if c.tween then
-						c.tween:Cancel()
-					end
-					if c.arrowTween then
-						c.arrowTween:Cancel()
-					end
-					local goal = 0
-					local rot = 0
-					if open then
-						goal = 1
-						rot = 90
-					end
-					if wasShown then
-						local info = COLLAPSE
-						if open then
-							info = EXPAND
-						end
-						c.tween = TweenService:Create(c.frac, info, { Value = goal })
-						c.tween:Play()
-						c.arrowTween = TweenService:Create(c.arrow, info, { Rotation = rot })
-						c.arrowTween:Play()
-					else
-						c.frac.Value = goal
-						c.arrow.Rotation = rot
-					end
-				end
-				applyClip(c)
-
-				c.frame.LayoutOrder = i
-				c.frame.Parent = list
-				newShown[srv.jobId] = c
-			end
-
-			for jid, c in pairs(shownCards) do
-				if not newShown[jid] then
-					c.frame.Parent = nil
+				goal[jid] = g
+				if frac[jid] == nil then
+					frac[jid] = g
+				elseif frac[jid] ~= g then
+					startAnim(jid)
 				end
 			end
-			shownCards = newShown
-
-			-- forget cards of servers that no longer exist
-			for jid, c in pairs(cards) do
+			for jid, _ in pairs(frac) do
 				if servers[jid] == nil then
-					c.frame:Destroy()
-					cards[jid] = nil
-					shownCards[jid] = nil
+					frac[jid] = nil
+					goal[jid] = nil
+					animating[jid] = nil
+					expanded[jid] = nil
 				end
 			end
 
-			if #entries > limit then
-				moreBtn.Text = "Show more servers (" .. (#entries - limit) .. " left)"
-				moreBtn.Visible = true
-			else
-				moreBtn.Visible = false
-			end
+			-- 3) place everything
+			layout()
 
-			if #entries == 0 then
+			if #built == 0 then
 				local filtered = false
-				if opt then
-					local st = opt.state
+				if st then
 					filtered = st.hideFull or st.friendsOnly
 				end
-				if tab == "servers" then
+				if isServers then
 					if q ~= "" then
 						emptyLabel.Text = "No player matches that yet. Names are still loading in the background, so try again in a moment."
 					elseif filtered then
@@ -1796,7 +2324,7 @@ function Finder.new(win, opts)
 				else
 					if not group then
 						emptyLabel.Text = "Type a group ID above and press Load to see which servers have members in them."
-					elseif filtered or (opt and opt.state.role ~= nil) then
+					elseif filtered or (st and st.role ~= nil) then
 						emptyLabel.Text = "No servers match your filters."
 					else
 						emptyLabel.Text = "Nobody from this group is in game right now."
@@ -1810,10 +2338,12 @@ function Finder.new(win, opts)
 			updateStatus()
 		end
 
-		moreBtn.MouseButton1Click:Connect(function()
-			shown = shown + PAGE_SIZE
-			render(true)
-		end)
+		local function safeRender(force)
+			local ok, err = pcall(render, force)
+			if not ok then
+				warn("[finder] render error: " .. tostring(err))
+			end
+		end
 
 		-------------------------------------------------------------
 		-- Group loading
@@ -1890,7 +2420,7 @@ function Finder.new(win, opts)
 				loaded = loaded + #res.data
 				g.status = g.name .. " - loaded " .. loaded .. "/" .. total .. " members"
 				g.rev = g.rev + 1
-				render(true)
+				safeRender(true)
 				cursor = res.nextPageCursor
 				if cursor == nil then
 					return "ok"
@@ -1907,7 +2437,7 @@ function Finder.new(win, opts)
 				local pending = {}
 				for id, _ in pairs(located) do
 					if not g.checked[id] then
-						table.insert(pending, id)
+						pending[#pending + 1] = id
 					end
 				end
 				for i = 1, #pending do
@@ -1936,7 +2466,7 @@ function Finder.new(win, opts)
 					task.wait(0.25)
 				end
 				checkOwnServer(g)
-				render(false)
+				safeRender(false)
 				task.wait(2)
 			end
 		end
@@ -1946,16 +2476,16 @@ function Finder.new(win, opts)
 			local token = groupToken
 			local g = { id = gid, name = "Group " .. gid, members = {}, checked = {}, status = "Loading group " .. gid .. "...", rev = 0 }
 			group = g
-			shown = PAGE_SIZE
 			expanded = {}
 			if opt then
 				opt.state.role = nil
 			end
+			list.CanvasPosition = Vector2.new(0, 0)
 			render(true)
 
 			task.spawn(function()
 				checkOwnServer(g)
-				render(true)
+				safeRender(true)
 
 				local info, code = fetchGroupInfo(gid)
 				if token ~= groupToken then
@@ -1972,12 +2502,12 @@ function Finder.new(win, opts)
 				elseif code == 404 then
 					g.status = "Group " .. gid .. " does not exist (HTTP 404) - check the ID"
 					g.rev = g.rev + 1
-					render(true)
+					safeRender(true)
 					return
 				else
 					g.status = "Group info failed (HTTP " .. tostring(code) .. "), checking players one by one"
 					g.rev = g.rev + 1
-					render(true)
+					safeRender(true)
 				end
 
 				local needPerPlayer = true
@@ -1989,12 +2519,12 @@ function Finder.new(win, opts)
 					if result == "ok" then
 						g.status = g.name .. " (" .. total .. " members)"
 						g.rev = g.rev + 1
-						render(true)
+						safeRender(true)
 						needPerPlayer = false
 					else
 						g.status = "Member list failed (HTTP " .. tostring(c) .. "), checking players one by one"
 						g.rev = g.rev + 1
-						render(true)
+						safeRender(true)
 					end
 				end
 
@@ -2019,18 +2549,40 @@ function Finder.new(win, opts)
 		end
 
 		-------------------------------------------------------------
-		-- Layout (positions and sizes for the current mode and tab)
+		-- Tabs + page layout
 		-------------------------------------------------------------
+		local function paintTabs(animate)
+			local xs = 3
+			if tab == "group" then
+				xs = 3 + M.tabW + 2
+			end
+			local pos = UDim2.fromOffset(xs, 3)
+			if animate then
+				TweenService:Create(slider, SMOOTH, { Position = pos }):Play()
+			else
+				slider.Position = pos
+			end
+			local a = ICON
+			local b = ICON
+			if tab == "servers" then
+				a = ICON_HOVER
+			else
+				b = ICON_HOVER
+			end
+			TweenService:Create(tabServers, FAST, { TextColor3 = a }):Play()
+			TweenService:Create(tabGroup, FAST, { TextColor3 = b }):Play()
+		end
+
 		layoutFinder = function()
 			styleRev = styleRev + 1
 			local y = 8
 
-			box.Position = UDim2.fromOffset(0, y)
+			boxBack.Position = UDim2.fromOffset(0, y)
 			box.TextSize = M.boxText
 			if tab == "group" then
-				box.Size = UDim2.new(1, -(M.loadW + 8), 0, M.boxH)
+				boxBack.Size = UDim2.new(1, -(M.loadW + 8), 0, M.boxH)
 			else
-				box.Size = UDim2.new(1, 0, 0, M.boxH)
+				boxBack.Size = UDim2.new(1, 0, 0, M.boxH)
 			end
 			loadBtn.Position = UDim2.new(1, 0, 0, y)
 			loadBtn.Size = UDim2.fromOffset(M.loadW, M.boxH)
@@ -2040,62 +2592,44 @@ function Finder.new(win, opts)
 			local trayW = 6 + M.tabW * 2 + 2
 			tray.Position = UDim2.fromOffset(0, y)
 			tray.Size = UDim2.fromOffset(trayW, M.trayH)
+			slider.Size = UDim2.fromOffset(M.tabW, M.tabH)
 			tabServers.Position = UDim2.fromOffset(3, 3)
 			tabServers.Size = UDim2.fromOffset(M.tabW, M.tabH)
 			tabServers.TextSize = M.tabText
 			tabGroup.Position = UDim2.fromOffset(3 + M.tabW + 2, 3)
 			tabGroup.Size = UDim2.fromOffset(M.tabW, M.tabH)
 			tabGroup.TextSize = M.tabText
+			paintTabs(false)
 
-			-- gear + sort pill sit on the right of the tab row; the status text uses what is left
+			local x = trayW + 8
+			if tab == "servers" then
+				regionBtn.Visible = true
+				regionBtn.Position = UDim2.fromOffset(x, y)
+				regionBtn.Size = UDim2.fromOffset(M.pillW, M.trayH)
+				regionTitle.TextSize = M.pillText
+				regionValue.TextSize = M.pillText
+				regionMenu.Position = UDim2.fromOffset(x, y + M.trayH + 6)
+				x = x + M.pillW + 12
+			else
+				regionBtn.Visible = false
+				closeRegionMenu()
+				x = x + 4
+			end
+
+			-- gear sits on the right of this row; the status text uses what is left
 			local usedRight = 0
 			if opt then
 				opt:SetTouch(touchNow)
 				opt:SetTab(tab)
 				usedRight = opt:Layout(y, M.trayH, touchNow)
 			end
-			status.Position = UDim2.fromOffset(trayW + 12, y)
-			status.Size = UDim2.new(1, -(trayW + 12 + usedRight), 0, M.trayH)
-			y = y + M.trayH + 8
-
-			if tab == "servers" then
-				regionRow.Visible = true
-				regionRow.Position = UDim2.fromOffset(0, y)
-				regionRow.Size = UDim2.new(1, 0, 0, M.chipH + 14)
-				regionMenu.Position = UDim2.fromOffset(0, y + M.chipH + 20)
-				y = y + M.chipH + 22
-			else
-				regionRow.Visible = false
-				closeRegionMenu()
-			end
+			status.Position = UDim2.fromOffset(x, y)
+			status.Size = UDim2.new(1, -(x + usedRight), 0, M.trayH)
+			y = y + M.trayH + 10
 
 			list.Position = UDim2.fromOffset(0, y)
 			list.Size = UDim2.new(1, 0, 1, -y)
 			emptyLabel.Position = UDim2.new(0.5, 0, 0, y + 56)
-			moreBtn.Size = UDim2.new(1, -8, 0, M.moreH)
-			moreBtn.TextSize = M.moreText
-			restyleChips()
-		end
-
-		-------------------------------------------------------------
-		-- Tabs and inputs
-		-------------------------------------------------------------
-		local function paintTab(btn, active, isOver)
-			local bgT = 1
-			local textColor = ICON
-			if active then
-				bgT = 0
-				textColor = ICON_HOVER
-			elseif isOver then
-				bgT = 0.55
-				textColor = ICON_HOVER
-			end
-			TweenService:Create(btn, FAST, { BackgroundTransparency = bgT, TextColor3 = textColor }):Play()
-		end
-
-		local function paintTabs()
-			paintTab(tabServers, tab == "servers", false)
-			paintTab(tabGroup, tab == "group", false)
 		end
 
 		local function setTab(name)
@@ -2104,7 +2638,6 @@ function Finder.new(win, opts)
 			end
 			savedText[tab] = box.Text
 			tab = name
-			shown = PAGE_SIZE
 			expanded = {}
 			if name == "servers" then
 				box.PlaceholderText = "Search a player: display name, username or ID..."
@@ -2117,24 +2650,32 @@ function Finder.new(win, opts)
 				opt:Close()
 			end
 			layoutFinder()
-			paintTabs()
+			paintTabs(true)
 			box.Text = savedText[name]
+			list.CanvasPosition = Vector2.new(0, 0)
 			render(true)
 		end
 
 		tabServers.MouseEnter:Connect(function()
-			paintTab(tabServers, tab == "servers", true)
+			if tab ~= "servers" then
+				TweenService:Create(tabServers, FAST, { TextColor3 = ICON_HOVER }):Play()
+			end
 		end)
 		tabServers.MouseLeave:Connect(function()
-			paintTab(tabServers, tab == "servers", false)
+			if tab ~= "servers" then
+				TweenService:Create(tabServers, FAST, { TextColor3 = ICON }):Play()
+			end
 		end)
 		tabGroup.MouseEnter:Connect(function()
-			paintTab(tabGroup, tab == "group", true)
+			if tab ~= "group" then
+				TweenService:Create(tabGroup, FAST, { TextColor3 = ICON_HOVER }):Play()
+			end
 		end)
 		tabGroup.MouseLeave:Connect(function()
-			paintTab(tabGroup, tab == "group", false)
+			if tab ~= "group" then
+				TweenService:Create(tabGroup, FAST, { TextColor3 = ICON }):Play()
+			end
 		end)
-
 		tabServers.Activated:Connect(function()
 			setTab("servers")
 		end)
@@ -2142,15 +2683,27 @@ function Finder.new(win, opts)
 			setTab("group")
 		end)
 
+		-- typing: wait a moment so every keystroke does not redraw the grid
 		box:GetPropertyChangedSignal("Text"):Connect(function()
-			if tab == "servers" then
-				shown = PAGE_SIZE
-				expanded = {}
-				render(false)
+			if tab ~= "servers" then
+				return
 			end
+			searchToken = searchToken + 1
+			local t = searchToken
+			task.delay(0.12, function()
+				if t == searchToken and running then
+					expanded = {}
+					list.CanvasPosition = Vector2.new(0, 0)
+					safeRender(false)
+				end
+			end)
 		end)
 
+		box.Focused:Connect(function()
+			TweenService:Create(boxStroke, FAST, { Color = HOVER_GREY }):Play()
+		end)
 		box.FocusLost:Connect(function(enterPressed)
+			TweenService:Create(boxStroke, FAST, { Color = BORDER }):Play()
 			if enterPressed and tab == "group" then
 				submitGroup()
 			end
@@ -2197,11 +2750,27 @@ function Finder.new(win, opts)
 			end
 		end
 
-		paintTabs()
+		-------------------------------------------------------------
+		-- API + stop
+		-------------------------------------------------------------
+		function self:Join(jobId)
+			local srv = servers[jobId]
+			if srv then
+				joinServer(srv)
+			end
+		end
 
-		-- cancels any running group search (used when stopping)
-		stopGroup = function()
+		function self:Refresh()
+			pcall(refreshServers)
+			safeRender(true)
+		end
+
+		stopAll = function()
 			groupToken = groupToken + 1
+			if animConn then
+				animConn:Disconnect()
+				animConn = nil
+			end
 			if opt then
 				opt:Close()
 			end
@@ -2209,6 +2778,22 @@ function Finder.new(win, opts)
 				profile:Close()
 			end
 		end
+	end
+
+	function self:GetServers()
+		return servers
+	end
+
+	function self:GetServer(jobId)
+		return servers[jobId]
+	end
+
+	function self:Locate(userId)
+		return located[userId]
+	end
+
+	function self:GetName(userId)
+		return names[userId]
 	end
 
 	---------------------------------------------------------------------
@@ -2223,7 +2808,7 @@ function Finder.new(win, opts)
 
 	local function stop()
 		running = false
-		stopGroup()
+		stopAll()
 	end
 	win:OnUnload(stop)
 	function self:Stop()
@@ -2245,28 +2830,37 @@ function Finder.new(win, opts)
 	layoutFinder()
 	render(true)
 
+	-- server list loop (sleeps longer while the window is hidden or minimized)
 	task.spawn(function()
 		local lastErr = nil
 		while running do
-			pcall(refreshServers)
-			if not win:IsHidden() then
+			local idle = win:IsHidden() or win:IsMinimized()
+			if not idle then
+				pcall(refreshServers)
 				local ok, err = pcall(render, false)
 				if not ok and tostring(err) ~= lastErr then
 					lastErr = tostring(err)
 					warn("[finder] render error: " .. lastErr)
 				end
+				task.wait(REFRESH_EVERY)
+			else
+				task.wait(REFRESH_EVERY * 2)
 			end
-			task.wait(REFRESH_EVERY)
 		end
 	end)
 
+	-- names loop
 	task.spawn(function()
 		while running do
-			local ok, more = pcall(resolveNames)
-			if ok and more then
-				task.wait(0.6)
+			if win:IsHidden() or win:IsMinimized() then
+				task.wait(3)
 			else
-				task.wait(2)
+				local ok, more = pcall(resolveNames)
+				if ok and more then
+					task.wait(0.6)
+				else
+					task.wait(2)
+				end
 			end
 		end
 	end)
