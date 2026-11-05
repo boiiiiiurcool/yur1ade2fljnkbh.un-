@@ -1,25 +1,3 @@
--- options.lua  (finder options: tiny gear button, sort pill and the settings panel)
--- ASCII only, conservative syntax (no += and no continue).
---
---   local Options = <this file>
---   local opt = Options.new(win, page, {
---       onChange = function() end,                      -- a setting changed, redraw the list
---       onPickGroup = function(id) end,                 -- a recent group was clicked
---       onFriend = function(id, username, display) end, -- names that come with the friends list
---   })
---
---   opt.state          { sort, hideFull, minFree, friendsOnly, role }
---   opt.friendStatus   "idle" | "loading" | "ready" | "failed"
---   opt.friendCount    number of friends loaded
---   opt:Layout(y, h, touch)   puts the sort pill + gear on a row, returns the width they use
---   opt:SetTab(name)          "servers" or "group" (the group section only shows on the group tab)
---   opt:SetRoles(list)        list of { name = ..., count = ... } for the role filter
---   opt:AddHistory(id, name)  remember a group id (saved to disk when the executor allows it)
---   opt:IsFriend(userId)
---   opt:Compare(a, b)         sort order for two servers: true / false, or nil when equal
---   opt:Sig()                 text that changes whenever a setting changes
---   opt:SetTouch(on) / opt:Close()
-
 local Options = {}
 
 local SORTS = {
