@@ -5,7 +5,11 @@
 -- inside a window made by ui.lua.
 --
 --   local Finder = <this file>
---   local finder = Finder.new(win, { RefreshEvery = 2, PageSize = 40 })
+--   local finder = Finder.new(win, {
+--       RefreshEvery = 2, PageSize = 40,
+--       Options = <options.lua table>,   -- optional: gear button, sort pill, filters
+--       Profile = <profile.lua table>,   -- optional: player profile card
+--   })
 --   finder:Stop()      -- optional, it also stops by itself when the window unloads
 --
 -- Servers tab: every server in the game's list. Click a server to open it (animated) and see its players.
@@ -13,7 +17,8 @@
 --   Search a display name, username, user ID, or the start of a Job ID.
 --   Region chips above the list show servers per region + average ping. Click one to filter by that region.
 -- Group tab: enter a group ID (or paste the group URL) and press Load to see servers with group members in them.
--- Buttons: Join (teleport), Copy Link / Job ID / Script per server, click a player to copy their username,
+-- Options (gear): sort, hide full servers, free slots needed, friends only, group role filter, recent groups.
+-- Buttons: Join (teleport), Copy Link / Job ID / Script per server, click a player to open their profile card,
 --   the ID button copies their user ID.
 
 local Finder = {}
@@ -452,7 +457,8 @@ function Finder.new(win, opts)
 			M[k] = v
 		end
 	end
-	setMetrics(win.Touch)
+	local touchNow = win.Touch
+	setMetrics(touchNow)
 
 	---------------------------------------------------------------------
 	-- WIDGETS (inside the main page of the window)
@@ -685,6 +691,8 @@ function Finder.new(win, opts)
 	---------------------------------------------------------------------
 	do
 		local cards = {}
+		local opt = nil       -- options module instance (gear, sort, filters)
+		local profile = nil   -- profile module instance (player card)
 		local expanded = {}   -- jobId -> true/false when you toggled it by hand
 		local expandRev = 0
 		local group = nil     -- { id, name, members = {userId = roleName}, checked, status, rev }
@@ -1092,9 +1100,16 @@ function Finder.new(win, opts)
 			idBtn.MouseLeave:Connect(function()
 				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 0.55 }):Play()
 			end)
+			-- click a player: open the profile card (falls back to copying the username)
 			frame.Activated:Connect(function()
 				local n = names[userId]
-				if n then
+				if profile then
+					if n then
+						profile:Open(userId, { name = n.name, display = n.display })
+					else
+						profile:Open(userId)
+					end
+				elseif n then
 					copyText(n.name, "Copied username: " .. n.name)
 				else
 					toast("Name still loading, try again in a moment")
@@ -1287,12 +1302,40 @@ function Finder.new(win, opts)
 			if group then
 				groupPart = tostring(group.id) .. ":" .. tostring(group.rev)
 			end
-			local sig = tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. shown .. "|" .. expandRev .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev
+			local optSig = ""
+			if opt then
+				optSig = opt:Sig()
+			end
+			local sig = tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. shown .. "|" .. expandRev .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev .. "|" .. optSig
 			if not force and sig == lastSig then
 				updateStatus()
 				return
 			end
 			lastSig = sig
+
+			-- role chips for the group tab (count of in-game members per role)
+			if opt and tab == "group" then
+				local counts = {}
+				if group then
+					for id, _ in pairs(located) do
+						local r = group.members[id]
+						if r then
+							counts[r] = (counts[r] or 0) + 1
+						end
+					end
+				end
+				local roleList = {}
+				for rname, n in pairs(counts) do
+					table.insert(roleList, { name = rname, count = n })
+				end
+				table.sort(roleList, function(x, y)
+					if x.count ~= y.count then
+						return x.count > y.count
+					end
+					return x.name < y.name
+				end)
+				opt:SetRoles(roleList)
+			end
 
 			-- 1) pick the servers to show
 			local entries = {}
@@ -1340,7 +1383,8 @@ function Finder.new(win, opts)
 						ids = {}
 						for i = 1, #srv.players do
 							local id = srv.players[i]
-							if group.members[id] ~= nil then
+							local memberRole = group.members[id]
+							if memberRole ~= nil and (opt == nil or opt.state.role == nil or opt.state.role == memberRole) then
 								table.insert(ids, id)
 								matchSet[id] = true
 								matches = matches + 1
@@ -1348,6 +1392,26 @@ function Finder.new(win, opts)
 						end
 						if matches > 0 then
 							include = true
+						end
+					end
+				end
+
+				-- options: hide full servers + friends only (your own server is never hidden for being full)
+				if include and opt then
+					local st = opt.state
+					if st.hideFull and srv.jobId ~= game.JobId and (srv.max - srv.count) < st.minFree then
+						include = false
+					end
+					if include and st.friendsOnly then
+						local hasFriend = false
+						for i = 1, #srv.players do
+							if opt:IsFriend(srv.players[i]) then
+								hasFriend = true
+								break
+							end
+						end
+						if not hasFriend then
+							include = false
 						end
 					end
 				end
@@ -1367,6 +1431,12 @@ function Finder.new(win, opts)
 				end
 				if a.matches ~= b.matches then
 					return a.matches > b.matches
+				end
+				if opt then
+					local r = opt:Compare(a.srv, b.srv)
+					if r ~= nil then
+						return r
+					end
 				end
 				if a.srv.count ~= b.srv.count then
 					return a.srv.count > b.srv.count
@@ -1563,9 +1633,16 @@ function Finder.new(win, opts)
 			end
 
 			if #entries == 0 then
+				local filtered = false
+				if opt then
+					local st = opt.state
+					filtered = st.hideFull or st.friendsOnly
+				end
 				if tab == "servers" then
 					if q ~= "" then
 						emptyLabel.Text = "No player matches that yet. Names are still loading in the background, so try again in a moment."
+					elseif filtered then
+						emptyLabel.Text = "No servers match your filters."
 					elseif regionFilter ~= nil then
 						emptyLabel.Text = "No servers in this region."
 					elseif serverCount == 0 then
@@ -1576,6 +1653,8 @@ function Finder.new(win, opts)
 				else
 					if not group then
 						emptyLabel.Text = "Type a group ID above and press Load to see which servers have members in them."
+					elseif filtered or (opt and opt.state.role ~= nil) then
+						emptyLabel.Text = "No servers match your filters."
 					else
 						emptyLabel.Text = "Nobody from this group is in game right now."
 					end
@@ -1726,6 +1805,9 @@ function Finder.new(win, opts)
 			group = g
 			shown = PAGE_SIZE
 			expanded = {}
+			if opt then
+				opt.state.role = nil
+			end
 			render(true)
 
 			task.spawn(function()
@@ -1741,6 +1823,9 @@ function Finder.new(win, opts)
 				if info then
 					g.name = info.name
 					total = tonumber(info.memberCount) or 0
+					if opt then
+						opt:AddHistory(gid, info.name)
+					end
 				elseif code == 404 then
 					g.status = "Group " .. gid .. " does not exist (HTTP 404) - check the ID"
 					g.rev = g.rev + 1
@@ -1818,8 +1903,16 @@ function Finder.new(win, opts)
 			tabGroup.Position = UDim2.fromOffset(3 + M.tabW + 2, 3)
 			tabGroup.Size = UDim2.fromOffset(M.tabW, M.tabH)
 			tabGroup.TextSize = M.tabText
+
+			-- gear + sort pill sit on the right of the tab row; the status text uses what is left
+			local usedRight = 0
+			if opt then
+				opt:SetTouch(touchNow)
+				opt:SetTab(tab)
+				usedRight = opt:Layout(y, M.trayH, touchNow)
+			end
 			status.Position = UDim2.fromOffset(trayW + 12, y)
-			status.Size = UDim2.new(1, -(trayW + 12), 0, M.trayH)
+			status.Size = UDim2.new(1, -(trayW + 12 + usedRight), 0, M.trayH)
 			y = y + M.trayH + 8
 
 			if tab == "servers" then
@@ -1875,6 +1968,9 @@ function Finder.new(win, opts)
 				box.PlaceholderText = "Group ID or group URL, then press Load..."
 				loadBtn.Visible = true
 			end
+			if opt then
+				opt:Close()
+			end
 			layoutFinder()
 			paintTabs()
 			box.Text = savedText[name]
@@ -1917,11 +2013,56 @@ function Finder.new(win, opts)
 
 		loadBtn.Activated:Connect(submitGroup)
 
+		-------------------------------------------------------------
+		-- Extra modules: options (gear, sort, filters) and profile card
+		-------------------------------------------------------------
+		if opts.Options then
+			local okO, o = pcall(opts.Options.new, win, mainPage, {
+				onChange = function()
+					render(true)
+				end,
+				onPickGroup = function(id)
+					setTab("group")
+					box.Text = tostring(id)
+					submitGroup()
+				end,
+				onFriend = function(id, username, display)
+					setName(id, username, display)
+				end,
+			})
+			if okO then
+				opt = o
+			else
+				warn("[finder] options module failed: " .. tostring(o))
+			end
+		end
+
+		if opts.Profile then
+			local okP, p = pcall(opts.Profile.new, win, {
+				http = function(method, url)
+					local data = httpJson(method, url)
+					return data
+				end,
+				copy = copyText,
+			})
+			if okP then
+				profile = p
+			else
+				warn("[finder] profile module failed: " .. tostring(p))
+			end
+		end
+
 		paintTabs()
 
 		-- cancels any running group search (used when stopping)
 		stopGroup = function()
 			groupToken = groupToken + 1
+			if opt then
+				opt:Close()
+			end
+			if profile then
+				profile:Close()
+			end
 		end
 	end
 
@@ -1946,6 +2087,7 @@ function Finder.new(win, opts)
 
 	-- Touch Mode changes: new sizes, then draw again
 	win:OnTouchChange(function(on)
+		touchNow = on
 		setMetrics(on)
 		layoutFinder()
 		render(true)
@@ -1953,7 +2095,8 @@ function Finder.new(win, opts)
 
 	pcall(refreshServers)
 	pcall(resolveNames)
-	setMetrics(win.Touch)
+	touchNow = win.Touch
+	setMetrics(touchNow)
 	layoutFinder()
 	render(true)
 
