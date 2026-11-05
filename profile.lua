@@ -1,17 +1,3 @@
-
-
-
--- profile.lua  (small player card: avatar, account age, copy profile link)
--- ASCII only, conservative syntax (no += and no continue).
---
---   local Profile = <this file>
---   local card = Profile.new(win, { http = httpJson, copy = copyText })
---   card:Open(userId, { name = "username", display = "Display Name" })   -- info is optional
---   card:Close()
---
--- deps.http(method, url) -> decoded json or nil   (used to read the account creation date)
--- deps.copy(text, message)                        (copies to the clipboard and shows a toast)
-
 local Profile = {}
 
 function Profile.new(win, deps)
