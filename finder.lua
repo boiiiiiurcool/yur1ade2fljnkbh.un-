@@ -1135,13 +1135,13 @@ function Finder.new(win, opts)
 			Text = "",
 		}, regionRow)
 		corner(regionBtn, RADIUS + 2)
-		local regionTitle = label(regionBtn, "Region", UDim2.fromOffset(12, 0), UDim2.fromOffset(50, 30),
-			Enum.Font.Gotham, 12, DIM_TEXT)
-		local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(62, 0), UDim2.new(1, -230, 1, 0),
-			Enum.Font.GothamMedium, 12, TEXT_COLOR)
+		local regionTitle = label(regionBtn, "Region", UDim2.fromOffset(14, 0), UDim2.new(0, 56, 1, 0),
+			Enum.Font.Gotham, 13, DIM_TEXT)
+		local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(72, 0), UDim2.new(1, -250, 1, 0),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
 		regionValue.TextTruncate = Enum.TextTruncate.AtEnd
-		local regionStats = label(regionBtn, "", UDim2.new(1, -170, 0, 0), UDim2.new(0, 158, 1, 0),
-			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+		local regionStats = label(regionBtn, "", UDim2.new(1, -178, 0, 0), UDim2.new(0, 164, 1, 0),
+			Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
 
 		local regionOver = false
 		local function paintRegionBtn()
@@ -1193,8 +1193,8 @@ function Finder.new(win, opts)
 			CanvasSize = UDim2.new(0, 0, 0, 0),
 			AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		}, regionMenu)
-		pad(menuScroll, 6, 6, 6, 6)
-		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, menuScroll)
+		pad(menuScroll, 10, 10, 10, 10)
+		new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, menuScroll)
 
 		local function closeRegionMenu()
 			if not regionOpen then
@@ -1268,7 +1268,7 @@ function Finder.new(win, opts)
 
 		local function makeRow(key)
 			local b = new("TextButton", {
-				Size = UDim2.new(1, 0, 0, 28),
+				Size = UDim2.new(1, 0, 0, 36),
 				BackgroundColor3 = HOVER_GREY,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
@@ -1276,11 +1276,11 @@ function Finder.new(win, opts)
 				Text = "",
 			}, menuScroll)
 			corner(b, RADIUS)
-			local nameLabel = label(b, "", UDim2.fromOffset(10, 0), UDim2.new(1, -150, 1, 0),
-				Enum.Font.GothamMedium, 12, ICON)
+			local nameLabel = label(b, "", UDim2.fromOffset(12, 0), UDim2.new(1, -170, 1, 0),
+				Enum.Font.GothamMedium, 13, ICON)
 			nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
-			local statLabel = label(b, "", UDim2.new(1, -150, 0, 0), UDim2.new(0, 140, 1, 0),
-				Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+			local statLabel = label(b, "", UDim2.new(1, -164, 0, 0), UDim2.new(0, 152, 1, 0),
+				Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
 			local r = { btn = b, key = key, name = nameLabel, stats = statLabel, over = false }
 			b.MouseEnter:Connect(function()
 				r.over = true
@@ -1297,9 +1297,9 @@ function Finder.new(win, opts)
 		end
 
 		local function restyleChips()
-			regionTitle.TextSize = M.chipText + 1
-			regionValue.TextSize = M.chipText + 1
-			regionStats.TextSize = M.chipText
+			regionTitle.TextSize = M.chipText + 2
+			regionValue.TextSize = M.chipText + 2
+			regionStats.TextSize = M.chipText + 1
 		end
 
 		-- rows are reused, only their text changes
@@ -1362,7 +1362,7 @@ function Finder.new(win, opts)
 				regionStats.Text = statsText(total, pSum, pN)
 			end
 
-			local h = math.min((#arr + 1) * 30 + 12, 260)
+			local h = math.min((#arr + 1) * 40 + 20, 300)
 			regionMenu.Size = UDim2.new(1, 0, 0, h)
 		end
 
@@ -2021,9 +2021,9 @@ function Finder.new(win, opts)
 			if tab == "servers" then
 				regionRow.Visible = true
 				regionRow.Position = UDim2.fromOffset(0, y)
-				regionRow.Size = UDim2.new(1, 0, 0, M.chipH + 6)
-				regionMenu.Position = UDim2.fromOffset(0, y + M.chipH + 8)
-				y = y + M.chipH + 12
+				regionRow.Size = UDim2.new(1, 0, 0, M.chipH + 14)
+				regionMenu.Position = UDim2.fromOffset(0, y + M.chipH + 20)
+				y = y + M.chipH + 22
 			else
 				regionRow.Visible = false
 				closeRegionMenu()
