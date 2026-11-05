@@ -15,7 +15,7 @@
 -- Servers tab: every server in the game's list. Click a server to open it (animated) and see its players.
 --   Type in the search box: any server with a matching player opens automatically and the match is highlighted.
 --   Search a display name, username, user ID, or the start of a Job ID.
---   Region chips above the list show servers per region + average ping. Click one to filter by that region.
+--   Region picker above the list: click it, pick a region (Texas etc.) to only show servers there.
 -- Group tab: enter a group ID (or paste the group URL) and press Load to see servers with group members in them.
 -- Options (gear): sort, hide full servers, free slots needed, friends only, group role filter, recent groups.
 -- Buttons: Join (teleport), Copy Link / Job ID / Script per server, click a player to open their profile card,
@@ -534,24 +534,13 @@ function Finder.new(win, opts)
 	local status = label(mainPage, "", UDim2.fromOffset(188, 50), UDim2.new(1, -188, 0, 30),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
 
-	-- region summary row (Servers tab only)
-	local regionRow = new("ScrollingFrame", {
+	-- region picker row (Servers tab only): one button, the list opens under it
+	local regionRow = new("Frame", {
 		Position = UDim2.fromOffset(0, 88),
 		Size = UDim2.new(1, 0, 0, 30),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		ScrollBarThickness = 2,
-		ScrollBarImageColor3 = ICON,
-		ScrollBarImageTransparency = 0.5,
-		ScrollingDirection = Enum.ScrollingDirection.X,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-		AutomaticCanvasSize = Enum.AutomaticSize.X,
 	}, mainPage)
-	new("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 6),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, regionRow)
 
 	local list = new("ScrollingFrame", {
 		Position = UDim2.fromOffset(0, 124),
@@ -705,8 +694,6 @@ function Finder.new(win, opts)
 		local savedText = { servers = "", group = "" }
 		local styleRev = 0
 		local regionFilter = nil   -- nil = all regions
-		local regionChips = {}
-		local allChip = nil
 
 		-------------------------------------------------------------
 		-- Actions
@@ -1124,52 +1111,129 @@ function Finder.new(win, opts)
 		end
 
 		-------------------------------------------------------------
-		-- Region summary chips
+		-- Region picker (button + dropdown list)
 		-------------------------------------------------------------
 		local ALL_KEY = "*"
-
-		local function escapeRich(s)
-			s = string.gsub(s, "&", "&amp;")
-			s = string.gsub(s, "<", "&lt;")
-			s = string.gsub(s, ">", "&gt;")
-			return s
-		end
+		local regionOpen = false
+		local regionRows = {}
+		local allRow = nil
+		local regionToken = 0
 
 		local function statsText(count, ps, pn)
-			local s = count .. " srv"
+			local s = count .. " servers"
 			if pn > 0 then
-				s = s .. " | " .. math.floor(ps / pn + 0.5) .. " ms"
+				s = s .. "  |  " .. math.floor(ps / pn + 0.5) .. " ms"
 			end
 			return s
 		end
 
-		local function paintChip(chip)
-			local sel = false
-			if chip.key == ALL_KEY then
-				sel = (regionFilter == nil)
-			else
-				sel = (regionFilter == chip.key)
+		local regionBtn = new("TextButton", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+			AutoButtonColor = false,
+			Text = "",
+		}, regionRow)
+		corner(regionBtn, RADIUS + 2)
+		local regionTitle = label(regionBtn, "Region", UDim2.fromOffset(12, 0), UDim2.fromOffset(50, 30),
+			Enum.Font.Gotham, 12, DIM_TEXT)
+		local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(62, 0), UDim2.new(1, -230, 1, 0),
+			Enum.Font.GothamMedium, 12, TEXT_COLOR)
+		regionValue.TextTruncate = Enum.TextTruncate.AtEnd
+		local regionStats = label(regionBtn, "", UDim2.new(1, -170, 0, 0), UDim2.new(0, 158, 1, 0),
+			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+
+		local regionOver = false
+		local function paintRegionBtn()
+			local bg = CLUSTER_BG
+			if regionOver or regionOpen then
+				bg = HOVER_GREY
 			end
-			local sig = tostring(sel) .. "|" .. tostring(chip.over) .. "|" .. chip.label .. "|" .. chip.stats
-			if chip.sig == sig then
+			TweenService:Create(regionBtn, FAST, { BackgroundColor3 = bg }):Play()
+		end
+		regionBtn.MouseEnter:Connect(function()
+			regionOver = true
+			paintRegionBtn()
+		end)
+		regionBtn.MouseLeave:Connect(function()
+			regionOver = false
+			paintRegionBtn()
+		end)
+
+		local regionCatcher = new("TextButton", {
+			Text = "",
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			Visible = false,
+			ZIndex = 30,
+		}, mainPage)
+
+		local regionMenu = new("CanvasGroup", {
+			Name = "RegionMenu",
+			Position = UDim2.fromOffset(0, 130),
+			Size = UDim2.new(1, 0, 0, 200),
+			BackgroundColor3 = T.POPUP_BG,
+			BorderSizePixel = 0,
+			GroupTransparency = 1,
+			Visible = false,
+			ZIndex = 31,
+		}, mainPage)
+		corner(regionMenu, RADIUS + 4)
+		stroke(regionMenu, BORDER, 1, 0)
+
+		local menuScroll = new("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 2,
+			ScrollBarImageColor3 = ICON,
+			ScrollBarImageTransparency = 0.5,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, regionMenu)
+		pad(menuScroll, 6, 6, 6, 6)
+		new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, menuScroll)
+
+		local function closeRegionMenu()
+			if not regionOpen then
 				return
 			end
-			chip.sig = sig
-
-			local bg = CLUSTER_BG
-			local textColor = TEXT_COLOR
-			local dim = "#74747C"
-			if sel then
-				bg = HOVER_GREY
-				textColor = ICON_HOVER
-				dim = "#B4B4BC"
-			elseif chip.over then
-				bg = Color3.fromRGB(46, 46, 52)
-			end
-			TweenService:Create(chip.btn, FAST, { BackgroundColor3 = bg }):Play()
-			chip.btn.TextColor3 = textColor
-			chip.btn.Text = escapeRich(chip.label) .. "  <font color=\"" .. dim .. "\">" .. escapeRich(chip.stats) .. "</font>"
+			regionOpen = false
+			regionToken = regionToken + 1
+			local token = regionToken
+			regionCatcher.Visible = false
+			TweenService:Create(regionMenu, FAST, { GroupTransparency = 1 }):Play()
+			task.delay(FAST.Time + 0.02, function()
+				if token == regionToken then
+					regionMenu.Visible = false
+				end
+			end)
+			paintRegionBtn()
 		end
+
+		local function openRegionMenu()
+			if regionOpen then
+				return
+			end
+			regionOpen = true
+			regionToken = regionToken + 1
+			regionCatcher.Visible = true
+			regionMenu.GroupTransparency = 1
+			regionMenu.Visible = true
+			TweenService:Create(regionMenu, FAST, { GroupTransparency = 0 }):Play()
+			paintRegionBtn()
+		end
+
+		regionBtn.Activated:Connect(function()
+			if regionOpen then
+				closeRegionMenu()
+			else
+				openRegionMenu()
+			end
+		end)
+		regionCatcher.Activated:Connect(closeRegionMenu)
 
 		local function setRegion(key)
 			if key == ALL_KEY or key == regionFilter then
@@ -1178,81 +1242,106 @@ function Finder.new(win, opts)
 				regionFilter = key
 			end
 			shown = PAGE_SIZE
+			closeRegionMenu()
 			render(true)
 		end
 
-		local function makeChip(key)
+		local function paintRow(r)
+			local sel = false
+			if r.key == ALL_KEY then
+				sel = (regionFilter == nil)
+			else
+				sel = (regionFilter == r.key)
+			end
+			local bgT = 1
+			local tc = ICON
+			if sel then
+				bgT = 0
+				tc = ICON_HOVER
+			elseif r.over then
+				bgT = 0.55
+				tc = ICON_HOVER
+			end
+			TweenService:Create(r.btn, FAST, { BackgroundTransparency = bgT }):Play()
+			r.name.TextColor3 = tc
+		end
+
+		local function makeRow(key)
 			local b = new("TextButton", {
-				Size = UDim2.new(0, 0, 0, M.chipH),
-				AutomaticSize = Enum.AutomaticSize.X,
-				BackgroundColor3 = CLUSTER_BG,
+				Size = UDim2.new(1, 0, 0, 28),
+				BackgroundColor3 = HOVER_GREY,
+				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 				AutoButtonColor = false,
 				Text = "",
-				RichText = true,
-				TextColor3 = TEXT_COLOR,
-				Font = Enum.Font.GothamMedium,
-				TextSize = M.chipText,
-			}, regionRow)
-			corner(b, RADIUS + 1)
-			pad(b, 10, 0, 10, 0)
-			local chip = { btn = b, key = key, label = "", stats = "", over = false, sig = "" }
+			}, menuScroll)
+			corner(b, RADIUS)
+			local nameLabel = label(b, "", UDim2.fromOffset(10, 0), UDim2.new(1, -150, 1, 0),
+				Enum.Font.GothamMedium, 12, ICON)
+			nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+			local statLabel = label(b, "", UDim2.new(1, -150, 0, 0), UDim2.new(0, 140, 1, 0),
+				Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+			local r = { btn = b, key = key, name = nameLabel, stats = statLabel, over = false }
 			b.MouseEnter:Connect(function()
-				chip.over = true
-				paintChip(chip)
+				r.over = true
+				paintRow(r)
 			end)
 			b.MouseLeave:Connect(function()
-				chip.over = false
-				paintChip(chip)
+				r.over = false
+				paintRow(r)
 			end)
 			b.Activated:Connect(function()
-				setRegion(chip.key)
+				setRegion(r.key)
 			end)
-			return chip
+			return r
 		end
 
 		local function restyleChips()
-			if allChip then
-				allChip.btn.Size = UDim2.new(0, 0, 0, M.chipH)
-				allChip.btn.TextSize = M.chipText
-			end
-			for _, chip in pairs(regionChips) do
-				chip.btn.Size = UDim2.new(0, 0, 0, M.chipH)
-				chip.btn.TextSize = M.chipText
-			end
+			regionTitle.TextSize = M.chipText + 1
+			regionValue.TextSize = M.chipText + 1
+			regionStats.TextSize = M.chipText
 		end
 
-		-- chips are reused, only their text changes, so hovering and clicking never flickers
+		-- rows are reused, only their text changes
 		local function updateRegions()
 			local arr, total, pSum, pN = regionSummary()
 
-			if allChip == nil then
-				allChip = makeChip(ALL_KEY)
-				allChip.btn.LayoutOrder = 0
+			-- alphabetical in the list so a region is easy to find
+			table.sort(arr, function(x, y)
+				return x.name < y.name
+			end)
+
+			if allRow == nil then
+				allRow = makeRow(ALL_KEY)
+				allRow.btn.LayoutOrder = 0
 			end
-			allChip.label = "All"
-			allChip.stats = statsText(total, pSum, pN)
-			paintChip(allChip)
+			allRow.name.Text = "All regions"
+			allRow.stats.Text = statsText(total, pSum, pN)
+			paintRow(allRow)
 
 			local seen = {}
+			local current = nil
 			for i = 1, #arr do
 				local a = arr[i]
-				local chip = regionChips[a.name]
-				if chip == nil then
-					chip = makeChip(a.name)
-					regionChips[a.name] = chip
+				local r = regionRows[a.name]
+				if r == nil then
+					r = makeRow(a.name)
+					regionRows[a.name] = r
 				end
-				chip.label = a.name
-				chip.stats = statsText(a.count, a.pSum, a.pN)
-				chip.btn.LayoutOrder = i
+				r.name.Text = a.name
+				r.stats.Text = statsText(a.count, a.pSum, a.pN)
+				r.btn.LayoutOrder = i
 				seen[a.name] = true
-				paintChip(chip)
+				if regionFilter == a.name then
+					current = a
+				end
+				paintRow(r)
 			end
 
-			for name, chip in pairs(regionChips) do
+			for name, r in pairs(regionRows) do
 				if not seen[name] then
-					chip.btn:Destroy()
-					regionChips[name] = nil
+					r.btn:Destroy()
+					regionRows[name] = nil
 					if regionFilter == name then
 						regionFilter = nil
 						task.defer(function()
@@ -1261,6 +1350,20 @@ function Finder.new(win, opts)
 					end
 				end
 			end
+
+			-- the button shows the current pick
+			if current then
+				regionValue.Text = current.name
+				regionValue.TextColor3 = ICON_HOVER
+				regionStats.Text = statsText(current.count, current.pSum, current.pN)
+			else
+				regionValue.Text = "All regions"
+				regionValue.TextColor3 = TEXT_COLOR
+				regionStats.Text = statsText(total, pSum, pN)
+			end
+
+			local h = math.min((#arr + 1) * 30 + 12, 260)
+			regionMenu.Size = UDim2.new(1, 0, 0, h)
 		end
 
 		-------------------------------------------------------------
@@ -1919,9 +2022,11 @@ function Finder.new(win, opts)
 				regionRow.Visible = true
 				regionRow.Position = UDim2.fromOffset(0, y)
 				regionRow.Size = UDim2.new(1, 0, 0, M.chipH + 6)
+				regionMenu.Position = UDim2.fromOffset(0, y + M.chipH + 8)
 				y = y + M.chipH + 12
 			else
 				regionRow.Visible = false
+				closeRegionMenu()
 			end
 
 			list.Position = UDim2.fromOffset(0, y)
