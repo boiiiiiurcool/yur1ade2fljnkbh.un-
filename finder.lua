@@ -429,10 +429,10 @@ function Finder.new(win, opts)
 		boxH = 34, boxText = 13, loadW = 64,
 		trayH = 30, tabW = 84, tabH = 24, tabText = 12,
 		chipH = 24, chipText = 11,
-		headerH = 52, titleY = 9, subY = 28, titleText = 13, subText = 11,
+		headerH = 54, titleY = 10, subY = 30, titleText = 13, subText = 11,
 		joinW = 54, joinH = 28, joinText = 12,
 		smallH = 26, smallText = 11, smallW1 = 88, smallW2 = 92, smallW3 = 92,
-		rowH = 40, avatar = 28, nameText = 13, userText = 11, roleText = 10,
+		rowH = 40, avatar = 26, nameText = 13, userText = 11, roleText = 10,
 		idW = 36, idH = 22, idText = 10,
 		moreH = 32, moreText = 12,
 	}
@@ -554,7 +554,7 @@ function Finder.new(win, opts)
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	}, mainPage)
-	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+	new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder }, list)
 
 	local emptyLabel = new("TextLabel", {
 		AnchorPoint = Vector2.new(0.5, 0),
@@ -734,7 +734,8 @@ function Finder.new(win, opts)
 		end
 
 		-------------------------------------------------------------
-		-- Server cards (created once per server, then reused)
+		-- Server rows (created once per server, then reused)
+		-- flat list: no boxes, a thin line between servers, players indented underneath
 		-------------------------------------------------------------
 		local function smallBtn(text, order, parent)
 			local b = new("TextButton", {
@@ -748,7 +749,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = 11,
 			}, parent)
-			corner(b, RADIUS + 2)
+			corner(b, RADIUS)
 			hoverable(b, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
 			return b
 		end
@@ -757,13 +758,15 @@ function Finder.new(win, opts)
 		local function styleCard(c)
 			c.styleRev = styleRev
 			c.header.Size = UDim2.new(1, 0, 0, M.headerH)
-			local textW = M.joinW + 50
-			c.title.Position = UDim2.new(0, 32, 0, M.titleY)
-			c.title.Size = UDim2.new(1, -textW, 0, M.titleText + 5)
+			local rightW = M.joinW + 84
+			c.title.Position = UDim2.new(0, 34, 0, M.titleY)
+			c.title.Size = UDim2.new(1, -(34 + rightW), 0, M.titleText + 5)
 			c.title.TextSize = M.titleText
-			c.sub.Position = UDim2.new(0, 32, 0, M.subY)
-			c.sub.Size = UDim2.new(1, -textW, 0, M.subText + 5)
+			c.sub.Position = UDim2.new(0, 34, 0, M.subY)
+			c.sub.Size = UDim2.new(1, -(34 + rightW), 0, M.subText + 5)
 			c.sub.TextSize = M.subText
+			c.count.Position = UDim2.new(1, -(M.joinW + 22), 0.5, 0)
+			c.count.TextSize = M.titleText
 			c.joinBtn.Size = UDim2.fromOffset(M.joinW, M.joinH)
 			c.joinBtn.TextSize = M.joinText
 			c.actions.Size = UDim2.new(1, 0, 0, M.smallH)
@@ -789,46 +792,38 @@ function Finder.new(win, opts)
 			local frame = new("Frame", {
 				Size = UDim2.new(1, -8, 0, 0),
 				AutomaticSize = Enum.AutomaticSize.Y,
-				BackgroundColor3 = SIDEBAR_BG,
+				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 			}, nil)
-			corner(frame, RADIUS + 4)
-			stroke(frame, BORDER, 1, 0)
 			new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, frame)
 
 			local header = new("TextButton", {
 				LayoutOrder = 0,
 				Size = UDim2.new(1, 0, 0, 52),
+				BackgroundColor3 = HOVER_GREY,
 				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
 				Text = "",
 				AutoButtonColor = false,
 			}, frame)
+			corner(header, RADIUS)
 
-			-- custom chevron: two rounded bars, rotates when the card opens
-			local arrow = new("Frame", {
+			-- plain ">" that turns down when the server is open
+			local arrow = new("TextLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0, 18, 0.5, 0),
-				Size = UDim2.fromOffset(14, 14),
+				Position = UDim2.new(0, 16, 0.5, 0),
+				Size = UDim2.fromOffset(16, 16),
 				BackgroundTransparency = 1,
+				Text = ">",
+				TextColor3 = DIM_TEXT,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 14,
 			}, header)
-			local function chevArm(y, rot)
-				local f = new("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromOffset(6.7, y),
-					Size = UDim2.fromOffset(8, 2),
-					Rotation = rot,
-					BackgroundColor3 = DIM_TEXT,
-					BorderSizePixel = 0,
-				}, arrow)
-				corner(f, 1)
-			end
-			chevArm(4.2, 45)
-			chevArm(9.8, -45)
 
 			local title = new("TextLabel", {
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 32, 0, 9),
-				Size = UDim2.new(1, -104, 0, 18),
+				Position = UDim2.new(0, 34, 0, 9),
+				Size = UDim2.new(1, -150, 0, 18),
 				Text = "",
 				TextColor3 = TEXT_COLOR,
 				Font = Enum.Font.GothamMedium,
@@ -839,8 +834,8 @@ function Finder.new(win, opts)
 
 			local sub = new("TextLabel", {
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 32, 0, 28),
-				Size = UDim2.new(1, -104, 0, 16),
+				Position = UDim2.new(0, 34, 0, 29),
+				Size = UDim2.new(1, -150, 0, 16),
 				Text = "",
 				TextColor3 = DIM_TEXT,
 				Font = Enum.Font.Gotham,
@@ -849,9 +844,22 @@ function Finder.new(win, opts)
 				TextTruncate = Enum.TextTruncate.AtEnd,
 			}, header)
 
+			-- players in the server, e.g. 12/30
+			local count = new("TextLabel", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -76, 0.5, 0),
+				Size = UDim2.fromOffset(60, 20),
+				BackgroundTransparency = 1,
+				Text = "",
+				TextColor3 = TEXT_COLOR,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Right,
+			}, header)
+
 			local joinBtn = new("TextButton", {
 				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -10, 0.5, 0),
+				Position = UDim2.new(1, -8, 0.5, 0),
 				Size = UDim2.fromOffset(54, 28),
 				BackgroundColor3 = JOIN_BG,
 				BorderSizePixel = 0,
@@ -861,7 +869,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = 12,
 			}, header)
-			corner(joinBtn, RADIUS + 2)
+			corner(joinBtn, RADIUS)
 
 			-- clip frame: its height is animated, the content inside keeps its full size
 			local clipFrame = new("Frame", {
@@ -878,7 +886,7 @@ function Finder.new(win, opts)
 				BackgroundTransparency = 1,
 			}, clipFrame)
 			new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, content)
-			pad(content, 8, 0, 8, 8)
+			pad(content, 34, 4, 8, 8)
 
 			local actions = new("Frame", {
 				LayoutOrder = 0,
@@ -895,6 +903,14 @@ function Finder.new(win, opts)
 			local idBtn = smallBtn("Copy Job ID", 2, actions)
 			local scriptBtn = smallBtn("Copy Script", 3, actions)
 
+			-- thin line between servers
+			new("Frame", {
+				LayoutOrder = 2,
+				Size = UDim2.new(1, 0, 0, 1),
+				BackgroundColor3 = BORDER,
+				BorderSizePixel = 0,
+			}, frame)
+
 			local frac = new("NumberValue", { Value = 0 }, frame)
 
 			c = {
@@ -903,6 +919,7 @@ function Finder.new(win, opts)
 				arrow = arrow,
 				title = title,
 				sub = sub,
+				count = count,
 				joinBtn = joinBtn,
 				clip = clipFrame,
 				content = content,
@@ -930,10 +947,10 @@ function Finder.new(win, opts)
 				render(true)
 			end)
 			header.MouseEnter:Connect(function()
-				TweenService:Create(frame, FAST, { BackgroundColor3 = CARD_BG }):Play()
+				TweenService:Create(header, FAST, { BackgroundTransparency = 0.6 }):Play()
 			end)
 			header.MouseLeave:Connect(function()
-				TweenService:Create(frame, FAST, { BackgroundColor3 = SIDEBAR_BG }):Play()
+				TweenService:Create(header, FAST, { BackgroundTransparency = 1 }):Play()
 			end)
 			joinBtn.MouseEnter:Connect(function()
 				if not c.mine then
@@ -974,8 +991,9 @@ function Finder.new(win, opts)
 		local function styleRow(r)
 			r.styleRev = styleRev
 			r.frame.Size = UDim2.new(1, 0, 0, M.rowH)
+			r.pic.Position = UDim2.new(0, 10, 0.5, 0)
 			r.pic.Size = UDim2.new(0, M.avatar, 0, M.avatar)
-			local textX = 6 + M.avatar + 8
+			local textX = 10 + M.avatar + 10
 			local idRight = 6 + M.idW + 8
 			local block = M.nameText + M.userText + 7
 			local top = math.floor((M.rowH - block) / 2)
@@ -997,29 +1015,40 @@ function Finder.new(win, opts)
 				return r
 			end
 
+			-- flat row: no outline, only a light tint on hover and a green mark when it is a search match
 			local frame = new("TextButton", {
 				Size = UDim2.new(1, 0, 0, 40),
-				BackgroundColor3 = CARD_BG,
+				BackgroundColor3 = HOVER_GREY,
+				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 				Text = "",
 				AutoButtonColor = false,
 			}, nil)
-			corner(frame, RADIUS + 4)
-			local rowStroke = stroke(frame, ICON, 1, 1)
+			corner(frame, RADIUS)
+
+			local mark = new("Frame", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.new(0, 3, 0.6, 0),
+				BackgroundColor3 = GREEN,
+				BorderSizePixel = 0,
+				Visible = false,
+			}, frame)
+			corner(mark, 2)
 
 			local pic = new("ImageLabel", {
 				AnchorPoint = Vector2.new(0, 0.5),
-				Position = UDim2.new(0, 6, 0.5, 0),
+				Position = UDim2.new(0, 10, 0.5, 0),
 				Size = UDim2.new(0, 28, 0, 28),
 				BackgroundColor3 = CLUSTER_BG,
 				BorderSizePixel = 0,
 				Image = thumbUrl(userId),
 			}, frame)
-			corner(pic, 8)
+			corner(pic, 100)
 
 			local display = new("TextLabel", {
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 42, 0, 4),
+				Position = UDim2.new(0, 48, 0, 4),
 				Size = UDim2.new(1, -140, 0, 17),
 				Text = "",
 				TextColor3 = TEXT_COLOR,
@@ -1031,7 +1060,7 @@ function Finder.new(win, opts)
 
 			local user = new("TextLabel", {
 				BackgroundTransparency = 1,
-				Position = UDim2.new(0, 42, 0, 21),
+				Position = UDim2.new(0, 48, 0, 21),
 				Size = UDim2.new(1, -140, 0, 14),
 				Text = "",
 				TextColor3 = DIM_TEXT,
@@ -1059,33 +1088,35 @@ function Finder.new(win, opts)
 				Position = UDim2.new(1, -6, 0.5, 0),
 				Size = UDim2.new(0, 36, 0, 22),
 				BackgroundColor3 = HOVER_GREY,
-				BackgroundTransparency = 0.55,
+				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 				AutoButtonColor = false,
 				Text = "ID",
-				TextColor3 = ICON_HOVER,
+				TextColor3 = DIM_TEXT,
 				Font = Enum.Font.GothamMedium,
 				TextSize = 10,
 			}, frame)
-			corner(idBtn, RADIUS + 2)
+			corner(idBtn, RADIUS)
 
 			r = {
 				frame = frame, pic = pic, display = display, user = user, role = role,
-				idBtn = idBtn, stroke = rowStroke, base = CARD_BG, styleRev = -1,
+				idBtn = idBtn, mark = mark, base = HOVER_GREY, baseT = 1, styleRev = -1,
 			}
 			card.rows[userId] = r
 
 			frame.MouseEnter:Connect(function()
-				TweenService:Create(frame, FAST, { BackgroundColor3 = CARD_HOVER }):Play()
+				if r.baseT >= 1 then
+					TweenService:Create(frame, FAST, { BackgroundTransparency = 0.6 }):Play()
+				end
 			end)
 			frame.MouseLeave:Connect(function()
-				TweenService:Create(frame, FAST, { BackgroundColor3 = r.base }):Play()
+				TweenService:Create(frame, FAST, { BackgroundTransparency = r.baseT }):Play()
 			end)
 			idBtn.MouseEnter:Connect(function()
-				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 0 }):Play()
+				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 0.4, TextColor3 = ICON_HOVER }):Play()
 			end)
 			idBtn.MouseLeave:Connect(function()
-				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 0.55 }):Play()
+				TweenService:Create(idBtn, FAST, { BackgroundTransparency = 1, TextColor3 = DIM_TEXT }):Play()
 			end)
 			-- click a player: open the profile card (falls back to copying the username)
 			frame.Activated:Connect(function()
@@ -1564,14 +1595,18 @@ function Finder.new(win, opts)
 				end
 				local mine = (srv.jobId == game.JobId)
 
-				local titleText = "Server " .. string.sub(srv.jobId, 1, 8)
+				c.title.Text = "Server " .. string.sub(srv.jobId, 1, 8)
 				if mine then
-					titleText = titleText .. "  (you are here)"
 					c.title.TextColor3 = GREEN
 				else
 					c.title.TextColor3 = TEXT_COLOR
 				end
-				c.title.Text = titleText
+				c.count.Text = srv.count .. "/" .. srv.max
+				if srv.count >= srv.max then
+					c.count.TextColor3 = DIM_TEXT
+				else
+					c.count.TextColor3 = TEXT_COLOR
+				end
 
 				if c.mine ~= mine then
 					c.mine = mine
@@ -1590,7 +1625,9 @@ function Finder.new(win, opts)
 				if e.matches > 0 then
 					table.insert(parts, e.matches .. " found")
 				end
-				table.insert(parts, srv.count .. "/" .. srv.max .. " players")
+				if mine then
+					table.insert(parts, "you are here")
+				end
 				table.insert(parts, niceRegion(srv.region))
 				if srv.ping then
 					table.insert(parts, math.floor(srv.ping + 0.5) .. " ms")
@@ -1599,7 +1636,7 @@ function Finder.new(win, opts)
 				if up ~= "Unknown" then
 					table.insert(parts, up)
 				end
-				c.sub.Text = table.concat(parts, "  |  ")
+				c.sub.Text = table.concat(parts, "  -  ")
 
 				local open = autoOpen
 				if expanded[srv.jobId] ~= nil then
@@ -1657,12 +1694,15 @@ function Finder.new(win, opts)
 						end
 						if e.matchSet[id] == true and tab == "servers" then
 							r.base = MATCH_BG
-							r.stroke.Transparency = 0.5
+							r.baseT = 0
+							r.mark.Visible = true
 						else
-							r.base = CARD_BG
-							r.stroke.Transparency = 1
+							r.base = HOVER_GREY
+							r.baseT = 1
+							r.mark.Visible = false
 						end
 						r.frame.BackgroundColor3 = r.base
+						r.frame.BackgroundTransparency = r.baseT
 						r.frame.LayoutOrder = k
 						r.frame.Parent = c.content
 						used[id] = true
@@ -1673,7 +1713,7 @@ function Finder.new(win, opts)
 						end
 					end
 					-- actions row + rows + gaps between them + bottom padding
-					c.target = M.smallH + rowCount * (M.rowH + 4) + 8
+					c.target = 4 + M.smallH + rowCount * (M.rowH + 4) + 8
 				end
 
 				-- open / close animation (same easing as the account popup); snaps if the card was not on screen
