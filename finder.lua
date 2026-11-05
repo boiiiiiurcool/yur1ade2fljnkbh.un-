@@ -590,6 +590,97 @@ function Finder.new(win, opts)
 	hoverable(moreBtn, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
 
 	---------------------------------------------------------------------
+	-- LOADING SCREEN (covers the page until enough names are loaded)
+	---------------------------------------------------------------------
+	do
+		local LOAD_SLACK = opts.LoadSlack or 150     -- ready when this many (or fewer) players are still unloaded
+		local LOAD_TIMEOUT = opts.LoadTimeout or 60  -- safety: open anyway after this many seconds
+
+		local overlay = new("CanvasGroup", {
+			Name = "LoadingOverlay",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = BLACK,
+			BorderSizePixel = 0,
+			Active = true,
+			GroupTransparency = 0,
+			ZIndex = 50,
+		}, mainPage)
+
+		-- spinner: a faint full ring with a bright arc that rotates on top of it
+		local function ringFrame()
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, -22),
+				Size = UDim2.fromOffset(36, 36),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 51,
+			}, overlay)
+			corner(f, 100)
+			return f
+		end
+		local track = ringFrame()
+		stroke(track, CLUSTER_BG, 3, 0)
+		local arc = ringFrame()
+		local arcStroke = stroke(arc, ICON_HOVER, 3, 0)
+		local grad = new("UIGradient", {
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.5, 0),
+				NumberSequenceKeypoint.new(0.501, 1),
+				NumberSequenceKeypoint.new(1, 1),
+			}),
+		}, arcStroke)
+		local spin = TweenService:Create(
+			grad,
+			TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
+			{ Rotation = 360 }
+		)
+		spin:Play()
+
+		local waitLabel = label(overlay, "Please wait", UDim2.new(0.5, -100, 0.5, 8), UDim2.fromOffset(200, 18),
+			Enum.Font.GothamMedium, 14, TEXT_COLOR, Enum.TextXAlignment.Center)
+		waitLabel.ZIndex = 51
+		local progLabel = label(overlay, "", UDim2.new(0.5, -100, 0.5, 30), UDim2.fromOffset(200, 14),
+			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
+		progLabel.ZIndex = 51
+
+		local OPEN_INFO = TweenInfo.new(0.8, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+		local startedAt = os.clock()
+
+		task.spawn(function()
+			local ready = false
+			while running and not ready do
+				task.wait(0.4)
+				-- serverCount > 0 means the first server list read has happened
+				if serverCount > 0 then
+					local resolved = 0
+					for id, _ in pairs(located) do
+						if names[id] then
+							resolved = resolved + 1
+						end
+					end
+					local need = math.max(0, locatedCount - LOAD_SLACK)
+					if need > 0 then
+						progLabel.Text = "Loading players  " .. math.min(resolved, need) .. "/" .. need
+					end
+					if (not httpRequest) or resolved >= need or (os.clock() - startedAt) > LOAD_TIMEOUT then
+						ready = true
+					end
+				end
+			end
+			if not ready then
+				return
+			end
+			spin:Cancel()
+			TweenService:Create(overlay, OPEN_INFO, { GroupTransparency = 1 }):Play()
+			task.delay(OPEN_INFO.Time + 0.05, function()
+				overlay.Visible = false
+			end)
+		end)
+	end
+
+	---------------------------------------------------------------------
 	-- LOGIC: cards, rendering, regions, groups, inputs
 	---------------------------------------------------------------------
 	do
@@ -1088,7 +1179,7 @@ function Finder.new(win, opts)
 				Font = Enum.Font.GothamMedium,
 				TextSize = M.chipText,
 			}, regionRow)
-			corner(b, 100)
+			corner(b, RADIUS + 1)
 			pad(b, 10, 0, 10, 0)
 			local chip = { btn = b, key = key, label = "", stats = "", over = false, sig = "" }
 			b.MouseEnter:Connect(function()
