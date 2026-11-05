@@ -58,13 +58,14 @@ function Options.new(win, parent, hooks)
 	local HOVER_GREY = T.HOVER_GREY
 	local TEXT_COLOR = T.TEXT_COLOR
 	local DIM_TEXT = T.DIM_TEXT
+	local JOIN_BG = T.JOIN_BG
 	local RADIUS = T.RADIUS
 	local FAST = T.FAST
 	local OVER_BG = Color3.fromRGB(46, 46, 52)
 
-	local PANEL_W = 280
-	local PANEL_H_SERVERS = 410
-	local PANEL_H_GROUP = 500
+	local PANEL_W = 264
+	local PANEL_H_SERVERS = 340
+	local PANEL_H_GROUP = 470
 
 	local self = {}
 	self.state = { sort = "most", hideFull = false, minFree = 1, friendsOnly = false, role = nil }
@@ -207,7 +208,7 @@ function Options.new(win, parent, hooks)
 	end
 
 	---------------------------------------------------------------------
-	-- MENU BUTTON (right end of the tab row): three plain bars, no animation
+	-- MENU BUTTON (right end of the tab row): three plain bars
 	---------------------------------------------------------------------
 	local gear = new("TextButton", {
 		Name = "OptionsGear",
@@ -263,7 +264,7 @@ function Options.new(win, parent, hooks)
 	end)
 
 	---------------------------------------------------------------------
-	-- PANEL
+	-- PANEL: one plain list, thin lines between the groups
 	---------------------------------------------------------------------
 	local catcher = new("TextButton", {
 		Name = "OptionsCatcher",
@@ -301,8 +302,8 @@ function Options.new(win, parent, hooks)
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	}, panel)
-	pad(scroll, 14, 12, 14, 12)
-	new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+	pad(scroll, 8, 8, 8, 8)
+	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
 
 	local order = 0
 	local function nextOrder()
@@ -312,18 +313,38 @@ function Options.new(win, parent, hooks)
 
 	local groupItems = {}   -- things that only show on the group tab
 
-	local function header(text, isGroup)
-		local l = label(scroll, text, UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 28),
-			Enum.Font.GothamMedium, 12, DIM_TEXT)
-		l.LayoutOrder = nextOrder()
+	-- thin line between groups
+	local function divider(isGroup)
+		local f = new("Frame", {
+			LayoutOrder = nextOrder(),
+			Size = UDim2.new(1, 0, 0, 13),
+			BackgroundTransparency = 1,
+		}, scroll)
+		new("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 4, 0.5, 0),
+			Size = UDim2.new(1, -8, 0, 1),
+			BackgroundColor3 = BORDER,
+			BorderSizePixel = 0,
+		}, f)
 		if isGroup then
-			l.Visible = false
-			table.insert(groupItems, l)
+			f.Visible = false
+			table.insert(groupItems, f)
 		end
+		return f
+	end
+
+	-- small heading, only used where a group needs a name
+	local function heading(text)
+		local l = label(scroll, text, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 22),
+			Enum.Font.Gotham, 11, DIM_TEXT)
+		l.LayoutOrder = nextOrder()
+		l.Visible = false
+		table.insert(groupItems, l)
 		return l
 	end
 
-	-- a flat row that lights up on hover, same feel as the tabs
+	-- a flat row that tints on hover
 	local function flatRow(height)
 		local b = new("TextButton", {
 			LayoutOrder = nextOrder(),
@@ -338,32 +359,41 @@ function Options.new(win, parent, hooks)
 		return b
 	end
 
-	-- ===== sort =====
-	header("Sort", false)
+	-- ===== sort: a dot marks the one in use =====
 	local sortBtns = {}
 	local function paintSortBtn(sb)
 		local sel = (self.state.sort == sb.key)
 		local bgT = 1
+		if sb.over then
+			bgT = 0.6
+		end
 		local tc = ICON
-		if sel then
-			bgT = 0
-			tc = ICON_HOVER
-		elseif sb.over then
-			bgT = 0.55
+		if sel or sb.over then
 			tc = ICON_HOVER
 		end
-		TweenService:Create(sb.b, FAST, { BackgroundTransparency = bgT, TextColor3 = tc }):Play()
+		local dotT = 1
+		if sel then
+			dotT = 0
+		end
+		TweenService:Create(sb.b, FAST, { BackgroundTransparency = bgT }):Play()
+		TweenService:Create(sb.dot, FAST, { BackgroundTransparency = dotT }):Play()
+		sb.name.TextColor3 = tc
 	end
 	for i = 1, #SORTS do
 		local s = SORTS[i]
-		local b = flatRow(34)
-		b.Text = s.name
-		b.TextColor3 = ICON
-		b.Font = Enum.Font.GothamMedium
-		b.TextSize = 13
-		b.TextXAlignment = Enum.TextXAlignment.Left
-		pad(b, 12, 0, 12, 0)
-		local sb = { b = b, key = s.key, over = false }
+		local b = flatRow(32)
+		local dot = new("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 12, 0.5, 0),
+			Size = UDim2.fromOffset(6, 6),
+			BackgroundColor3 = ICON_HOVER,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, b)
+		corner(dot, 100)
+		local nameLabel = label(b, s.name, UDim2.fromOffset(28, 0), UDim2.new(1, -36, 1, 0),
+			Enum.Font.GothamMedium, 13, ICON)
+		local sb = { b = b, dot = dot, name = nameLabel, key = s.key, over = false }
 		table.insert(sortBtns, sb)
 		b.MouseEnter:Connect(function()
 			sb.over = true
@@ -379,20 +409,29 @@ function Options.new(win, parent, hooks)
 		end)
 	end
 
-	-- ===== filters =====
-	header("Filters", false)
-	local paints = {}
+	divider(false)
 
-	-- one line: name on the left, On/Off (or a short status) on the right
+	-- ===== filters: a small checkbox on the right =====
+	local toggles = {}
+
 	local function makeToggle(title, get, set)
-		local row = flatRow(36)
-		label(row, title, UDim2.fromOffset(12, 0), UDim2.new(1, -100, 1, 0),
+		local row = flatRow(34)
+		label(row, title, UDim2.fromOffset(12, 0), UDim2.new(1, -130, 1, 0),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
-		local value = label(row, "Off", UDim2.new(1, -96, 0, 0), UDim2.new(0, 84, 1, 0),
-			Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Right)
+		local note = label(row, "", UDim2.new(1, -140, 0, 0), UDim2.new(0, 100, 1, 0),
+			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+		local box = new("Frame", {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, row)
+		corner(box, 4)
+		stroke(box, BORDER, 1, 0)
 
 		row.MouseEnter:Connect(function()
-			TweenService:Create(row, FAST, { BackgroundTransparency = 0.55 }):Play()
+			TweenService:Create(row, FAST, { BackgroundTransparency = 0.6 }):Play()
 		end)
 		row.MouseLeave:Connect(function()
 			TweenService:Create(row, FAST, { BackgroundTransparency = 1 }):Play()
@@ -400,10 +439,12 @@ function Options.new(win, parent, hooks)
 		row.Activated:Connect(function()
 			set(not get())
 		end)
-		return value
+		local t = { box = box, note = note, get = get }
+		table.insert(toggles, t)
+		return t
 	end
 
-	local hideValue = makeToggle("Hide full servers",
+	makeToggle("Hide full servers",
 		function()
 			return self.state.hideFull
 		end,
@@ -415,26 +456,26 @@ function Options.new(win, parent, hooks)
 	-- how many free slots a server needs to stay visible
 	local stepRow = new("Frame", {
 		LayoutOrder = nextOrder(),
-		Size = UDim2.new(1, 0, 0, 36),
+		Size = UDim2.new(1, 0, 0, 34),
 		BackgroundTransparency = 1,
 	}, scroll)
-	label(stepRow, "Free slots needed", UDim2.fromOffset(12, 0), UDim2.new(1, -100, 1, 0),
+	local stepTitle = label(stepRow, "Free slots needed", UDim2.fromOffset(12, 0), UDim2.new(1, -110, 1, 0),
 		Enum.Font.GothamMedium, 13, TEXT_COLOR)
 
 	local stepCtl = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -6, 0.5, 0),
-		Size = UDim2.fromOffset(90, 26),
+		Position = UDim2.new(1, -8, 0.5, 0),
+		Size = UDim2.fromOffset(84, 24),
 		BackgroundTransparency = 1,
 	}, stepRow)
 	local stepValue = new("TextLabel", {
-		Position = UDim2.fromOffset(26, 0),
-		Size = UDim2.fromOffset(38, 26),
+		Position = UDim2.fromOffset(24, 0),
+		Size = UDim2.fromOffset(36, 24),
 		BackgroundTransparency = 1,
 		Text = "1",
 		TextColor3 = TEXT_COLOR,
 		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
+		TextSize = 13,
 	}, stepCtl)
 
 	local function stepButton(text, x, delta)
@@ -442,12 +483,12 @@ function Options.new(win, parent, hooks)
 			AutoButtonColor = false,
 			Text = text,
 			Position = UDim2.fromOffset(x, 0),
-			Size = UDim2.fromOffset(26, 26),
+			Size = UDim2.fromOffset(24, 24),
 			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
 			TextColor3 = ICON,
 			Font = Enum.Font.GothamMedium,
-			TextSize = 13,
+			TextSize = 14,
 		}, stepCtl)
 		corner(b, RADIUS)
 		hoverable(b, CLUSTER_BG, HOVER_GREY, ICON, ICON_HOVER)
@@ -466,9 +507,9 @@ function Options.new(win, parent, hooks)
 		end)
 	end
 	stepButton("-", 0, -1)
-	stepButton("+", 64, 1)
+	stepButton("+", 60, 1)
 
-	local friendValue = makeToggle("Friends only",
+	local friendToggle = makeToggle("Friends only",
 		function()
 			return self.state.friendsOnly
 		end,
@@ -481,10 +522,11 @@ function Options.new(win, parent, hooks)
 		end)
 
 	-- ===== group tab only: role filter + recent groups =====
-	header("Role", true)
+	divider(true)
+	heading("Role")
 	local roleRow = new("ScrollingFrame", {
 		LayoutOrder = nextOrder(),
-		Size = UDim2.new(1, 0, 0, 36),
+		Size = UDim2.new(1, 0, 0, 34),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ScrollBarThickness = 2,
@@ -502,7 +544,8 @@ function Options.new(win, parent, hooks)
 		SortOrder = Enum.SortOrder.LayoutOrder,
 	}, roleRow)
 
-	header("Recent groups", true)
+	divider(true)
+	heading("Recent groups")
 	local historyFrame = new("Frame", {
 		LayoutOrder = nextOrder(),
 		Size = UDim2.new(1, 0, 0, 0),
@@ -511,7 +554,7 @@ function Options.new(win, parent, hooks)
 		Visible = false,
 	}, scroll)
 	table.insert(groupItems, historyFrame)
-	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, historyFrame)
+	new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, historyFrame)
 
 	-- role chips (reused, only their text changes)
 	local roleChips = {}
@@ -555,7 +598,7 @@ function Options.new(win, parent, hooks)
 			Font = Enum.Font.GothamMedium,
 			TextSize = 12,
 		}, roleRow)
-		corner(b, RADIUS + 1)
+		corner(b, RADIUS)
 		pad(b, 12, 0, 12, 0)
 		local c = { btn = b, name = name, text = "", over = false, sig = "" }
 		b.MouseEnter:Connect(function()
@@ -590,7 +633,7 @@ function Options.new(win, parent, hooks)
 		historyObjs = {}
 
 		if #history == 0 then
-			local l = label(historyFrame, "None yet", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 30),
+			local l = label(historyFrame, "None yet", UDim2.fromOffset(12, 0), UDim2.new(1, -12, 0, 28),
 				Enum.Font.Gotham, 12, DIM_TEXT)
 			l.LayoutOrder = 0
 			table.insert(historyObjs, l)
@@ -601,7 +644,7 @@ function Options.new(win, parent, hooks)
 			local entry = history[i]
 			local b = new("TextButton", {
 				LayoutOrder = i,
-				Size = UDim2.new(1, 0, 0, 34),
+				Size = UDim2.new(1, 0, 0, 30),
 				BackgroundColor3 = HOVER_GREY,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
@@ -617,7 +660,7 @@ function Options.new(win, parent, hooks)
 			corner(b, RADIUS)
 			pad(b, 12, 0, 12, 0)
 			b.MouseEnter:Connect(function()
-				TweenService:Create(b, FAST, { BackgroundTransparency = 0.55, TextColor3 = ICON_HOVER }):Play()
+				TweenService:Create(b, FAST, { BackgroundTransparency = 0.6, TextColor3 = ICON_HOVER }):Play()
 			end)
 			b.MouseLeave:Connect(function()
 				TweenService:Create(b, FAST, { BackgroundTransparency = 1, TextColor3 = ICON }):Play()
@@ -633,7 +676,7 @@ function Options.new(win, parent, hooks)
 
 		local clear = new("TextButton", {
 			LayoutOrder = 100,
-			Size = UDim2.new(1, 0, 0, 22),
+			Size = UDim2.new(1, 0, 0, 26),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			AutoButtonColor = false,
@@ -643,7 +686,7 @@ function Options.new(win, parent, hooks)
 			TextSize = 11,
 			TextXAlignment = Enum.TextXAlignment.Left,
 		}, historyFrame)
-		pad(clear, 10, 0, 10, 0)
+		pad(clear, 12, 0, 12, 0)
 		clear.MouseEnter:Connect(function()
 			TweenService:Create(clear, FAST, { TextColor3 = ICON_HOVER }):Play()
 		end)
@@ -662,45 +705,40 @@ function Options.new(win, parent, hooks)
 	---------------------------------------------------------------------
 	-- refresh everything that shows a setting
 	---------------------------------------------------------------------
-	local function onOff(v)
-		if v then
-			return "On"
-		end
-		return "Off"
-	end
-
-	local function friendText()
+	local function friendNote()
 		if not self.state.friendsOnly then
-			return "Off"
+			return ""
 		end
 		if self.friendStatus == "loading" then
-			return "Loading..."
+			return "loading..."
 		elseif self.friendStatus == "ready" then
 			return self.friendCount .. " friends"
 		elseif self.friendStatus == "failed" then
-			return "Failed"
+			return "failed"
 		end
-		return "On"
+		return ""
 	end
 
 	refreshUI = function()
 		for i = 1, #sortBtns do
 			paintSortBtn(sortBtns[i])
 		end
-		hideValue.Text = onOff(self.state.hideFull)
-		if self.state.hideFull then
-			hideValue.TextColor3 = ICON_HOVER
-			stepValue.TextColor3 = TEXT_COLOR
-		else
-			hideValue.TextColor3 = DIM_TEXT
-			stepValue.TextColor3 = DIM_TEXT
+		for i = 1, #toggles do
+			local t = toggles[i]
+			local bg = CLUSTER_BG
+			if t.get() then
+				bg = JOIN_BG
+			end
+			TweenService:Create(t.box, FAST, { BackgroundColor3 = bg }):Play()
 		end
+		friendToggle.note.Text = friendNote()
 		stepValue.Text = tostring(self.state.minFree)
-		friendValue.Text = friendText()
-		if self.state.friendsOnly then
-			friendValue.TextColor3 = ICON_HOVER
+		if self.state.hideFull then
+			stepValue.TextColor3 = TEXT_COLOR
+			stepTitle.TextColor3 = TEXT_COLOR
 		else
-			friendValue.TextColor3 = DIM_TEXT
+			stepValue.TextColor3 = DIM_TEXT
+			stepTitle.TextColor3 = DIM_TEXT
 		end
 		paintRoleChip(allRoleChip)
 		for _, c in pairs(roleChips) do
@@ -709,7 +747,7 @@ function Options.new(win, parent, hooks)
 	end
 
 	---------------------------------------------------------------------
-	-- open / close (plain fade, no bounce)
+	-- open / close (plain fade)
 	---------------------------------------------------------------------
 	local function openPanel()
 		if isOpen then
