@@ -12,6 +12,11 @@
 --   })
 --   finder:Stop()      -- optional, it also stops by itself when the window unloads
 --
+-- MODES (picked on the first screen):
+--   Zee Hood Servers : the full finder (player search, groups, options, profile cards)
+--   Regular Server   : only the server tiles, region filter, region + ping and a Join button.
+--                      No player search, no heads, no drawers, no groups, no HTTP calls.
+--
 -- API for your own modules:
 --   finder:GetServers()      jobId -> server table { jobId, name, players, count, max, ping, rname, startedAt }
 --   finder:GetServer(jobId)
@@ -19,21 +24,6 @@
 --   finder:GetName(userId)   { name, display } or nil
 --   finder:Refresh()         read the server list again and redraw
 --   finder:Join(jobId)
---
--- Servers tab: square server tiles. Each tile shows the server name, region + ping, five player
---   heads, the player count and a Join button. Click a tile to open a drawer under its row with
---   every player in that server.
---
---   How you see which server is open (you do not have to read the arrow):
---     - the arrow chip on the tile fills white and turns to point down
---     - the tile outline and background light up
---     - a thin stem connects the tile to its drawer
---     - the drawer has the same white chip (pointing up) - click it to close the server again
---
---   Search a display name, username, user ID, or the start of a Job ID. Matching servers open.
---   Region pill: pick a region (Texas etc.) to only show servers there.
--- Group tab: enter a group ID (or paste the group URL) and press Load.
--- Options (gear): sort, hide full servers, free slots needed, friends only, role filter, recent groups.
 --
 -- Speed: tiles and player rows are virtual. Only what is on screen exists as an Instance, and
 --   everything is pooled and reused while you scroll.
@@ -600,6 +590,8 @@ function Finder.new(win, opts)
 	-- PAGE WIDGETS
 	---------------------------------------------------------------------
 	local mainPage = win.MainPage
+	local mode = nil                       -- nil until picked, then "zee" or "regular"
+	local onModeChosen = function(_m) end  -- filled in by the logic section below
 	local render = function(_force) end
 	local layoutFinder = function() end
 	local stopAll = function() end
@@ -767,6 +759,72 @@ function Finder.new(win, opts)
 	}, mainPage)
 
 	---------------------------------------------------------------------
+	-- MODE CHOOSER (first screen: Zee Hood Servers or Regular Server)
+	---------------------------------------------------------------------
+	do
+		local chooser = new("CanvasGroup", {
+			Name = "ModeChooser",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = BLACK,
+			BorderSizePixel = 0,
+			Active = true,
+			GroupTransparency = 0,
+			ZIndex = 60,
+		}, mainPage)
+
+		local head = label(chooser, "Server Locater", UDim2.new(0.5, -150, 0.5, -84), UDim2.fromOffset(300, 20),
+			Enum.Font.GothamMedium, 15, TEXT_COLOR, Enum.TextXAlignment.Center)
+		head.ZIndex = 61
+		local sub = label(chooser, "Pick a mode to continue", UDim2.new(0.5, -150, 0.5, -62), UDim2.fromOffset(300, 14),
+			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
+		sub.ZIndex = 61
+
+		local function choice(title, subText, xOff, key)
+			local b = new("TextButton", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, xOff, 0.5, 12),
+				Size = UDim2.fromOffset(190, 96),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				AutoButtonColor = false,
+				Text = "",
+				ZIndex = 61,
+			}, chooser)
+			corner(b, RADIUS + 4)
+			local st = stroke(b, BORDER, 1, 0)
+			local t1 = label(b, title, UDim2.fromOffset(14, 26), UDim2.new(1, -28, 0, 18),
+				Enum.Font.GothamMedium, 14, TEXT_COLOR)
+			t1.ZIndex = 62
+			local t2 = label(b, subText, UDim2.fromOffset(14, 50), UDim2.new(1, -28, 0, 28),
+				Enum.Font.Gotham, 11, DIM_TEXT)
+			t2.TextWrapped = true
+			t2.TextYAlignment = Enum.TextYAlignment.Top
+			t2.ZIndex = 62
+			b.MouseEnter:Connect(function()
+				TweenService:Create(b, FAST, { BackgroundColor3 = CLUSTER_BG }):Play()
+				TweenService:Create(st, FAST, { Color = HOVER_GREY }):Play()
+			end)
+			b.MouseLeave:Connect(function()
+				TweenService:Create(b, FAST, { BackgroundColor3 = SIDEBAR_BG }):Play()
+				TweenService:Create(st, FAST, { Color = BORDER }):Play()
+			end)
+			b.Activated:Connect(function()
+				if mode ~= nil then
+					return
+				end
+				mode = key
+				onModeChosen(key)
+				TweenService:Create(chooser, FAST, { GroupTransparency = 1 }):Play()
+				task.delay(FAST.Time + 0.05, function()
+					chooser:Destroy()
+				end)
+			end)
+		end
+		choice("Zee Hood Servers", "Full finder: players, groups, options", -101, "zee")
+		choice("Regular Server", "Just servers, region and Join", 101, "regular")
+	end
+
+	---------------------------------------------------------------------
 	-- LOADING SCREEN (covers the page until enough names are loaded)
 	---------------------------------------------------------------------
 	do
@@ -828,7 +886,10 @@ function Finder.new(win, opts)
 			local ready = false
 			while running and not ready do
 				task.wait(0.4)
-				if serverCount > 0 then
+				if mode == nil then
+					-- still on the chooser: keep the timeout from starting yet
+					startedAt = os.clock()
+				elseif serverCount > 0 then
 					local resolved = 0
 					for id, _ in pairs(located) do
 						if names[id] then
@@ -836,10 +897,10 @@ function Finder.new(win, opts)
 						end
 					end
 					local need = math.max(0, locatedCount - LOAD_SLACK)
-					if need > 0 then
+					if need > 0 and mode == "zee" then
 						progLabel.Text = "Loading players  " .. math.min(resolved, need) .. "/" .. need
 					end
-					if (not httpRequest) or resolved >= need or (os.clock() - startedAt) > LOAD_TIMEOUT then
+					if mode == "regular" or (not httpRequest) or resolved >= need or (os.clock() - startedAt) > LOAD_TIMEOUT then
 						ready = true
 					end
 				end
@@ -1290,7 +1351,7 @@ function Finder.new(win, opts)
 					end
 				end)
 				f.Activated:Connect(function()
-					if c.srv then
+					if c.srv and mode ~= "regular" then
 						toggleOpen(c.srv.jobId)
 					end
 				end)
@@ -1347,6 +1408,7 @@ function Finder.new(win, opts)
 				local mine = (srv.jobId == game.JobId)
 
 				c.title.Text = srv.name
+				c.chev.chip.Visible = (mode ~= "regular")
 				if mine then
 					c.title.TextColor3 = GREEN
 				else
@@ -1359,7 +1421,10 @@ function Finder.new(win, opts)
 				c.sub.Text = sub
 
 				local pv = c.preview
-				local n = pickPreview(e, pv)
+				local n = 0
+				if mode ~= "regular" then
+					n = pickPreview(e, pv)
+				end
 				for i = 1, 5 do
 					local img = c.avs[i]
 					if i <= n then
@@ -1388,6 +1453,15 @@ function Finder.new(win, opts)
 				elseif total > n then
 					info = "+" .. (total - n) .. " more"
 				end
+				if mode == "regular" then
+					-- regular mode: no player info, just how long the server has been up
+					info = ""
+					local up = formatUptime(srv.startedAt)
+					if up ~= "Unknown" then
+						info = "Up " .. up
+					end
+					infoColor = DIM_TEXT
+				end
 				c.info.Text = info
 				c.info.TextColor3 = infoColor
 
@@ -1411,19 +1485,19 @@ function Finder.new(win, opts)
 					c.barFill.BackgroundColor3 = ICON
 				end
 
-				local mode = "join"
+				local jm = "join"
 				if mine then
-					mode = "here"
+					jm = "here"
 				elseif full then
-					mode = "full"
+					jm = "full"
 				end
-				if c.joinMode ~= mode then
-					c.joinMode = mode
-					if mode == "join" then
+				if c.joinMode ~= jm then
+					c.joinMode = jm
+					if jm == "join" then
 						c.join.Text = "Join"
 						c.join.BackgroundColor3 = JOIN_BG
 						c.join.TextColor3 = BLACK
-					elseif mode == "here" then
+					elseif jm == "here" then
 						c.join.Text = "Here"
 						c.join.BackgroundColor3 = CLUSTER_BG
 						c.join.TextColor3 = DIM_TEXT
@@ -2251,6 +2325,10 @@ function Finder.new(win, opts)
 		-------------------------------------------------------------
 		local function updateStatus()
 			win:SetStats(serverCount .. " servers  |  " .. locatedCount .. " players")
+			if mode == "regular" then
+				status.Text = serverCount .. " servers"
+				return
+			end
 			local q = string.match(box.Text, "%S")
 			if tab == "servers" then
 				if q then
@@ -2285,7 +2363,7 @@ function Finder.new(win, opts)
 			if opt then
 				optSig = opt:Sig()
 			end
-			local sig = tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev .. "|" .. optSig
+			local sig = tostring(mode) .. "|" .. tab .. "|" .. q .. "|" .. version .. "|" .. namesCount .. "|" .. groupPart .. "|" .. tostring(regionFilter) .. "|" .. styleRev .. "|" .. optSig
 			if not force and sig == lastSig then
 				updateStatus()
 				return
@@ -2455,6 +2533,9 @@ function Finder.new(win, opts)
 				local open = autoOpen
 				if expanded[jid] ~= nil then
 					open = expanded[jid]
+				end
+				if mode == "regular" then
+					open = false
 				end
 				local g = 0
 				if open then
@@ -2754,6 +2835,28 @@ function Finder.new(win, opts)
 			styleRev = styleRev + 1
 			local y = 8
 
+			-- Regular Server mode: only the region pill, the status and the server grid
+			local regular = (mode == "regular")
+			boxBack.Visible = not regular
+			tray.Visible = not regular
+			loadBtn.Visible = (not regular) and tab == "group"
+			if regular then
+				regionBtn.Visible = true
+				regionBtn.Position = UDim2.fromOffset(0, y)
+				regionBtn.Size = UDim2.fromOffset(M.pillW, M.trayH)
+				regionTitle.TextSize = M.pillText
+				regionValue.TextSize = M.pillText
+				regionMenu.Position = UDim2.fromOffset(0, y + M.trayH + 6)
+				local rx = M.pillW + 12
+				status.Position = UDim2.fromOffset(rx, y)
+				status.Size = UDim2.new(1, -rx, 0, M.trayH)
+				y = y + M.trayH + 10
+				list.Position = UDim2.fromOffset(2, y)
+				list.Size = UDim2.new(1, -4, 1, -y)
+				emptyLabel.Position = UDim2.new(0.5, 0, 0, y + 56)
+				return
+			end
+
 			boxBack.Position = UDim2.fromOffset(0, y)
 			box.TextSize = M.boxText
 			if tab == "group" then
@@ -2889,42 +2992,53 @@ function Finder.new(win, opts)
 		loadBtn.Activated:Connect(submitGroup)
 
 		-------------------------------------------------------------
-		-- Extra modules: options (gear, sort, filters) and profile card
+		-- Extra modules: options (gear, sort, filters) and profile card.
+		-- Only created when "Zee Hood Servers" is picked.
 		-------------------------------------------------------------
-		if opts.Options then
-			local okO, o = pcall(opts.Options.new, win, mainPage, {
-				onChange = function()
-					render(true)
-				end,
-				onPickGroup = function(id)
-					setTab("group")
-					box.Text = tostring(id)
-					submitGroup()
-				end,
-				onFriend = function(id, username, display)
-					setName(id, username, display)
-				end,
-			})
-			if okO then
-				opt = o
-			else
-				warn("[finder] options module failed: " .. tostring(o))
+		local function initExtras()
+			if opts.Options then
+				local okO, o = pcall(opts.Options.new, win, mainPage, {
+					onChange = function()
+						render(true)
+					end,
+					onPickGroup = function(id)
+						setTab("group")
+						box.Text = tostring(id)
+						submitGroup()
+					end,
+					onFriend = function(id, username, display)
+						setName(id, username, display)
+					end,
+				})
+				if okO then
+					opt = o
+				else
+					warn("[finder] options module failed: " .. tostring(o))
+				end
+			end
+
+			if opts.Profile then
+				local okP, p = pcall(opts.Profile.new, win, {
+					http = function(method, url)
+						local data = httpJson(method, url)
+						return data
+					end,
+					copy = copyText,
+				})
+				if okP then
+					profile = p
+				else
+					warn("[finder] profile module failed: " .. tostring(p))
+				end
 			end
 		end
 
-		if opts.Profile then
-			local okP, p = pcall(opts.Profile.new, win, {
-				http = function(method, url)
-					local data = httpJson(method, url)
-					return data
-				end,
-				copy = copyText,
-			})
-			if okP then
-				profile = p
-			else
-				warn("[finder] profile module failed: " .. tostring(p))
+		onModeChosen = function(m)
+			if m == "zee" then
+				initExtras()
 			end
+			layoutFinder()
+			render(true)
 		end
 
 		-------------------------------------------------------------
@@ -3000,8 +3114,8 @@ function Finder.new(win, opts)
 		render(true)
 	end)
 
+	-- names are NOT resolved here anymore: they only load once Zee Hood Servers is picked
 	pcall(refreshServers)
-	pcall(resolveNames)
 	touchNow = win.Touch
 	setMetrics(touchNow)
 	layoutFinder()
@@ -3026,10 +3140,12 @@ function Finder.new(win, opts)
 		end
 	end)
 
-	-- names loop
+	-- names loop (idle until Zee Hood mode is picked; Regular mode never makes HTTP calls)
 	task.spawn(function()
 		while running do
-			if win:IsHidden() or win:IsMinimized() then
+			if mode ~= "zee" then
+				task.wait(0.5)
+			elseif win:IsHidden() or win:IsMinimized() then
 				task.wait(3)
 			else
 				local ok, more = pcall(resolveNames)
