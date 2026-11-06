@@ -1252,6 +1252,8 @@ function UI.new(opts)
 		local normalPos = window.Position
 		local winToken = 0
 		local miniToken = 0
+		local miniSaved = nil   -- where you last left the square (nil = left middle)
+		local GuiService = game:GetService("GuiService")
 
 		-- tiny draggable square that stands in for the window while it is minimized
 		local MINI_SIZE = 44
@@ -1264,8 +1266,8 @@ function UI.new(opts)
 			Name = "MiniButton",
 			AutoButtonColor = false,
 			Text = "",
-			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.new(0, 12, 0.5, 0),
+			AnchorPoint = Vector2.new(0, 0),
+			Position = UDim2.new(0, 12, 0.5, -MINI_SIZE / 2),
 			Size = UDim2.fromOffset(MINI_SIZE, MINI_SIZE),
 			BackgroundColor3 = BLACK,
 			BorderSizePixel = 0,
@@ -1333,8 +1335,12 @@ function UI.new(opts)
 					window.Visible = false
 				end
 			end)
-			-- the square always appears at the left middle of the screen
-			mini.Position = UDim2.new(0, 12, 0.5, 0)
+			-- the square appears where you last left it (first time: left middle of the screen)
+			if miniSaved then
+				mini.Position = miniSaved
+			else
+				mini.Position = UDim2.new(0, 12, 0.5, -MINI_SIZE / 2)
+			end
 			uiHidden = false
 			ui.miniShow(true)
 		end
@@ -1381,24 +1387,32 @@ function UI.new(opts)
 		end)
 
 		-- drag the square anywhere; a tap without moving opens the window again
+		-- input positions leave out the top inset, the gui does not, so add it back
 		local mDragging = false
 		local mMoved = false
-		local mStart = nil
-		local mStartAbs = nil
+		local mGrab = nil
+		local mStartPtr = nil
+
+		local function pointer(input)
+			local inset = GuiService:GetGuiInset()
+			return Vector2.new(input.Position.X + inset.X, input.Position.Y + inset.Y)
+		end
 
 		mini.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1
 				or input.UserInputType == Enum.UserInputType.Touch then
 				mDragging = true
 				mMoved = false
-				mStart = input.Position
-				mStartAbs = mini.AbsolutePosition
+				mStartPtr = pointer(input)
+				mGrab = mStartPtr - mini.AbsolutePosition
 				input.Changed:Connect(function()
 					if input.UserInputState == Enum.UserInputState.End then
 						local was = mDragging
 						mDragging = false
 						if was and not mMoved then
 							restore()
+						elseif was and mMoved then
+							miniSaved = mini.Position
 						end
 					end
 				end)
@@ -1411,16 +1425,15 @@ function UI.new(opts)
 			end
 			if input.UserInputType == Enum.UserInputType.MouseMovement
 				or input.UserInputType == Enum.UserInputType.Touch then
-				local d = input.Position - mStart
-				if not mMoved and (math.abs(d.X) > 4 or math.abs(d.Y) > 4) then
+				local p = pointer(input)
+				if not mMoved and (p - mStartPtr).Magnitude > 4 then
 					mMoved = true
 				end
 				if mMoved then
 					local vp = gui.AbsoluteSize
-					local nx = math.clamp(mStartAbs.X + d.X, 0, math.max(0, vp.X - MINI_SIZE))
-					local ny = math.clamp(mStartAbs.Y + d.Y, 0, math.max(0, vp.Y - MINI_SIZE))
-					-- AnchorPoint is (0, 0.5), so move by the top-left position plus half the height
-					mini.Position = UDim2.fromOffset(nx, ny + MINI_SIZE / 2)
+					local nx = math.clamp(p.X - mGrab.X, 0, math.max(0, vp.X - MINI_SIZE))
+					local ny = math.clamp(p.Y - mGrab.Y, 0, math.max(0, vp.Y - MINI_SIZE))
+					mini.Position = UDim2.fromOffset(nx, ny)
 				end
 			end
 		end))
