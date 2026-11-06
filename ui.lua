@@ -20,6 +20,9 @@
 --   win:IsHidden() / win:IsMinimized()
 --   win:SetTouch(bool)
 --   win:Unload()
+--
+-- Minimize: the window shrinks away and a small draggable Y1 square appears at the
+-- left middle of the screen. Click the square (without dragging) to open the window again.
 
 local UI = {}
 
@@ -267,9 +270,11 @@ function UI.new(opts)
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- pages are canvas groups so they can fade; the 2px inset keeps outlines from being clipped
-	local PAGE_POS = UDim2.fromOffset(2, 2)
-	local PAGE_SIZE_UD = UDim2.new(1, -4, 1, -4)
+	-- pages are canvas groups so they can fade. A canvas group clips everything at its edge,
+	-- so the page has a small padding inside: outlines of controls that touch the edge
+	-- (search box, tiles, load button...) now have room to draw and are no longer cut off.
+	local PAGE_POS = UDim2.fromOffset(0, 0)
+	local PAGE_SIZE_UD = UDim2.fromScale(1, 1)
 
 	local mainPage = new("CanvasGroup", {
 		Name = "MainPage",
@@ -290,6 +295,9 @@ function UI.new(opts)
 		GroupTransparency = 1,
 		Visible = false,
 	}, content)
+
+	pad(mainPage, 2, 2, 2, 2)
+	pad(settingsPage, 2, 2, 2, 2)
 
 	table.insert(bodyParts, sidebar)
 	table.insert(bodyParts, content)
@@ -1181,6 +1189,15 @@ function UI.new(opts)
 				return
 			end
 			uiHidden = not show
+
+			-- while minimized only the little Y1 square is affected
+			if minimized then
+				if ui.miniShow then
+					ui.miniShow(show)
+				end
+				return
+			end
+
 			animToken = animToken + 1
 			local token = animToken
 
@@ -1228,50 +1245,129 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- WINDOW BEHAVIOUR: minimize / maximize / unload dialog / drag
+	-- WINDOW BEHAVIOUR: minimize (Y1 square) / maximize / unload dialog / drag
 	---------------------------------------------------------------------
 	do
 		local normalSize = WINDOW_SIZE
 		local normalPos = window.Position
+		local winToken = 0
+		local miniToken = 0
 
-		local function setBodyVisible(visible)
-			for i = 1, #bodyParts do
-				bodyParts[i].Visible = visible
+		-- tiny draggable square that stands in for the window while it is minimized
+		local MINI_SIZE = 44
+		local MINI_IN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local MINI_OUT = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		local WIN_HIDE = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		local WIN_SHOW = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+		local mini = new("TextButton", {
+			Name = "MiniButton",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 12, 0.5, 0),
+			Size = UDim2.fromOffset(MINI_SIZE, MINI_SIZE),
+			BackgroundColor3 = BLACK,
+			BorderSizePixel = 0,
+			Visible = false,
+			ZIndex = 5,
+		}, gui)
+		corner(mini, SQUARE_RADIUS)
+		local miniStroke = stroke(mini, BORDER, 1, 0)
+		local miniScale = new("UIScale", { Scale = 0.6 }, mini)
+		local miniLogo = new("TextLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			Font = Enum.Font.GothamBlack,
+			Text = logoName,
+			TextSize = 20,
+			TextColor3 = Color3.new(1, 1, 1),
+			ZIndex = 6,
+		}, mini)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, miniLogo)
+
+		mini.MouseEnter:Connect(function()
+			TweenService:Create(miniStroke, FAST, { Color = HOVER_GREY }):Play()
+			TweenService:Create(mini, FAST, { BackgroundColor3 = SIDEBAR_BG }):Play()
+		end)
+		mini.MouseLeave:Connect(function()
+			TweenService:Create(miniStroke, FAST, { Color = BORDER }):Play()
+			TweenService:Create(mini, FAST, { BackgroundColor3 = BLACK }):Play()
+		end)
+
+		ui.miniShow = function(show)
+			miniToken = miniToken + 1
+			local tk = miniToken
+			if show then
+				miniScale.Scale = 0.6
+				mini.Visible = true
+				TweenService:Create(miniScale, MINI_IN, { Scale = 1 }):Play()
+			else
+				TweenService:Create(miniScale, MINI_OUT, { Scale = 0.6 }):Play()
+				task.delay(MINI_OUT.Time + 0.02, function()
+					if tk == miniToken then
+						mini.Visible = false
+					end
+				end)
 			end
-			ui.back.Visible = visible and currentPage ~= "Main"
 		end
 
-		local function restore()
-			minimized = false
-			maximized = false
-			setBodyVisible(true)
-			TweenService:Create(window, SMOOTH, { Size = normalSize, Position = normalPos }):Play()
-			TweenService:Create(windowScale, SMOOTH, { Scale = fitScale }):Play()
-		end
-
-		ui.minimize.Activated:Connect(function()
+		local function minimizeWindow()
 			if minimized then
-				restore()
 				return
 			end
 			closePopup()
-			if not maximized then
-				normalSize = window.Size
-				normalPos = window.Position
-			end
 			minimized = true
-			maximized = false
-			setBodyVisible(false)
-			TweenService:Create(window, SMOOTH, {
-				Size = UDim2.fromOffset(normalSize.X.Offset, BAR_H),
-				Position = normalPos,
-			}):Play()
-			TweenService:Create(windowScale, SMOOTH, { Scale = fitScale }):Play()
-		end)
+			winToken = winToken + 1
+			local tk = winToken
+			TweenService:Create(windowScale, WIN_HIDE, { Scale = windowScale.Scale * 0.85 }):Play()
+			TweenService:Create(window, WIN_HIDE, { GroupTransparency = 1 }):Play()
+			task.delay(WIN_HIDE.Time + 0.02, function()
+				if tk == winToken then
+					window.Visible = false
+				end
+			end)
+			-- the square always appears at the left middle of the screen
+			mini.Position = UDim2.new(0, 12, 0.5, 0)
+			uiHidden = false
+			ui.miniShow(true)
+		end
+
+		local function restore()
+			if not minimized then
+				return
+			end
+			minimized = false
+			uiHidden = false
+			winToken = winToken + 1
+			ui.miniShow(false)
+			local base = fitScale
+			if maximized then
+				base = 1
+			end
+			windowScale.Scale = base * 0.85
+			window.GroupTransparency = 1
+			window.Visible = true
+			TweenService:Create(windowScale, WIN_SHOW, { Scale = base }):Play()
+			TweenService:Create(window, FAST, { GroupTransparency = 0 }):Play()
+		end
+
+		ui.minimize.Activated:Connect(minimizeWindow)
 
 		ui.maximize.Activated:Connect(function()
-			if maximized or minimized then
-				restore()
+			if minimized then
+				return
+			end
+			if maximized then
+				maximized = false
+				TweenService:Create(window, SMOOTH, { Size = normalSize, Position = normalPos }):Play()
+				TweenService:Create(windowScale, SMOOTH, { Scale = fitScale }):Play()
 				return
 			end
 			normalSize = window.Size
@@ -1283,6 +1379,51 @@ function UI.new(opts)
 			}):Play()
 			TweenService:Create(windowScale, SMOOTH, { Scale = 1 }):Play()
 		end)
+
+		-- drag the square anywhere; a tap without moving opens the window again
+		local mDragging = false
+		local mMoved = false
+		local mStart = nil
+		local mStartAbs = nil
+
+		mini.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				mDragging = true
+				mMoved = false
+				mStart = input.Position
+				mStartAbs = mini.AbsolutePosition
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						local was = mDragging
+						mDragging = false
+						if was and not mMoved then
+							restore()
+						end
+					end
+				end)
+			end
+		end)
+
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			if not mDragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				local d = input.Position - mStart
+				if not mMoved and (math.abs(d.X) > 4 or math.abs(d.Y) > 4) then
+					mMoved = true
+				end
+				if mMoved then
+					local vp = gui.AbsoluteSize
+					local nx = math.clamp(mStartAbs.X + d.X, 0, math.max(0, vp.X - MINI_SIZE))
+					local ny = math.clamp(mStartAbs.Y + d.Y, 0, math.max(0, vp.Y - MINI_SIZE))
+					-- AnchorPoint is (0, 0.5), so move by the top-left position plus half the height
+					mini.Position = UDim2.fromOffset(nx, ny + MINI_SIZE / 2)
+				end
+			end
+		end))
 
 		-- ===== unload confirmation (pops up when you press X) =====
 		local PAD = 3
@@ -1431,7 +1572,7 @@ function UI.new(opts)
 
 		local function bindDrag(handle)
 			handle.InputBegan:Connect(function(input)
-				if maximized then
+				if maximized or minimized then
 					return
 				end
 				if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -1442,9 +1583,7 @@ function UI.new(opts)
 					input.Changed:Connect(function()
 						if input.UserInputState == Enum.UserInputState.End then
 							dragging = false
-							if not minimized then
-								normalPos = window.Position
-							end
+							normalPos = window.Position
 						end
 					end)
 				end
