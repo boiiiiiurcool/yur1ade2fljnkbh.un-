@@ -23,6 +23,13 @@
 -- Servers tab: square server tiles. Each tile shows the server name, region + ping, five player
 --   heads, the player count and a Join button. Click a tile to open a drawer under its row with
 --   every player in that server.
+--
+--   How you see which server is open (you do not have to read the arrow):
+--     - the arrow chip on the tile fills white and turns to point down
+--     - the tile outline and background light up
+--     - a thin stem connects the tile to its drawer
+--     - the drawer has the same white chip (pointing up) - click it to close the server again
+--
 --   Search a display name, username, user ID, or the start of a Job ID. Matching servers open.
 --   Region pill: pick a region (Texas etc.) to only show servers there.
 -- Group tab: enter a group ID (or paste the group URL) and press Load.
@@ -77,9 +84,87 @@ function Finder.new(win, opts)
 	local RADIUS = T.RADIUS
 	local FAST = T.FAST
 	local SMOOTH = T.SMOOTH
+	local WHITE = Color3.fromRGB(255, 255, 255)
 
 	local function toast(msg)
 		win:Toast(msg)
+	end
+
+	---------------------------------------------------------------------
+	-- CHEVRON: a drawn arrow (two rounded bars) inside a rounded chip
+	--   api.chip     the rounded square (Frame, or TextButton when interactive)
+	--   api.holder   the part that turns: Rotation 0 = points right, 90 = down, -90 = up
+	--   api.inks     the two bars
+	--   api.paint(f, h)   f = how open (0..1): fills the chip white and darkens the bars
+	--                     h = hover amount (0..1)
+	--   api.setSize(s)    chip size in pixels, the arrow scales with it
+	---------------------------------------------------------------------
+	local function makeChevron(parent, interactive, bare)
+		local cls = "Frame"
+		if interactive then
+			cls = "TextButton"
+		end
+		local props = {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.fromOffset(20, 20),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+		}
+		if interactive then
+			props.AutoButtonColor = false
+			props.Text = ""
+		end
+		if bare then
+			props.BackgroundTransparency = 1
+		end
+		local chip = new(cls, props, parent)
+		corner(chip, RADIUS + 2)
+
+		local holder = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(20, 20),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, chip)
+		local holderScale = new("UIScale", { Scale = 1 }, holder)
+
+		-- two bars that meet at the tip on the right: ">"
+		local inks = {}
+		local function bar(dy, rot)
+			local b = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, dy),
+				Size = UDim2.fromOffset(7, 2),
+				Rotation = rot,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+			}, holder)
+			corner(b, 1)
+			inks[#inks + 1] = b
+		end
+		bar(-2.5, 45)
+		bar(2.5, -45)
+
+		local api = { chip = chip, holder = holder, inks = inks }
+
+		function api.paint(f, h)
+			local bg = CLUSTER_BG:Lerp(HOVER_GREY, h)
+			local ink = ICON:Lerp(ICON_HOVER, h)
+			local full = JOIN_BG:Lerp(WHITE, h)
+			chip.BackgroundColor3 = bg:Lerp(full, f)
+			local col = ink:Lerp(BLACK, f)
+			for i = 1, #inks do
+				inks[i].BackgroundColor3 = col
+			end
+		end
+
+		function api.setSize(s)
+			chip.Size = UDim2.fromOffset(s, s)
+			holderScale.Scale = s / 20
+		end
+
+		return api
 	end
 
 	---------------------------------------------------------------------
@@ -482,7 +567,7 @@ function Finder.new(win, opts)
 			boxH = 34, boxText = 13, loadW = 64,
 			trayH = 30, tabW = 84, tabH = 24, tabText = 12,
 			pillW = 190, pillText = 12,
-			pad = 12, gap = 10, tileMin = 150,
+			pad = 12, gap = 10, tileMin = 150, chip = 20,
 			titleText = 13, subText = 11, infoText = 11, countText = 13,
 			joinW = 54, joinH = 26, joinText = 12,
 			head = 58, smallH = 26, smallText = 11, smallW1 = 88, smallW2 = 92, smallW3 = 92,
@@ -492,7 +577,7 @@ function Finder.new(win, opts)
 			boxH = 44, boxText = 14, loadW = 76,
 			trayH = 40, tabW = 96, tabH = 34, tabText = 13,
 			pillW = 210, pillText = 13,
-			pad = 14, gap = 12, tileMin = 170,
+			pad = 14, gap = 12, tileMin = 170, chip = 26,
 			titleText = 14, subText = 12, infoText = 12, countText = 14,
 			joinW = 66, joinH = 36, joinText = 13,
 			head = 68, smallH = 38, smallText = 12, smallW1 = 100, smallW2 = 108, smallW3 = 108,
@@ -631,8 +716,15 @@ function Finder.new(win, opts)
 		Enum.Font.Gotham, 12, DIM_TEXT)
 	local regionValue = label(regionBtn, "All regions", UDim2.fromOffset(60, 0), UDim2.new(1, -84, 1, 0),
 		Enum.Font.GothamMedium, 12, TEXT_COLOR)
-	label(regionBtn, "v", UDim2.new(1, -22, 0, 0), UDim2.new(0, 14, 1, 0),
-		Enum.Font.GothamMedium, 11, DIM_TEXT, Enum.TextXAlignment.Center)
+
+	-- drawn arrow (no chip): points down, turns up while the list is open
+	local regionChev = makeChevron(regionBtn, false, true)
+	regionChev.setSize(16)
+	regionChev.chip.Position = UDim2.new(1, -18, 0.5, 0)
+	regionChev.holder.Rotation = 90
+	for i = 1, #regionChev.inks do
+		regionChev.inks[i].BackgroundColor3 = DIM_TEXT
+	end
 
 	local regionMenu = new("CanvasGroup", {
 		Name = "RegionMenu",
@@ -791,9 +883,11 @@ function Finder.new(win, opts)
 		local colW = 600
 		local geoKey = ""
 
-		-- drawer animation (0 = closed, 1 = open), driven by one Heartbeat while something moves
+		-- animation state per server: frac 0 = closed .. 1 = open, hov 0..1 = hover amount
 		local frac = {}
 		local goal = {}
+		local hov = {}
+		local hgoal = {}
 		local animating = {}
 		local animConn = nil
 
@@ -801,6 +895,7 @@ function Finder.new(win, opts)
 		local scaleObj = win.Window:FindFirstChildOfClass("UIScale")
 
 		local layout = function() end
+		local placeNow = function() end
 		local toggleOpen = function(_jid) end
 		local updateRegions = function() end
 		local closeRegionMenu = function() end
@@ -967,7 +1062,8 @@ function Finder.new(win, opts)
 		end
 
 		-------------------------------------------------------------
-		-- Drawer animation
+		-- Animation: one Heartbeat connection that only exists while something moves.
+		-- Drawer height and the arrow follow frac, tile hover follows hov.
 		-------------------------------------------------------------
 		local function stepAnim(dt)
 			if not running then
@@ -978,17 +1074,37 @@ function Finder.new(win, opts)
 				return
 			end
 			local k = 1 - math.exp(-dt * 15)
+			local kh = 1 - math.exp(-dt * 22)
+			local moved = false
 			for jid, _ in pairs(animating) do
 				local f = frac[jid] or 0
 				local g = goal[jid] or 0
-				f = f + (g - f) * k
-				if math.abs(g - f) < 0.003 then
-					f = g
+				if f ~= g then
+					f = f + (g - f) * k
+					if math.abs(g - f) < 0.003 then
+						f = g
+					end
+					frac[jid] = f
+					moved = true
+				end
+				local h = hov[jid] or 0
+				local hg = hgoal[jid] or 0
+				if h ~= hg then
+					h = h + (hg - h) * kh
+					if math.abs(hg - h) < 0.03 then
+						h = hg
+					end
+					hov[jid] = h
+				end
+				if f == g and h == hg then
 					animating[jid] = nil
 				end
-				frac[jid] = f
 			end
-			layout()
+			if moved then
+				layout()
+			else
+				placeNow()
+			end
 			if next(animating) == nil and animConn then
 				animConn:Disconnect()
 				animConn = nil
@@ -1023,7 +1139,12 @@ function Finder.new(win, opts)
 		do
 			local MAXR = MAX_PLAYER_ROWS
 			local ROW_GAP_X = 6
+
+			-- tile look: closed -> hover -> open
 			local OVER_STROKE = Color3.fromRGB(58, 58, 65)
+			local OPEN_COL = Color3.fromRGB(104, 104, 114)   -- outline of an open tile, the stem and the drawer
+			local HOVER_BG = Color3.fromRGB(21, 21, 24)
+			local OPEN_BG = Color3.fromRGB(27, 27, 31)
 
 			local tileOf = {}
 			local tilePool = {}
@@ -1034,21 +1155,15 @@ function Finder.new(win, opts)
 			local totalH = 0
 
 			---------------- tile ----------------
+			-- f = how open, h = hover. Everything that shows "this one is open" is drawn from f.
 			local function paintTile(c)
-				local col = BORDER
-				local arrowCol = DIM_TEXT
-				if c.open then
-					col = HOVER_GREY
-					arrowCol = ICON_HOVER
-				elseif c.over then
-					col = OVER_STROKE
-					arrowCol = ICON
-				end
-				if c.strokeCol ~= col then
-					c.strokeCol = col
-					TweenService:Create(c.stroke, FAST, { Color = col }):Play()
-				end
-				c.arrow.TextColor3 = arrowCol
+				local f = c.f
+				local h = c.h
+				local base = BORDER:Lerp(OVER_STROKE, h)
+				c.stroke.Color = base:Lerp(OPEN_COL, f)
+				c.frame.BackgroundColor3 = SIDEBAR_BG:Lerp(HOVER_BG, h):Lerp(OPEN_BG, f)
+				c.chev.paint(f, h)
+				c.chev.holder.Rotation = c.rot
 			end
 
 			-- every inner position follows the tile size, so one tile design fits any window width
@@ -1056,8 +1171,10 @@ function Finder.new(win, opts)
 				c.styleRev = styleRev
 				local S = tileS
 				local P = M.pad
+				local chipS = M.chip
 				local ty = P
-				local sy = ty + M.titleText + 5
+				local chipCy = ty + math.floor((M.titleText + 4) / 2)
+				local sy = math.max(ty + M.titleText + 5, chipCy + math.floor(chipS / 2) + 3)
 				local ay = sy + M.subText + 10
 				local av = math.floor(S * 0.2)
 				local step = math.floor((S - 2 * P - av) / 4)
@@ -1066,12 +1183,13 @@ function Finder.new(win, opts)
 
 				c.frame.Size = UDim2.fromOffset(S, S)
 				c.title.Position = UDim2.fromOffset(P, ty)
-				c.title.Size = UDim2.fromOffset(S - 2 * P - 20, M.titleText + 4)
+				c.title.Size = UDim2.fromOffset(S - 2 * P - chipS - 6, M.titleText + 4)
 				c.title.TextSize = M.titleText
 				c.sub.Position = UDim2.fromOffset(P, sy)
 				c.sub.Size = UDim2.fromOffset(S - 2 * P, M.subText + 4)
 				c.sub.TextSize = M.subText
-				c.arrow.Position = UDim2.fromOffset(S - P - 6, ty + 8)
+				c.chev.setSize(chipS)
+				c.chev.chip.Position = UDim2.fromOffset(S - P - math.floor(chipS / 2), chipCy)
 				for i = 1, 5 do
 					local img = c.avs[i]
 					img.Position = UDim2.fromOffset(P + (i - 1) * step, ay)
@@ -1098,7 +1216,7 @@ function Finder.new(win, opts)
 				local c = {
 					uids = {}, avs = {}, preview = {},
 					styleRev = -1, boundRev = -1, stamp = 0,
-					over = false, open = false, strokeCol = BORDER, rot = -1, joinMode = "",
+					f = 0, h = 0, rot = 0, pkey = nil, joinMode = "",
 				}
 				local f = new("TextButton", {
 					Size = UDim2.fromOffset(150, 150),
@@ -1115,15 +1233,9 @@ function Finder.new(win, opts)
 					Enum.Font.GothamMedium, 13, TEXT_COLOR)
 				c.sub = label(f, "", UDim2.fromOffset(12, 30), UDim2.fromOffset(100, 15),
 					Enum.Font.Gotham, 11, DIM_TEXT)
-				c.arrow = new("TextLabel", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Size = UDim2.fromOffset(16, 16),
-					BackgroundTransparency = 1,
-					Text = ">",
-					TextColor3 = DIM_TEXT,
-					Font = Enum.Font.GothamMedium,
-					TextSize = 14,
-				}, f)
+
+				-- the drawn arrow chip (top right)
+				c.chev = makeChevron(f, false, false)
 
 				-- five heads, each one overlaps the one before it and cuts a thin ring into it
 				for i = 1, 5 do
@@ -1166,12 +1278,16 @@ function Finder.new(win, opts)
 				corner(c.join, RADIUS)
 
 				f.MouseEnter:Connect(function()
-					c.over = true
-					paintTile(c)
+					if c.srv then
+						hgoal[c.srv.jobId] = 1
+						startAnim(c.srv.jobId)
+					end
 				end)
 				f.MouseLeave:Connect(function()
-					c.over = false
-					paintTile(c)
+					if c.srv then
+						hgoal[c.srv.jobId] = 0
+						startAnim(c.srv.jobId)
+					end
 				end)
 				f.Activated:Connect(function()
 					if c.srv then
@@ -1180,7 +1296,7 @@ function Finder.new(win, opts)
 				end)
 				c.join.MouseEnter:Connect(function()
 					if c.joinMode == "join" then
-						TweenService:Create(c.join, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+						TweenService:Create(c.join, FAST, { BackgroundColor3 = WHITE }):Play()
 					end
 				end)
 				c.join.MouseLeave:Connect(function()
@@ -1203,12 +1319,11 @@ function Finder.new(win, opts)
 				else
 					c = makeTile()
 				end
-				c.over = false
-				c.open = false
-				c.strokeCol = BORDER
-				c.stroke.Color = BORDER
+				c.f = 0
+				c.h = 0
+				c.rot = 0
+				c.pkey = nil
 				c.joinMode = ""
-				c.rot = -1
 				c.px = nil
 				c.py = nil
 				c.frame.Parent = list
@@ -1485,14 +1600,21 @@ function Finder.new(win, opts)
 				for i = 1, 3 do
 					d.btns[i].TextSize = M.smallText
 				end
+
+				-- close chip on the left, the title sits right of it
+				local cs = M.chip
+				d.chev.setSize(cs)
+				d.chev.chip.Position = UDim2.fromOffset(14 + math.floor(cs / 2), math.floor(M.head / 2))
+				local tx = 14 + cs + 10
+
 				local titleH = M.titleText + 5
 				local subH = M.subText + 4
 				local top = math.floor((M.head - (titleH + 2 + subH)) / 2)
-				local textW = math.max(60, bx - 28)
-				d.title.Position = UDim2.fromOffset(14, top)
+				local textW = math.max(60, bx - tx - 14)
+				d.title.Position = UDim2.fromOffset(tx, top)
 				d.title.Size = UDim2.fromOffset(textW, titleH)
 				d.title.TextSize = M.titleText + 1
-				d.sub.Position = UDim2.fromOffset(14, top + titleH + 2)
+				d.sub.Position = UDim2.fromOffset(tx, top + titleH + 2)
 				d.sub.Size = UDim2.fromOffset(textW, subH)
 				d.sub.TextSize = M.subText
 				d.line.Position = UDim2.fromOffset(12, M.head)
@@ -1509,11 +1631,36 @@ function Finder.new(win, opts)
 					ClipsDescendants = true,
 				}, nil)
 				corner(f, RADIUS + 4)
-				stroke(f, BORDER, 1, 0)
+				stroke(f, OPEN_COL, 1, 0)
 				d.frame = f
-				d.title = label(f, "", UDim2.fromOffset(14, 10), UDim2.fromOffset(300, 18),
+
+				-- the thin stem that links the drawer to the tile that owns it (lives in the list, not inside the drawer)
+				d.stem = new("Frame", {
+					Size = UDim2.fromOffset(2, 8),
+					BackgroundColor3 = OPEN_COL,
+					BorderSizePixel = 0,
+				}, nil)
+				corner(d.stem, 1)
+
+				-- white "open" chip pointing up: click it to close this server
+				d.chev = makeChevron(f, true, false)
+				d.chev.holder.Rotation = -90
+				d.chev.paint(1, 0)
+				d.chev.chip.MouseEnter:Connect(function()
+					d.chev.paint(1, 1)
+				end)
+				d.chev.chip.MouseLeave:Connect(function()
+					d.chev.paint(1, 0)
+				end)
+				d.chev.chip.Activated:Connect(function()
+					if d.srv then
+						toggleOpen(d.srv.jobId)
+					end
+				end)
+
+				d.title = label(f, "", UDim2.fromOffset(44, 10), UDim2.fromOffset(300, 18),
 					Enum.Font.GothamMedium, 14, TEXT_COLOR)
-				d.sub = label(f, "", UDim2.fromOffset(14, 31), UDim2.fromOffset(300, 15),
+				d.sub = label(f, "", UDim2.fromOffset(44, 31), UDim2.fromOffset(300, 15),
 					Enum.Font.Gotham, 11, DIM_TEXT)
 				d.line = new("Frame", {
 					BackgroundColor3 = BORDER,
@@ -1564,6 +1711,7 @@ function Finder.new(win, opts)
 					d = makeDrawer()
 				end
 				d.frame.Parent = list
+				d.stem.Parent = list
 				return d
 			end
 
@@ -1573,6 +1721,7 @@ function Finder.new(win, opts)
 					releaseRow(r)
 				end
 				d.frame.Parent = nil
+				d.stem.Parent = nil
 				d.entry = nil
 				d.srv = nil
 				d.sorted = nil
@@ -1716,6 +1865,7 @@ function Finder.new(win, opts)
 						e.y = y
 					end
 					y = y + S + gap
+					local lastBottom = y - gap    -- the stem starts at the bottom of the tile row
 					for k = i, last do
 						local e = entries[k]
 						local cnt = e.cnt
@@ -1733,10 +1883,12 @@ function Finder.new(win, opts)
 						e.dfull = M.head + 10 + body + extra + 8
 						local f = frac[e.srv.jobId] or 0
 						e.dy = y
+						e.stemTop = lastBottom
 						if f > 0.001 then
 							local dh = math.floor(e.dfull * f + 0.5)
 							e.dh = dh
 							if dh > 0 then
+								lastBottom = y + dh
 								y = y + dh + 8
 							end
 						else
@@ -1785,15 +1937,16 @@ function Finder.new(win, opts)
 							c.py = e.y
 							c.frame.Position = UDim2.fromOffset(e.x, e.y)
 						end
+						-- arrow turn, chip fill, outline and background all come from these two numbers
 						local f = frac[jid] or 0
+						local h = hov[jid] or 0
 						local rot = math.floor(f * 90 + 0.5)
-						if c.rot ~= rot then
+						local pk = rot * 32 + math.floor(h * 20 + 0.5)
+						if c.pkey ~= pk then
+							c.pkey = pk
+							c.f = f
+							c.h = h
 							c.rot = rot
-							c.arrow.Rotation = rot
-						end
-						local isOpen = (goal[jid] or 0) > 0.5
-						if c.open ~= isOpen then
-							c.open = isOpen
 							paintTile(c)
 						end
 					end
@@ -1812,6 +1965,18 @@ function Finder.new(win, opts)
 						end
 						d.frame.Position = UDim2.fromOffset(0, e.dy)
 						d.frame.Size = UDim2.fromOffset(contentW, e.dh)
+
+						-- stem from the tile (or the drawer above) down to this drawer, in the tile's column
+						local sh = e.dy - e.stemTop
+						if sh > 0 then
+							d.stem.Visible = true
+							d.stem.Position = UDim2.fromOffset(e.x + math.floor(S / 2) - 1, e.stemTop)
+							d.stem.Size = UDim2.fromOffset(2, sh)
+							d.stem.BackgroundTransparency = 1 - (frac[jid] or 0)
+						else
+							d.stem.Visible = false
+						end
+
 						fillRows(d, e, top, bottom)
 					end
 				end
@@ -1819,6 +1984,8 @@ function Finder.new(win, opts)
 				for jid, c in pairs(tileOf) do
 					if c.stamp ~= stamp then
 						tileOf[jid] = nil
+						hov[jid] = nil
+						hgoal[jid] = nil
 						releaseTile(c)
 					end
 				end
@@ -1835,6 +2002,7 @@ function Finder.new(win, opts)
 				geometry()
 				place()
 			end
+			placeNow = place
 
 			list:GetPropertyChangedSignal("CanvasPosition"):Connect(place)
 			list:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
@@ -1863,10 +2031,15 @@ function Finder.new(win, opts)
 
 			local function paintRegionBtn()
 				local bg = CLUSTER_BG
+				local ink = DIM_TEXT
 				if regionOver or regionOpen then
 					bg = HOVER_GREY
+					ink = ICON_HOVER
 				end
 				TweenService:Create(regionBtn, FAST, { BackgroundColor3 = bg }):Play()
+				for i = 1, #regionChev.inks do
+					TweenService:Create(regionChev.inks[i], FAST, { BackgroundColor3 = ink }):Play()
+				end
 			end
 			regionBtn.MouseEnter:Connect(function()
 				regionOver = true
@@ -1909,6 +2082,7 @@ function Finder.new(win, opts)
 				local token = regionToken
 				regionCatcher.Visible = false
 				TweenService:Create(regionMenu, FAST, { GroupTransparency = 1 }):Play()
+				TweenService:Create(regionChev.holder, FAST, { Rotation = 90 }):Play()
 				task.delay(FAST.Time + 0.02, function()
 					if token == regionToken then
 						regionMenu.Visible = false
@@ -1927,6 +2101,7 @@ function Finder.new(win, opts)
 				regionMenu.GroupTransparency = 1
 				regionMenu.Visible = true
 				TweenService:Create(regionMenu, FAST, { GroupTransparency = 0 }):Play()
+				TweenService:Create(regionChev.holder, FAST, { Rotation = -90 }):Play()
 				paintRegionBtn()
 			end
 
@@ -2242,7 +2417,7 @@ function Finder.new(win, opts)
 					end
 					built[#built + 1] = {
 						srv = srv, matches = matches, matchSet = matchSet, ids = ids, cnt = cnt,
-						x = 0, y = 0, dy = 0, dh = 0, dfull = 0,
+						x = 0, y = 0, dy = 0, dh = 0, dfull = 0, stemTop = 0,
 					}
 				end
 			end
@@ -2296,6 +2471,8 @@ function Finder.new(win, opts)
 				if servers[jid] == nil then
 					frac[jid] = nil
 					goal[jid] = nil
+					hov[jid] = nil
+					hgoal[jid] = nil
 					animating[jid] = nil
 					expanded[jid] = nil
 				end
