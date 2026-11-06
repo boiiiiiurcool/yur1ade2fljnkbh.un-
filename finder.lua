@@ -16,6 +16,9 @@
 --   Zee Hood Servers : the full finder (player search, groups, options, profile cards)
 --   Regular Server   : only the server tiles, region filter, region + ping and a Join button.
 --                      No player search, no heads, no drawers, no groups, no HTTP calls.
+--   Universal        : works in any game. Reads Roblox's public server list (needs an executor
+--                      request function) and shows players/max, ping and a Join button.
+--                      No region, no uptime, and it does not use the game's own server data.
 --
 -- API for your own modules:
 --   finder:GetServers()      jobId -> server table { jobId, name, players, count, max, ping, rname, startedAt }
@@ -47,6 +50,7 @@ function Finder.new(win, opts)
 
 	local running = true
 	local self = {}
+	local universalOn = false   -- true when the Universal mode is picked
 
 	-- theme + helpers come from the ui module
 	local T = win.T
@@ -178,7 +182,15 @@ function Finder.new(win, opts)
 		clip = toclipboard
 	end
 
-	local Servers = ReplicatedStorage:WaitForChild("Servers", 10)
+	local Servers = ReplicatedStorage:FindFirstChild("Servers")
+	if not Servers then
+		task.spawn(function()
+			Servers = ReplicatedStorage:WaitForChild("Servers", 10)
+			if not Servers and not universalOn then
+				warn("[finder] ReplicatedStorage.Servers not found: only your own server can be listed.")
+			end
+		end)
+	end
 
 	---------------------------------------------------------------------
 	-- HTTP helpers
@@ -273,6 +285,8 @@ function Finder.new(win, opts)
 	local serverCount = 0
 	local version = 0        -- bumps whenever servers or their players change
 	local refreshServers = function() end
+	local uniData = {}          -- universal mode: jobId -> { playing, max, ping }
+	local uniLoaded = false     -- true after the first universal fetch finished
 
 	do
 		local function parsePlayers(raw)
@@ -330,7 +344,85 @@ function Finder.new(win, opts)
 			return "Server " .. string.sub(jid, 1, 8)
 		end
 
+		-- universal mode: servers come from Roblox's public list (uniData), not from the game
+		local function refreshUniversal()
+			local newServers = {}
+			local changed = false
+			local ownJob = game.JobId
+
+			for jid, d in pairs(uniData) do
+				if jid ~= ownJob then
+					local srv = servers[jid]
+					if srv == nil or srv.count ~= d.playing or srv.max ~= d.max then
+						srv = {
+							jobId = jid,
+							jl = string.lower(jid),
+							raw = "",
+							players = {},
+							count = d.playing,
+							max = d.max,
+							region = "Public",
+							rname = "Public",
+							name = "Server " .. string.sub(jid, 1, 8),
+						}
+						changed = true
+					end
+					srv.ping = d.ping
+					newServers[jid] = srv
+				end
+			end
+
+			local ownCount = #Players:GetPlayers()
+			local ownSrv = servers[ownJob]
+			if ownSrv == nil or ownSrv.count ~= ownCount then
+				ownSrv = {
+					jobId = ownJob,
+					jl = string.lower(ownJob),
+					raw = "",
+					players = {},
+					count = ownCount,
+					max = Players.MaxPlayers,
+					region = "Your server",
+					rname = "Your server",
+					name = "Server " .. string.sub(ownJob, 1, 8),
+				}
+				changed = true
+			end
+			local okPing, livePing = pcall(function()
+				return player:GetNetworkPing() * 2000
+			end)
+			if okPing then
+				ownSrv.ping = livePing
+			end
+			newServers[ownJob] = ownSrv
+
+			if not changed then
+				for jid, _ in pairs(servers) do
+					if newServers[jid] == nil then
+						changed = true
+						break
+					end
+				end
+			end
+
+			servers = newServers
+			if changed then
+				local sc = 0
+				for _ in pairs(newServers) do
+					sc = sc + 1
+				end
+				located = {}
+				locatedCount = 0
+				serverCount = sc
+				version = version + 1
+			end
+		end
+
 		refreshServers = function()
+			if universalOn then
+				refreshUniversal()
+				return
+			end
 			local newest = getNewest()
 			local newServers = {}
 			local changed = false
@@ -590,7 +682,8 @@ function Finder.new(win, opts)
 	-- PAGE WIDGETS
 	---------------------------------------------------------------------
 	local mainPage = win.MainPage
-	local mode = nil                       -- nil until picked, then "zee" or "regular"
+	local mode = nil                       -- nil until picked: "zee", "regular" or "universal"
+	local lite = false                     -- true for regular + universal (plain server tiles only)
 	local onModeChosen = function(_m) end  -- filled in by the logic section below
 	local render = function(_force) end
 	local layoutFinder = function() end
@@ -772,18 +865,18 @@ function Finder.new(win, opts)
 			ZIndex = 60,
 		}, mainPage)
 
-		local head = label(chooser, "Server Locater", UDim2.new(0.5, -150, 0.5, -84), UDim2.fromOffset(300, 20),
+		local head = label(chooser, "Server Locater", UDim2.new(0.5, -150, 0.5, -112), UDim2.fromOffset(300, 20),
 			Enum.Font.GothamMedium, 15, TEXT_COLOR, Enum.TextXAlignment.Center)
 		head.ZIndex = 61
-		local sub = label(chooser, "Pick a mode to continue", UDim2.new(0.5, -150, 0.5, -62), UDim2.fromOffset(300, 14),
+		local sub = label(chooser, "Pick a mode to continue", UDim2.new(0.5, -150, 0.5, -90), UDim2.fromOffset(300, 14),
 			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 		sub.ZIndex = 61
 
-		local function choice(title, subText, xOff, key)
+		local function choice(title, subText, xOff, yOff, w, h, key)
 			local b = new("TextButton", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, xOff, 0.5, 12),
-				Size = UDim2.fromOffset(190, 96),
+				Position = UDim2.new(0.5, xOff, 0.5, yOff),
+				Size = UDim2.fromOffset(w, h),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				AutoButtonColor = false,
@@ -792,10 +885,10 @@ function Finder.new(win, opts)
 			}, chooser)
 			corner(b, RADIUS + 4)
 			local st = stroke(b, BORDER, 1, 0)
-			local t1 = label(b, title, UDim2.fromOffset(14, 26), UDim2.new(1, -28, 0, 18),
+			local t1 = label(b, title, UDim2.fromOffset(14, math.floor(h / 2) - 22), UDim2.new(1, -28, 0, 18),
 				Enum.Font.GothamMedium, 14, TEXT_COLOR)
 			t1.ZIndex = 62
-			local t2 = label(b, subText, UDim2.fromOffset(14, 50), UDim2.new(1, -28, 0, 28),
+			local t2 = label(b, subText, UDim2.fromOffset(14, math.floor(h / 2) + 2), UDim2.new(1, -28, 0, 28),
 				Enum.Font.Gotham, 11, DIM_TEXT)
 			t2.TextWrapped = true
 			t2.TextYAlignment = Enum.TextYAlignment.Top
@@ -812,6 +905,8 @@ function Finder.new(win, opts)
 				if mode ~= nil then
 					return
 				end
+				lite = (key ~= "zee")
+				universalOn = (key == "universal")
 				mode = key
 				onModeChosen(key)
 				TweenService:Create(chooser, FAST, { GroupTransparency = 1 }):Play()
@@ -820,8 +915,9 @@ function Finder.new(win, opts)
 				end)
 			end)
 		end
-		choice("Zee Hood Servers", "Full finder: players, groups, options", -101, "zee")
-		choice("Regular Server", "Just servers, region and Join", 101, "regular")
+		choice("Zee Hood Servers", "Full finder: players, groups, options", -101, -8, 190, 96, "zee")
+		choice("Regular Server", "Just servers, region and Join", 101, -8, 190, 96, "regular")
+		choice("Universal", "Any game: public servers, ping and Join", 0, 90, 190, 72, "universal")
 	end
 
 	---------------------------------------------------------------------
@@ -889,7 +985,7 @@ function Finder.new(win, opts)
 				if mode == nil then
 					-- still on the chooser: keep the timeout from starting yet
 					startedAt = os.clock()
-				elseif serverCount > 0 then
+				elseif serverCount > 0 and (mode ~= "universal" or uniLoaded or not httpRequest) then
 					local resolved = 0
 					for id, _ in pairs(located) do
 						if names[id] then
@@ -900,7 +996,7 @@ function Finder.new(win, opts)
 					if need > 0 and mode == "zee" then
 						progLabel.Text = "Loading players  " .. math.min(resolved, need) .. "/" .. need
 					end
-					if mode == "regular" or (not httpRequest) or resolved >= need or (os.clock() - startedAt) > LOAD_TIMEOUT then
+					if lite or (not httpRequest) or resolved >= need or (os.clock() - startedAt) > LOAD_TIMEOUT then
 						ready = true
 					end
 				end
@@ -1351,7 +1447,7 @@ function Finder.new(win, opts)
 					end
 				end)
 				f.Activated:Connect(function()
-					if c.srv and mode ~= "regular" then
+					if c.srv and not lite then
 						toggleOpen(c.srv.jobId)
 					end
 				end)
@@ -1408,21 +1504,32 @@ function Finder.new(win, opts)
 				local mine = (srv.jobId == game.JobId)
 
 				c.title.Text = srv.name
-				c.chev.chip.Visible = (mode ~= "regular")
+				c.chev.chip.Visible = (not lite)
 				if mine then
 					c.title.TextColor3 = GREEN
 				else
 					c.title.TextColor3 = TEXT_COLOR
 				end
 				local sub = srv.rname
-				if srv.ping then
+				if mode == "universal" then
+					sub = ""
+					if mine then
+						sub = "Your server"
+					end
+					if srv.ping then
+						if sub ~= "" then
+							sub = sub .. "  -  "
+						end
+						sub = sub .. math.floor(srv.ping + 0.5) .. " ms"
+					end
+				elseif srv.ping then
 					sub = sub .. "  -  " .. math.floor(srv.ping + 0.5) .. " ms"
 				end
 				c.sub.Text = sub
 
 				local pv = c.preview
 				local n = 0
-				if mode ~= "regular" then
+				if not lite then
 					n = pickPreview(e, pv)
 				end
 				for i = 1, 5 do
@@ -1453,12 +1560,14 @@ function Finder.new(win, opts)
 				elseif total > n then
 					info = "+" .. (total - n) .. " more"
 				end
-				if mode == "regular" then
-					-- regular mode: no player info, just how long the server has been up
+				if lite then
+					-- plain tiles: no player info. Regular shows uptime, Universal shows nothing.
 					info = ""
-					local up = formatUptime(srv.startedAt)
-					if up ~= "Unknown" then
-						info = "Up " .. up
+					if mode == "regular" then
+						local up = formatUptime(srv.startedAt)
+						if up ~= "Unknown" then
+							info = "Up " .. up
+						end
 					end
 					infoColor = DIM_TEXT
 				end
@@ -2324,8 +2433,20 @@ function Finder.new(win, opts)
 		-- Rendering
 		-------------------------------------------------------------
 		local function updateStatus()
-			win:SetStats(serverCount .. " servers  |  " .. locatedCount .. " players")
-			if mode == "regular" then
+			if lite then
+				win:SetStats(serverCount .. " servers")
+			else
+				win:SetStats(serverCount .. " servers  |  " .. locatedCount .. " players")
+			end
+			if mode == "universal" and not httpRequest then
+				status.Text = "Universal needs an executor request function"
+				return
+			end
+			if mode == "universal" and not uniLoaded then
+				status.Text = "Loading servers..."
+				return
+			end
+			if lite then
 				status.Text = serverCount .. " servers"
 				return
 			end
@@ -2534,7 +2655,7 @@ function Finder.new(win, opts)
 				if expanded[jid] ~= nil then
 					open = expanded[jid]
 				end
-				if mode == "regular" then
+				if lite then
 					open = false
 				end
 				local g = 0
@@ -2836,18 +2957,21 @@ function Finder.new(win, opts)
 			local y = 8
 
 			-- Regular Server mode: only the region pill, the status and the server grid
-			local regular = (mode == "regular")
+			local regular = lite
 			boxBack.Visible = not regular
 			tray.Visible = not regular
 			loadBtn.Visible = (not regular) and tab == "group"
 			if regular then
-				regionBtn.Visible = true
+				regionBtn.Visible = (mode ~= "universal")
 				regionBtn.Position = UDim2.fromOffset(0, y)
 				regionBtn.Size = UDim2.fromOffset(M.pillW, M.trayH)
 				regionTitle.TextSize = M.pillText
 				regionValue.TextSize = M.pillText
 				regionMenu.Position = UDim2.fromOffset(0, y + M.trayH + 6)
-				local rx = M.pillW + 12
+				local rx = 0
+				if mode ~= "universal" then
+					rx = M.pillW + 12
+				end
 				status.Position = UDim2.fromOffset(rx, y)
 				status.Size = UDim2.new(1, -rx, 0, M.trayH)
 				y = y + M.trayH + 10
@@ -3093,10 +3217,6 @@ function Finder.new(win, opts)
 	if not httpRequest then
 		warn("[finder] No executor request function: names and group search only work for players in your own server.")
 	end
-	if not Servers then
-		warn("[finder] ReplicatedStorage.Servers not found: only your own server can be listed.")
-	end
-
 	local function stop()
 		running = false
 		stopAll()
@@ -3154,6 +3274,57 @@ function Finder.new(win, opts)
 				else
 					task.wait(2)
 				end
+			end
+		end
+	end)
+
+	-- universal loop: reads Roblox's public server list (works in any game, no game code needed)
+	task.spawn(function()
+		while running do
+			if (not universalOn) or (not httpRequest) then
+				task.wait(0.5)
+			elseif win:IsHidden() or win:IsMinimized() then
+				task.wait(3)
+			else
+				local fresh = {}
+				local cursor = nil
+				local pages = 0
+				local failed = false
+				while running and pages < 10 do
+					local url = "https://games.roblox.com/v1/games/" .. tostring(game.PlaceId) .. "/servers/Public?sortOrder=Desc&limit=100"
+					if cursor then
+						url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+					end
+					local res = httpRetry("GET", url, nil, 3)
+					if not res or not res.data then
+						failed = true
+						break
+					end
+					for i = 1, #res.data do
+						local sv = res.data[i]
+						if type(sv.id) == "string" then
+							fresh[sv.id] = {
+								playing = tonumber(sv.playing) or 0,
+								max = tonumber(sv.maxPlayers) or Players.MaxPlayers,
+								ping = tonumber(sv.ping),
+							}
+						end
+					end
+					pages = pages + 1
+					if not uniLoaded then
+						uniData = fresh   -- first run: servers show up as the pages arrive
+					end
+					cursor = res.nextPageCursor
+					if cursor == nil then
+						break
+					end
+					task.wait(1)
+				end
+				if (not failed) or next(fresh) ~= nil then
+					uniData = fresh
+				end
+				uniLoaded = true
+				task.wait(20)
 			end
 		end
 	end)
