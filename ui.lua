@@ -5,7 +5,7 @@
 -- Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
 --   local UI = <this file>
---   local win = UI.new({ Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Player Finder", MainTip = "Player Finder" })
+--   local win = UI.new({ Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater" })
 --
 -- What you get back:
 --   win.MainPage / win.SettingsPage   frames you put your controls in
