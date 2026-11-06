@@ -60,7 +60,7 @@ function UI.new(opts)
 	local ui = {}             -- layout functions and buttons shared between sections
 	local showPage = function(_name) end
 	local closePopup = function() end
-	local toast = function(_msg) end
+	local toast = function(_msg, _seconds) end
 	local applyTouch = function(_on) end
 
 	---------------------------------------------------------------------
@@ -998,38 +998,100 @@ function UI.new(opts)
 	end
 
 	do
-		local toastLbl = new("TextLabel", {
+		local MAX_TOASTS = 4
+		local active = {}
+		local order = 0
+
+		-- toasts stack upward from the bottom; newest sits at the bottom
+		local holder = new("Frame", {
+			Name = "ToastStack",
 			AnchorPoint = Vector2.new(0.5, 1),
 			Position = UDim2.new(0.5, (SIDEBAR_W_MIN + 12) / 2, 1, -14),
-			Size = UDim2.new(0, 0, 0, 28),
-			AutomaticSize = Enum.AutomaticSize.X,
-			BackgroundColor3 = CLUSTER_BG,
+			Size = UDim2.fromOffset(360, 170),
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			Text = "",
-			TextColor3 = TEXT_COLOR,
-			Font = Enum.Font.GothamMedium,
-			TextSize = 12,
-			Visible = false,
 			ZIndex = 22,
 		}, window)
-		corner(toastLbl, RADIUS + 4)
-		stroke(toastLbl, BORDER, 1, 0)
-		pad(toastLbl, 14, 0, 14, 0)
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			VerticalAlignment = Enum.VerticalAlignment.Bottom,
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, holder)
 
-		local toastToken = 0
-		toast = function(msg)
+		local function dismiss(item)
+			if item.gone then
+				return
+			end
+			item.gone = true
+			for i = 1, #active do
+				if active[i] == item then
+					table.remove(active, i)
+					break
+				end
+			end
+			TweenService:Create(item.lbl, FAST, { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+			TweenService:Create(item.stroke, FAST, { Transparency = 1 }):Play()
+			task.delay(FAST.Time + 0.02, function()
+				item.lbl:Destroy()
+			end)
+		end
+
+		local function arm(item, dur)
+			item.token = item.token + 1
+			local tk = item.token
+			task.delay(dur, function()
+				if tk == item.token then
+					dismiss(item)
+				end
+			end)
+		end
+
+		toast = function(msg, dur)
 			if minimized then
 				return
 			end
-			toastToken = toastToken + 1
-			local t = toastToken
-			toastLbl.Text = msg
-			toastLbl.Visible = true
-			task.delay(2.5, function()
-				if t == toastToken then
-					toastLbl.Visible = false
+			dur = dur or 2.5
+			msg = tostring(msg)
+
+			-- same text again: keep the one that is already there and restart its timer
+			for i = 1, #active do
+				if active[i].text == msg then
+					arm(active[i], dur)
+					return
 				end
-			end)
+			end
+
+			order = order + 1
+			local lbl = new("TextLabel", {
+				LayoutOrder = order,
+				Size = UDim2.new(0, 0, 0, 28),
+				AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = CLUSTER_BG,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Text = msg,
+				TextColor3 = TEXT_COLOR,
+				TextTransparency = 1,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 12,
+				ZIndex = 22,
+			}, holder)
+			corner(lbl, RADIUS + 4)
+			local st = stroke(lbl, BORDER, 1, 1)
+			pad(lbl, 14, 0, 14, 0)
+
+			local item = { lbl = lbl, stroke = st, text = msg, token = 0, gone = false }
+			active[#active + 1] = item
+			TweenService:Create(lbl, FAST, { BackgroundTransparency = 0, TextTransparency = 0 }):Play()
+			TweenService:Create(st, FAST, { Transparency = 0 }):Play()
+
+			-- too many: the oldest one leaves
+			while #active > MAX_TOASTS do
+				dismiss(active[1])
+			end
+			arm(item, dur)
 		end
 	end
 
@@ -1372,6 +1434,9 @@ function UI.new(opts)
 			end
 			if maximized then
 				maximized = false
+				if ui.gripVis then
+					ui.gripVis()
+				end
 				TweenService:Create(window, SMOOTH, { Size = normalSize, Position = normalPos }):Play()
 				TweenService:Create(windowScale, SMOOTH, { Scale = fitScale }):Play()
 				return
@@ -1379,6 +1444,9 @@ function UI.new(opts)
 			normalSize = window.Size
 			normalPos = window.Position
 			maximized = true
+			if ui.gripVis then
+				ui.gripVis()
+			end
 			TweenService:Create(window, SMOOTH, {
 				Size = UDim2.new(1, -48, 1, -48),
 				Position = UDim2.fromScale(0.5, 0.5),
@@ -1619,6 +1687,108 @@ function UI.new(opts)
 				normalPos = window.Position
 			end
 		end))
+
+		-- ===== resize: drag the grip in the bottom-right corner =====
+		local MIN_W = 520
+		local MIN_H = 340
+		local resizing = false
+		local rStart = nil
+		local rSize = nil
+		local rPos = nil
+
+		local grip = new("TextButton", {
+			Name = "ResizeGrip",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, -4, 1, -4),
+			Size = UDim2.fromOffset(18, 18),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 25,
+		}, window)
+
+		local gripInks = {}
+		local function gripLine(len, c)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset(c, c),
+				Size = UDim2.fromOffset(len, 2),
+				Rotation = -45,
+				BackgroundColor3 = DIM_TEXT,
+				BorderSizePixel = 0,
+				ZIndex = 26,
+			}, grip)
+			corner(f, 1)
+			gripInks[#gripInks + 1] = f
+		end
+		gripLine(5, 14)
+		gripLine(10, 9)
+
+		local function paintGrip(on)
+			local col = DIM_TEXT
+			if on then
+				col = ICON_HOVER
+			end
+			for i = 1, #gripInks do
+				TweenService:Create(gripInks[i], FAST, { BackgroundColor3 = col }):Play()
+			end
+		end
+		grip.MouseEnter:Connect(function()
+			paintGrip(true)
+		end)
+		grip.MouseLeave:Connect(function()
+			if not resizing then
+				paintGrip(false)
+			end
+		end)
+
+		ui.gripVis = function()
+			grip.Visible = not maximized
+		end
+
+		grip.InputBegan:Connect(function(input)
+			if maximized or minimized then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				resizing = true
+				rStart = input.Position
+				rSize = window.Size
+				rPos = window.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						resizing = false
+						paintGrip(false)
+						normalSize = window.Size
+						normalPos = window.Position
+					end
+				end)
+			end
+		end)
+
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			if not resizing then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				local sc = windowScale.Scale
+				local d = input.Position - rStart
+				local vp = gui.AbsoluteSize
+				local maxW = math.max(MIN_W, math.floor((vp.X - 12) / sc))
+				local maxH = math.max(MIN_H, math.floor((vp.Y - 12) / sc))
+				local nw = math.clamp(rSize.X.Offset + d.X / sc, MIN_W, maxW)
+				local nh = math.clamp(rSize.Y.Offset + d.Y / sc, MIN_H, maxH)
+				window.Size = UDim2.fromOffset(nw, nh)
+				-- the window is centre-anchored, so shift it to keep the top-left corner still
+				window.Position = UDim2.new(
+					rPos.X.Scale, rPos.X.Offset + (nw - rSize.X.Offset) * sc / 2,
+					rPos.Y.Scale, rPos.Y.Offset + (nh - rSize.Y.Offset) * sc / 2
+				)
+			end
+		end))
 	end
 
 	---------------------------------------------------------------------
@@ -1657,8 +1827,8 @@ function UI.new(opts)
 		return conn
 	end
 
-	function W:Toast(msg)
-		toast(msg)
+	function W:Toast(msg, seconds)
+		toast(msg, seconds)
 	end
 
 	function W:SetStats(text)
