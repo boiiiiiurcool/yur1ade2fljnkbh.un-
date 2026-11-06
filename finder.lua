@@ -2804,8 +2804,8 @@ function Finder.new(win, opts)
 			status.Size = UDim2.new(1, -(x + usedRight), 0, M.trayH)
 			y = y + M.trayH + 10
 
-			list.Position = UDim2.fromOffset(0, y)
-			list.Size = UDim2.new(1, 0, 1, -y)
+			list.Position = UDim2.fromOffset(2, y)
+			list.Size = UDim2.new(1, -4, 1, -y)
 			emptyLabel.Position = UDim2.new(0.5, 0, 0, y + 56)
 		end
 
