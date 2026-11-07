@@ -1,18 +1,22 @@
 -- Welcome.lua  (welcome screen module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Shows before the main window, in the same Y1 look: "yur1" on top, "Welcome to yur1",
--- then your profile picture, display name, username, user ID, account age, creation date,
--- role (everybody is a Tester right now) and a Continue button.
+-- Same base layout as ui.lua: black window with tiny rounded corners, slim sidebar with the Y1 logo
+-- and your picture, title card top left, close button top right, content area on the right.
+-- In the content area: "yur1" on top, "Welcome to yur1", your profile card, tiles for user ID,
+-- account age, creation date and role (everybody is a Tester right now), and a Continue button.
+-- No dimmed or blurred backdrop.
 --
 --   local Welcome = <this file>
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
---       Title = "yur1",
+--       Title = "yur1",                     -- big text on top + "Welcome to <Title>"
+--       Logo = "Y1",                        -- small logo in the sidebar
 --       ButtonText = "Continue",
 --       DefaultRole = "Tester",             -- everybody is a Tester for now
 --       Roles = { [12345678] = "Owner" },   -- optional: a different role for a specific user ID later
 --       OnContinue = function() end,        -- runs after the welcome has faded out
+--       OnClose = function() end,           -- runs if the welcome is closed with the X instead
 --   })
 --   welcome:SetState("loading", "Loading modules...")   -- Continue is disabled and pulses
 --   welcome:SetState("ready")                           -- Continue works (Enter works too)
@@ -25,6 +29,7 @@ function Welcome.new(opts)
 	opts = opts or {}
 	local guiName = opts.Name or "Y1Welcome"
 	local title = opts.Title or "yur1"
+	local logoName = opts.Logo or "Y1"
 	local buttonText = opts.ButtonText or "Continue"
 	local defaultRole = opts.DefaultRole or "Tester"
 
@@ -66,6 +71,9 @@ function Welcome.new(opts)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 	local PILL_BG    = Color3.fromRGB(46, 46, 52)
 
+	local RADIUS = 4
+	local SQUARE_RADIUS = 10
+
 	local ROLE_COLORS = {
 		Tester = Color3.fromRGB(255, 190, 90),
 		Owner = Color3.fromRGB(255, 110, 110),
@@ -95,7 +103,7 @@ function Welcome.new(opts)
 
 	local function corner(obj, r)
 		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, r or 4)
+		c.CornerRadius = UDim.new(0, r or RADIUS)
 		c.Parent = obj
 		return c
 	end
@@ -193,21 +201,22 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- WINDOW
+	-- WINDOW (same base as ui.lua)
 	---------------------------------------------------------------------
-	local WIN_W = 420
-	local HEADER_H = 126
-	local PROF_Y = 132
-	local PROF_H = 84
-	local TILES_Y = 226
-	local TILES_H = 112
-	local BTN_Y = 354
-	local BTN_H = 44
+	local WIN_W = 760
+	local WIN_H = 480
+	local BAR_H = 40
+	local SIDEBAR_W = 56
+	local TILE = 40
+	local CHIP_X = SIDEBAR_W + 14
+	local CHIP_W = 128
+	local CONTENT_W = WIN_W - (SIDEBAR_W + 18)
+	local BTN_W = 320
+	local BTN_H = 46
 	if touch then
-		BTN_H = 52
+		BTN_H = 54
 	end
 	local STATUS_H = 14
-	local WIN_H = BTN_Y + BTN_H + 8 + STATUS_H + 18
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
@@ -216,17 +225,6 @@ function Welcome.new(opts)
 		DisplayOrder = 1000,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, playerGui)
-
-	-- dim backdrop (also keeps clicks from reaching the game)
-	local dim = new("Frame", {
-		Name = "Backdrop",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Active = true,
-		ZIndex = 1,
-	}, gui)
 
 	-- small screens: shrink the whole window to fit
 	local fitScale = 1
@@ -247,9 +245,8 @@ function Welcome.new(opts)
 		BackgroundColor3 = BLACK,
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
-		ZIndex = 2,
 	}, gui)
-	corner(window, 4)
+	corner(window)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
 	do
@@ -261,11 +258,184 @@ function Welcome.new(opts)
 			BorderSizePixel = 0,
 			ZIndex = 20,
 		}, window)
-		corner(outline, 4)
+		corner(outline, RADIUS)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	-- each part of the window is its own canvas group so it can fade in on its own.
+	-- top bar (drag handle + close button)
+	local bar = new("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, BAR_H),
+		BackgroundTransparency = 1,
+	}, window)
+
+	-- sidebar: Y1 logo on top, your picture at the bottom
+	local sidebar = new("Frame", {
+		Name = "Sidebar",
+		Position = UDim2.fromOffset(6, 6),
+		Size = UDim2.new(0, SIDEBAR_W, 1, -12),
+		BackgroundColor3 = SIDEBAR_BG,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, window)
+	corner(sidebar)
+
+	do
+		local logo = new("Frame", {
+			Name = "Logo",
+			Position = UDim2.fromOffset(14, 14),
+			Size = UDim2.fromOffset(TILE, 32),
+			BackgroundTransparency = 1,
+			ZIndex = 3,
+		}, window)
+		local logoLabel = new("TextLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 30),
+			Font = Enum.Font.GothamBlack,
+			Text = logoName,
+			TextSize = 24,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 4,
+		}, logo)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, logoLabel)
+
+		local tile = new("Frame", {
+			Name = "ProfileTile",
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 14, 1, -14),
+			Size = UDim2.fromOffset(TILE, TILE),
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, window)
+		corner(tile, SQUARE_RADIUS)
+		local tileImg = new("ImageLabel", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+			Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
+			ZIndex = 4,
+		}, tile)
+		corner(tileImg, SQUARE_RADIUS)
+	end
+
+	-- title card (top left), same as the "Tab / <page>" card in ui.lua
+	do
+		local titleChip = new("Frame", {
+			Name = "TitleCard",
+			Position = UDim2.fromOffset(CHIP_X, 6),
+			Size = UDim2.fromOffset(CHIP_W, 36),
+			BackgroundColor3 = SIDEBAR_BG,
+			BorderSizePixel = 0,
+		}, window)
+		corner(titleChip, RADIUS + 2)
+		label(titleChip, "Tab", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
+			Enum.Font.Gotham, 11, DIM_TEXT)
+		label(titleChip, "Welcome", UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+	end
+
+	-- close button (top right), same look as the control cluster in ui.lua
+	local closeBtn = nil
+	do
+		local PAD = 3
+		local bw = 30
+		local bh = 24
+		if touch then
+			bw = 40
+			bh = 30
+		end
+		local ch = bh + PAD * 2
+		local cluster = new("Frame", {
+			Name = "Controls",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -8, 0, (BAR_H - ch) / 2),
+			Size = UDim2.fromOffset(bw + PAD * 2, ch),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, bar)
+		corner(cluster, RADIUS + 2)
+
+		closeBtn = new("TextButton", {
+			Name = "close",
+			AutoButtonColor = false,
+			Text = "",
+			Position = UDim2.fromOffset(PAD, PAD),
+			Size = UDim2.fromOffset(bw, bh),
+			BackgroundColor3 = HOVER_RED,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, cluster)
+		corner(closeBtn, 4)
+
+		local parts = {}
+		local function line(rot)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(14, 2),
+				Rotation = rot,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+			}, closeBtn)
+			corner(f, 1)
+			table.insert(parts, f)
+		end
+		line(45)
+		line(-45)
+
+		local hovering = false
+		local function paint(isOver, pressed)
+			local bgT = 1
+			if isOver then
+				if pressed then
+					bgT = 0.35
+				else
+					bgT = 0
+				end
+			end
+			TweenService:Create(closeBtn, FAST, { BackgroundTransparency = bgT }):Play()
+			local color = ICON
+			if isOver then
+				color = ICON_HOVER
+			end
+			for i = 1, #parts do
+				TweenService:Create(parts[i], FAST, { BackgroundColor3 = color }):Play()
+			end
+		end
+		closeBtn.MouseEnter:Connect(function()
+			hovering = true
+			paint(true, false)
+		end)
+		closeBtn.MouseLeave:Connect(function()
+			hovering = false
+			paint(false, false)
+		end)
+		closeBtn.MouseButton1Down:Connect(function()
+			paint(true, true)
+		end)
+		closeBtn.MouseButton1Up:Connect(function()
+			paint(hovering, false)
+		end)
+	end
+
+	-- content area, same position and size as in ui.lua
+	local content = new("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(SIDEBAR_W + 12, BAR_H),
+		Size = UDim2.new(1, -(SIDEBAR_W + 18), 1, -(BAR_H + 6)),
+		BackgroundTransparency = 1,
+	}, window)
+
+	-- each part of the content is its own canvas group so it can fade in on its own.
 	-- groups with outlined children are 2px bigger with 2px padding so outlines are not cut off.
 	local sections = {}
 	local function makeSection(x, y, w, h, outlined)
@@ -275,7 +445,7 @@ function Welcome.new(opts)
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			GroupTransparency = 1,
-		}, window)
+		}, content)
 		if outlined then
 			g.Position = UDim2.fromOffset(x - 2, y - 2)
 			g.Size = UDim2.fromOffset(w + 4, h + 4)
@@ -285,12 +455,12 @@ function Welcome.new(opts)
 		return g
 	end
 
-	-- ===== header: "yur1" on top, "Welcome to yur1" under it (also the drag handle) =====
-	local header = makeSection(0, 0, WIN_W, HEADER_H, false)
+	-- ===== header: "yur1" on top middle, "Welcome to yur1" under it =====
+	local header = makeSection(0, 14, CONTENT_W, 108, false)
 
-	local logoLabel = new("TextLabel", {
+	local titleLabel = new("TextLabel", {
 		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 20),
+		Position = UDim2.fromOffset(0, 0),
 		Size = UDim2.new(1, 0, 0, 52),
 		Font = Enum.Font.GothamBlack,
 		Text = title,
@@ -305,71 +475,71 @@ function Welcome.new(opts)
 			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
 			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
 		}),
-	}, logoLabel)
+	}, titleLabel)
 
-	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 78), UDim2.new(1, 0, 0, 22),
+	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 56), UDim2.new(1, 0, 0, 22),
 		Enum.Font.GothamMedium, 17, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(header, "This is the account you are using", UDim2.fromOffset(0, 102), UDim2.new(1, 0, 0, 16),
+	label(header, "This is the account you are using", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
 		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 
 	-- ===== profile card: picture, display name, username =====
-	local profile = makeSection(20, PROF_Y, WIN_W - 40, PROF_H, true)
+	local profile = makeSection(2, 132, CONTENT_W - 4, 88, true)
 
 	local profCard = new("Frame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = SIDEBAR_BG,
 		BorderSizePixel = 0,
 	}, profile)
-	corner(profCard, 12)
+	corner(profCard, SQUARE_RADIUS)
 	stroke(profCard, BORDER, 1, 0)
 
 	local avatar = new("ImageLabel", {
 		Position = UDim2.fromOffset(12, 12),
-		Size = UDim2.fromOffset(60, 60),
+		Size = UDim2.fromOffset(64, 64),
 		BackgroundColor3 = CARD_BG,
 		BorderSizePixel = 0,
 		Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
 	}, profCard)
 	corner(avatar, 14)
 
-	label(profCard, player.DisplayName, UDim2.fromOffset(84, 16), UDim2.new(1, -96, 0, 22),
-		Enum.Font.GothamBold, 17, TEXT_COLOR)
-	label(profCard, "@" .. player.Name, UDim2.fromOffset(84, 40), UDim2.new(1, -96, 0, 18),
+	label(profCard, player.DisplayName, UDim2.fromOffset(92, 18), UDim2.new(1, -104, 0, 24),
+		Enum.Font.GothamBold, 18, TEXT_COLOR)
+	label(profCard, "@" .. player.Name, UDim2.fromOffset(92, 46), UDim2.new(1, -104, 0, 18),
 		Enum.Font.Gotham, 13, DIM_TEXT)
 
-	-- ===== info tiles: user ID, account age, creation date, role =====
-	local tilesGroup = makeSection(20, TILES_Y, WIN_W - 40, TILES_H, true)
-	local TILE_W = (WIN_W - 40 - 8) / 2
+	-- ===== info tiles in one row: user ID, account age, creation date, role =====
+	local tilesGroup = makeSection(2, 234, CONTENT_W - 4, 60, true)
+	local TILE_W = (CONTENT_W - 4 - 24) / 4
 
-	local function makeTile(x, y, caption)
+	local function makeTile(index, caption)
 		local f = new("Frame", {
-			Position = UDim2.fromOffset(x, y),
-			Size = UDim2.fromOffset(TILE_W, 52),
+			Position = UDim2.fromOffset((index - 1) * (TILE_W + 8), 0),
+			Size = UDim2.fromOffset(TILE_W, 60),
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, tilesGroup)
-		corner(f, 10)
+		corner(f, RADIUS + 4)
 		stroke(f, BORDER, 1, 0)
-		local cap = label(f, caption, UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 12),
+		local cap = label(f, caption, UDim2.fromOffset(12, 10), UDim2.new(1, -24, 0, 12),
 			Enum.Font.Gotham, 11, DIM_TEXT)
 		return f, cap
 	end
 
 	local function tileValue(tile, text)
-		return label(tile, text, UDim2.fromOffset(12, 25), UDim2.new(1, -24, 0, 18),
+		return label(tile, text, UDim2.fromOffset(12, 29), UDim2.new(1, -24, 0, 18),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
 	end
 
-	local idTile = makeTile(0, 0, "User ID")
+	local idTile = makeTile(1, "User ID")
 	tileValue(idTile, tostring(player.UserId))
 
-	local ageTile, ageCaption = makeTile(TILE_W + 8, 0, "Account Age (" .. days .. " days)")
+	local ageTile, ageCaption = makeTile(2, "Account Age (" .. days .. " days)")
 	local ageValue = tileValue(ageTile, formatAge(days))
 
-	local createdTile = makeTile(0, 60, "Created")
+	local createdTile = makeTile(3, "Created")
 	local createdValue = tileValue(createdTile, createdText)
 
-	local roleTile = makeTile(TILE_W + 8, 60, "Role")
+	local roleTile = makeTile(4, "Role")
 	do
 		local roleColor = ROLE_COLORS[role] or ICON_HOVER
 		local okSz, sz = pcall(function()
@@ -380,7 +550,7 @@ function Welcome.new(opts)
 			textW = math.ceil(sz.X)
 		end
 		local pill = new("Frame", {
-			Position = UDim2.fromOffset(12, 24),
+			Position = UDim2.fromOffset(12, 28),
 			Size = UDim2.fromOffset(textW + 32, 20),
 			BackgroundColor3 = PILL_BG,
 			BorderSizePixel = 0,
@@ -406,7 +576,7 @@ function Welcome.new(opts)
 	end
 
 	-- ===== continue button + status line =====
-	local btnSection = makeSection(20, BTN_Y, WIN_W - 40, BTN_H + 8 + STATUS_H, false)
+	local btnSection = makeSection((CONTENT_W - BTN_W) / 2, 322, BTN_W, BTN_H + 8 + STATUS_H, false)
 
 	local btn = new("TextButton", {
 		Name = "Continue",
@@ -419,7 +589,7 @@ function Welcome.new(opts)
 		TextSize = 15,
 		TextColor3 = DIM_TEXT,
 	}, btnSection)
-	corner(btn, 100)
+	corner(btn, 8)
 	local btnScale = new("UIScale", { Scale = 1 }, btn)
 
 	-- rounded chevron drawn with two bars (same style as the arrows in the main window)
@@ -508,7 +678,6 @@ function Welcome.new(opts)
 		continued = true
 		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 		TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-		TweenService:Create(dim, LEAVE, { BackgroundTransparency = 1 }):Play()
 		task.delay(LEAVE.Time + 0.03, function()
 			if alive then
 				leaveAndCallback()
@@ -544,6 +713,20 @@ function Welcome.new(opts)
 	end)
 	btn.Activated:Connect(doContinue)
 
+	closeBtn.Activated:Connect(function()
+		if not alive or continued then
+			return
+		end
+		local cb = opts.OnClose
+		W:Close(false)
+		if cb then
+			local ok, err = pcall(cb)
+			if not ok then
+				warn("[welcome] OnClose error: " .. tostring(err))
+			end
+		end
+	end)
+
 	-- Enter also continues
 	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
 		if processed then
@@ -555,25 +738,29 @@ function Welcome.new(opts)
 	end))
 
 	---------------------------------------------------------------------
-	-- DRAG (by the header)
+	-- DRAG (top bar or the empty sidebar, like ui.lua)
 	---------------------------------------------------------------------
 	local dragging = false
 	local dragStart = nil
 	local startPos = nil
 
-	header.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = window.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
+	local function bindDrag(handle)
+		handle.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = window.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end)
+	end
+	bindDrag(bar)
+	bindDrag(sidebar)
 
 	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
 		if not dragging then
@@ -625,7 +812,7 @@ function Welcome.new(opts)
 			gui:Destroy()
 		else
 			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-			TweenService:Create(dim, LEAVE, { BackgroundTransparency = 1 }):Play()
+			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
 			task.delay(LEAVE.Time + 0.03, function()
 				gui:Destroy()
 			end)
@@ -637,7 +824,6 @@ function Welcome.new(opts)
 	---------------------------------------------------------------------
 	paintButton()
 
-	TweenService:Create(dim, SMOOTH, { BackgroundTransparency = 0.45 }):Play()
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
 
