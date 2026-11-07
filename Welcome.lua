@@ -1,14 +1,14 @@
 -- Welcome.lua  (welcome screen module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same base layout as ui.lua: black window with tiny rounded corners, slim sidebar with the Y1 logo
--- and your picture, title card top left, close button top right, content area on the right.
+-- Same base layout as ui.lua: black window with tiny rounded corners, slim sidebar with the Y1 logo,
+-- title card top left, close button top right, content area on the right.
 -- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
 -- (current game name + icon), tiles for user ID, account age, creation date and role, and a
 -- Continue button.
 --
--- The window is draggable. When Continue is pressed, OnContinue receives the window's current
--- position (a UDim2) so the main window can open in the exact same spot.
+-- The window is NOT draggable. It always opens in the middle of the screen.
+-- OnContinue still receives the window position (always centered) so main.lua keeps working.
 --
 --   local Welcome = <this file>
 --   local welcome = Welcome.new({
@@ -18,14 +18,14 @@
 --       ButtonText = "Continue",
 --       DefaultRole = "Tester",
 --       Roles = { [12345678] = "Owner" },
---       OnContinue = function(position) end,  -- position = UDim2 where the welcome window was
+--       OnContinue = function(position) end,
 --       OnClose = function() end,
 --   })
 --   welcome:SetState("loading", "Loading modules...")
 --   welcome:SetState("ready")
 --   welcome:SetState("error", "Could not load")
---   welcome:GetPosition()                              -- current window position (UDim2)
---   welcome:Close(instant)                             -- closes it without running OnContinue
+--   welcome:GetPosition()
+--   welcome:Close(instant)
 
 local Welcome = {}
 
@@ -69,22 +69,13 @@ function Welcome.new(opts)
 	local CLUSTER_BG = Color3.fromRGB(30, 30, 33)
 	local ICON       = Color3.fromRGB(176, 176, 182)
 	local ICON_HOVER = Color3.fromRGB(240, 240, 244)
-	local HOVER_GREY = Color3.fromRGB(66, 66, 72)
 	local HOVER_RED  = Color3.fromRGB(214, 62, 62)
 	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
 	local DIM_TEXT   = Color3.fromRGB(116, 116, 124)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
-	local PILL_BG    = Color3.fromRGB(46, 46, 52)
 
 	local RADIUS = 4
 	local SQUARE_RADIUS = 10
-
-	local ROLE_COLORS = {
-		Tester = Color3.fromRGB(255, 190, 90),
-		Owner = Color3.fromRGB(255, 110, 110),
-		Admin = Color3.fromRGB(120, 170, 255),
-		Developer = Color3.fromRGB(52, 199, 120),
-	}
 
 	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local SMOOTH = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -267,14 +258,14 @@ function Welcome.new(opts)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	-- top bar (drag handle + close button)
+	-- top bar (holds the close button)
 	local bar = new("Frame", {
 		Name = "TopBar",
 		Size = UDim2.new(1, 0, 0, BAR_H),
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- sidebar: Y1 logo on top, your picture at the bottom
+	-- sidebar: just the Y1 logo on top
 	local sidebar = new("Frame", {
 		Name = "Sidebar",
 		Position = UDim2.fromOffset(6, 6),
@@ -311,25 +302,6 @@ function Welcome.new(opts)
 				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
 			}),
 		}, logoLabel)
-
-		local tile = new("Frame", {
-			Name = "ProfileTile",
-			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 14, 1, -14),
-			Size = UDim2.fromOffset(TILE, TILE),
-			BackgroundColor3 = CARD_BG,
-			BorderSizePixel = 0,
-			ZIndex = 3,
-		}, window)
-		corner(tile, SQUARE_RADIUS)
-		local tileImg = new("ImageLabel", {
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = CARD_BG,
-			BorderSizePixel = 0,
-			Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
-			ZIndex = 4,
-		}, tile)
-		corner(tileImg, SQUARE_RADIUS)
 	end
 
 	-- title card (top left), same as the "Tab / <page>" card in ui.lua
@@ -397,7 +369,7 @@ function Welcome.new(opts)
 		line(45)
 		line(-45)
 
-		local hovering = false
+		local hoveringClose = false
 		local function paint(isOver, pressed)
 			local bgT = 1
 			if isOver then
@@ -417,18 +389,18 @@ function Welcome.new(opts)
 			end
 		end
 		closeBtn.MouseEnter:Connect(function()
-			hovering = true
+			hoveringClose = true
 			paint(true, false)
 		end)
 		closeBtn.MouseLeave:Connect(function()
-			hovering = false
+			hoveringClose = false
 			paint(false, false)
 		end)
 		closeBtn.MouseButton1Down:Connect(function()
 			paint(true, true)
 		end)
 		closeBtn.MouseButton1Up:Connect(function()
-			paint(hovering, false)
+			paint(hoveringClose, false)
 		end)
 	end
 
@@ -484,7 +456,7 @@ function Welcome.new(opts)
 
 	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 56), UDim2.new(1, 0, 0, 22),
 		Enum.Font.GothamMedium, 17, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(header, "Drag this window anywhere - the menu opens where you leave it", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
+	label(header, "Built for amazing people just like you :)", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
 		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 
 	-- ===== profile card (left) + game card (right) =====
@@ -581,41 +553,9 @@ function Welcome.new(opts)
 	local createdTile = makeTile(3, "Created")
 	local createdValue = tileValue(createdTile, createdText)
 
+	-- role is plain text now (no dot, no pill)
 	local roleTile = makeTile(4, "Role")
-	do
-		local roleColor = ROLE_COLORS[role] or ICON_HOVER
-		local okSz, sz = pcall(function()
-			return game:GetService("TextService"):GetTextSize(role, 12, Enum.Font.GothamMedium, Vector2.new(1000, 20))
-		end)
-		local textW = #role * 7
-		if okSz and sz then
-			textW = math.ceil(sz.X)
-		end
-		local pill = new("Frame", {
-			Position = UDim2.fromOffset(12, 28),
-			Size = UDim2.fromOffset(textW + 32, 20),
-			BackgroundColor3 = PILL_BG,
-			BorderSizePixel = 0,
-		}, roleTile)
-		corner(pill, 100)
-		local dot = new("Frame", {
-			Position = UDim2.fromOffset(9, 6),
-			Size = UDim2.fromOffset(8, 8),
-			BackgroundColor3 = roleColor,
-			BorderSizePixel = 0,
-		}, pill)
-		corner(dot, 100)
-		new("TextLabel", {
-			BackgroundTransparency = 1,
-			Position = UDim2.fromOffset(22, 0),
-			Size = UDim2.new(1, -26, 1, 0),
-			Font = Enum.Font.GothamMedium,
-			Text = role,
-			TextSize = 12,
-			TextColor3 = TEXT_COLOR,
-			TextXAlignment = Enum.TextXAlignment.Left,
-		}, pill)
-	end
+	tileValue(roleTile, role)
 
 	-- ===== continue button + status line =====
 	local btnSection = makeSection((CONTENT_W - BTN_W) / 2, 322, BTN_W, BTN_H + 8 + STATUS_H, false)
@@ -702,7 +642,6 @@ function Welcome.new(opts)
 		end
 	end
 
-	-- leavePos = where the window was when Continue was pressed
 	local function leaveAndCallback(leavePos)
 		local cb = opts.OnContinue
 		W:Close(true)
@@ -719,7 +658,6 @@ function Welcome.new(opts)
 			return
 		end
 		continued = true
-		-- remember the spot before anything else happens
 		local leavePos = window.Position
 		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 		TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
@@ -782,47 +720,7 @@ function Welcome.new(opts)
 		end
 	end))
 
-	---------------------------------------------------------------------
-	-- DRAG (top bar or the empty sidebar, like ui.lua)
-	---------------------------------------------------------------------
-	local dragging = false
-	local dragStart = nil
-	local startPos = nil
-
-	local function bindDrag(handle)
-		handle.InputBegan:Connect(function(input)
-			if continued then
-				return
-			end
-			if input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch then
-				dragging = true
-				dragStart = input.Position
-				startPos = window.Position
-				input.Changed:Connect(function()
-					if input.UserInputState == Enum.UserInputState.End then
-						dragging = false
-					end
-				end)
-			end
-		end)
-	end
-	bindDrag(bar)
-	bindDrag(sidebar)
-
-	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not dragging or continued then
-			return
-		end
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			local d = input.Position - dragStart
-			window.Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + d.X,
-				startPos.Y.Scale, startPos.Y.Offset + d.Y
-			)
-		end
-	end))
+	-- (no dragging: the welcome window stays in the middle of the screen)
 
 	---------------------------------------------------------------------
 	-- PUBLIC API
