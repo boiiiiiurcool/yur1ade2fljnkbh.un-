@@ -16,6 +16,7 @@
 --   Zee Hood Servers : the full finder (player search, groups, options, profile cards)
 --   Regular Server   : only the server tiles, region filter, region + ping and a Join button.
 --                      No player search, no heads, no drawers, no groups, no HTTP calls.
+--   You can switch between the three at any time with the Mode pill next to the region pill.
 --   Universal        : works in any game. Reads Roblox's public server list (needs an executor
 --                      request function) and shows players/max, ping and a Join button.
 --                      No region, no uptime, and it does not use the game's own server data.
@@ -648,7 +649,7 @@ function Finder.new(win, opts)
 		local NORMAL = {
 			boxH = 34, boxText = 13, loadW = 64,
 			trayH = 30, tabW = 84, tabH = 24, tabText = 12,
-			pillW = 190, pillText = 12,
+			pillW = 190, pillText = 12, modeW = 118,
 			pad = 12, gap = 10, tileMin = 150, chip = 20,
 			titleText = 13, subText = 11, infoText = 11, countText = 13,
 			joinW = 54, joinH = 26, joinText = 12,
@@ -658,7 +659,7 @@ function Finder.new(win, opts)
 		local TOUCH = {
 			boxH = 44, boxText = 14, loadW = 76,
 			trayH = 40, tabW = 96, tabH = 34, tabText = 13,
-			pillW = 210, pillText = 13,
+			pillW = 210, pillText = 13, modeW = 132,
 			pad = 14, gap = 12, tileMin = 170, chip = 26,
 			titleText = 14, subText = 12, infoText = 12, countText = 14,
 			joinW = 66, joinH = 36, joinText = 13,
@@ -905,9 +906,6 @@ function Finder.new(win, opts)
 				if mode ~= nil then
 					return
 				end
-				lite = (key ~= "zee")
-				universalOn = (key == "universal")
-				mode = key
 				onModeChosen(key)
 				TweenService:Create(chooser, FAST, { GroupTransparency = 1 }):Play()
 				task.delay(FAST.Time + 0.05, function()
@@ -1016,7 +1014,9 @@ function Finder.new(win, opts)
 	-- LOGIC
 	---------------------------------------------------------------------
 	do
-		local opt = nil       -- options module instance
+		local opt = nil       -- options module instance (nil while not in Zee Hood mode)
+		local optObj = nil    -- the same instance, kept so you can switch back
+		local profileObj = nil
 		local profile = nil   -- profile module instance
 		local group = nil     -- { id, name, members = {userId = roleName}, checked, status, rev }
 		local groupToken = 0
@@ -2430,6 +2430,200 @@ function Finder.new(win, opts)
 		end
 
 		-------------------------------------------------------------
+		-- Mode switcher (small pill + dropdown, shown once a mode is picked)
+		-------------------------------------------------------------
+		local modeUI = {
+			close = function() end,
+			place = function(_x, _y) end,
+			refresh = function() end,
+		}
+		local setMode = function(_key) end
+		do
+			local order = { "zee", "regular", "universal" }
+			local titles = { zee = "Zee Hood Servers", regular = "Regular Server", universal = "Universal" }
+			local shortName = { zee = "Zee Hood", regular = "Regular", universal = "Universal" }
+			local menuOpen = false
+			local over = false
+			local token = 0
+			local rows = {}
+
+			local btn = new("TextButton", {
+				Position = UDim2.fromOffset(0, 50),
+				Size = UDim2.fromOffset(118, 30),
+				BackgroundColor3 = CLUSTER_BG,
+				BorderSizePixel = 0,
+				AutoButtonColor = false,
+				Text = "",
+				Visible = false,
+			}, mainPage)
+			corner(btn, RADIUS + 2)
+			local value = label(btn, "", UDim2.fromOffset(12, 0), UDim2.new(1, -34, 1, 0),
+				Enum.Font.GothamMedium, 12, TEXT_COLOR)
+			local chev = makeChevron(btn, false, true)
+			chev.setSize(16)
+			chev.chip.Position = UDim2.new(1, -16, 0.5, 0)
+			chev.holder.Rotation = 90
+			for i = 1, #chev.inks do
+				chev.inks[i].BackgroundColor3 = DIM_TEXT
+			end
+
+			local catcher = new("TextButton", {
+				Text = "",
+				AutoButtonColor = false,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				Visible = false,
+				ZIndex = 32,
+			}, mainPage)
+
+			local menu = new("CanvasGroup", {
+				Name = "ModeMenu",
+				Position = UDim2.fromOffset(0, 86),
+				Size = UDim2.fromOffset(210, 3 * 38 + 16),
+				BackgroundColor3 = POPUP_BG,
+				BorderSizePixel = 0,
+				GroupTransparency = 1,
+				Visible = false,
+				ZIndex = 33,
+			}, mainPage)
+			corner(menu, RADIUS + 4)
+			stroke(menu, BORDER, 1, 0)
+			local menuList = new("Frame", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, menu)
+			pad(menuList, 8, 8, 8, 8)
+			new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, menuList)
+
+			local function paintRows()
+				for i = 1, #order do
+					local key = order[i]
+					local r = rows[key]
+					if r then
+						if key == mode then
+							r.btn.BackgroundTransparency = 0
+							r.name.TextColor3 = ICON_HOVER
+						elseif r.over then
+							r.btn.BackgroundTransparency = 0.55
+							r.name.TextColor3 = ICON_HOVER
+						else
+							r.btn.BackgroundTransparency = 1
+							r.name.TextColor3 = ICON
+						end
+					end
+				end
+			end
+
+			local function paintBtn()
+				local bg = CLUSTER_BG
+				local ink = DIM_TEXT
+				if over or menuOpen then
+					bg = HOVER_GREY
+					ink = ICON_HOVER
+				end
+				TweenService:Create(btn, FAST, { BackgroundColor3 = bg }):Play()
+				for i = 1, #chev.inks do
+					TweenService:Create(chev.inks[i], FAST, { BackgroundColor3 = ink }):Play()
+				end
+			end
+
+			for i = 1, #order do
+				local key = order[i]
+				local b = new("TextButton", {
+					Size = UDim2.new(1, 0, 0, 36),
+					BackgroundColor3 = HOVER_GREY,
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "",
+					LayoutOrder = i,
+				}, menuList)
+				corner(b, RADIUS)
+				local nm = label(b, titles[key], UDim2.fromOffset(12, 0), UDim2.new(1, -24, 1, 0),
+					Enum.Font.GothamMedium, 13, ICON)
+				local r = { btn = b, name = nm, over = false }
+				rows[key] = r
+				b.MouseEnter:Connect(function()
+					r.over = true
+					paintRows()
+				end)
+				b.MouseLeave:Connect(function()
+					r.over = false
+					paintRows()
+				end)
+				b.Activated:Connect(function()
+					setMode(key)
+				end)
+			end
+
+			local function closeMenu()
+				if not menuOpen then
+					return
+				end
+				menuOpen = false
+				token = token + 1
+				local tk = token
+				catcher.Visible = false
+				TweenService:Create(menu, FAST, { GroupTransparency = 1 }):Play()
+				TweenService:Create(chev.holder, FAST, { Rotation = 90 }):Play()
+				task.delay(FAST.Time + 0.02, function()
+					if tk == token then
+						menu.Visible = false
+					end
+				end)
+				paintBtn()
+			end
+
+			local function openMenu()
+				if menuOpen then
+					return
+				end
+				menuOpen = true
+				token = token + 1
+				catcher.Visible = true
+				menu.GroupTransparency = 1
+				menu.Visible = true
+				TweenService:Create(menu, FAST, { GroupTransparency = 0 }):Play()
+				TweenService:Create(chev.holder, FAST, { Rotation = -90 }):Play()
+				paintRows()
+				paintBtn()
+			end
+
+			btn.MouseEnter:Connect(function()
+				over = true
+				paintBtn()
+			end)
+			btn.MouseLeave:Connect(function()
+				over = false
+				paintBtn()
+			end)
+			btn.Activated:Connect(function()
+				if menuOpen then
+					closeMenu()
+				else
+					closeRegionMenu()
+					openMenu()
+				end
+			end)
+			catcher.Activated:Connect(closeMenu)
+
+			modeUI.close = closeMenu
+			modeUI.refresh = function()
+				value.Text = shortName[mode] or ""
+				paintRows()
+			end
+			modeUI.place = function(x, y)
+				btn.Visible = (mode ~= nil)
+				btn.Position = UDim2.fromOffset(x, y)
+				btn.Size = UDim2.fromOffset(M.modeW, M.trayH)
+				value.TextSize = M.pillText
+				menu.Position = UDim2.fromOffset(x, y + M.trayH + 6)
+				modeUI.refresh()
+			end
+		end
+
+		-------------------------------------------------------------
 		-- Rendering
 		-------------------------------------------------------------
 		local function updateStatus()
@@ -2972,6 +3166,8 @@ function Finder.new(win, opts)
 				if mode ~= "universal" then
 					rx = M.pillW + 12
 				end
+				modeUI.place(rx, y)
+				rx = rx + M.modeW + 8
 				status.Position = UDim2.fromOffset(rx, y)
 				status.Size = UDim2.new(1, -rx, 0, M.trayH)
 				y = y + M.trayH + 10
@@ -3019,6 +3215,9 @@ function Finder.new(win, opts)
 				closeRegionMenu()
 				x = x + 4
 			end
+
+			modeUI.place(x, y)
+			x = x + M.modeW + 8
 
 			-- gear sits on the right of this row; the status text uses what is left
 			local usedRight = 0
@@ -3119,7 +3318,17 @@ function Finder.new(win, opts)
 		-- Extra modules: options (gear, sort, filters) and profile card.
 		-- Only created when "Zee Hood Servers" is picked.
 		-------------------------------------------------------------
+		local extraObjs = {}
+		local extraSaved = {}
+		local extrasToken = 0
+		local extrasMade = false
+
 		local function initExtras()
+			local before = {}
+			local kids = mainPage:GetChildren()
+			for i = 1, #kids do
+				before[kids[i]] = true
+			end
 			if opts.Options then
 				local okO, o = pcall(opts.Options.new, win, mainPage, {
 					onChange = function()
@@ -3155,15 +3364,113 @@ function Finder.new(win, opts)
 					warn("[finder] profile module failed: " .. tostring(p))
 				end
 			end
+
+			optObj = opt
+			profileObj = profile
+			local after = mainPage:GetChildren()
+			for i = 1, #after do
+				if not before[after[i]] then
+					extraObjs[#extraObjs + 1] = after[i]
+				end
+			end
 		end
 
-		onModeChosen = function(m)
-			if m == "zee" then
-				initExtras()
+		-- the gear etc. only exist visually in Zee Hood mode
+		local function hideExtras()
+			extrasToken = extrasToken + 1
+			local tk = extrasToken
+			task.delay(0.3, function()
+				if tk ~= extrasToken or mode == "zee" then
+					return
+				end
+				for i = 1, #extraObjs do
+					local o = extraObjs[i]
+					local seen = true
+					if o:IsA("CanvasGroup") and o.GroupTransparency > 0.5 then
+						seen = false
+					end
+					extraSaved[o] = o.Visible and seen
+					o.Visible = false
+				end
+			end)
+		end
+
+		local function showExtras()
+			extrasToken = extrasToken + 1
+			for i = 1, #extraObjs do
+				local o = extraObjs[i]
+				if extraSaved[o] ~= nil then
+					o.Visible = extraSaved[o]
+					extraSaved[o] = nil
+				end
 			end
+		end
+
+		-- switch between Zee Hood / Regular / Universal (also used by the first chooser screen)
+		setMode = function(key)
+			modeUI.close()
+			closeRegionMenu()
+			if key == mode then
+				return
+			end
+			local wasZee = (mode == "zee")
+			local wasUniversal = universalOn
+
+			if wasZee then
+				-- leave the group tab and stop any group loading
+				if tab ~= "servers" then
+					setTab("servers")
+				end
+				groupToken = groupToken + 1
+				group = nil
+				savedText.servers = ""
+				savedText.group = ""
+				box.Text = ""
+				if opt then
+					opt:Close()
+				end
+				if profile then
+					profile:Close()
+				end
+			end
+
+			mode = key
+			lite = (key ~= "zee")
+			universalOn = (key == "universal")
+			regionFilter = nil
+			regionVersion = -1
+			expanded = {}
+			list.CanvasPosition = Vector2.new(0, 0)
+
+			-- Universal reads a different server list, so start that one clean
+			if wasUniversal ~= universalOn then
+				servers = {}
+				located = {}
+				locatedCount = 0
+				serverCount = 0
+				version = version + 1
+			end
+
+			if key == "zee" then
+				if not extrasMade then
+					extrasMade = true
+					initExtras()
+				end
+				opt = optObj
+				profile = profileObj
+				showExtras()
+			elseif wasZee then
+				opt = nil
+				profile = nil
+				hideExtras()
+			end
+
+			pcall(refreshServers)
 			layoutFinder()
 			render(true)
 		end
+
+		onModeChosen = setMode
 
 		-------------------------------------------------------------
 		-- API + stop
