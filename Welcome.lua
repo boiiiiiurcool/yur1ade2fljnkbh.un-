@@ -1,14 +1,12 @@
--- Welcome.lua  (welcome screen module)
+-- Welcome.lua  (welcome screen module, minimal)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same look as ui.lua: black window with tiny rounded corners (no sidebar),
--- close button top right, content area on a soft gradient. This version is a smaller window.
--- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
--- (current game name + icon), tiles for user ID, account age, creation date and role.
+-- Same look as ui.lua: small black window with tiny rounded corners and a close button.
+-- It shows ONLY a spinning wheel with "Loading everything safely". No profile, no user ID,
+-- no game card, no tiles.
 --
--- At the bottom it shows a loading wheel with "Loading everything safely". The Continue button
--- only appears after WaitSeconds (default 10) AND once SetState("ready") was called.
--- Enter cannot skip the wait either.
+-- The Continue button only appears after WaitSeconds (default 10) AND once SetState("ready")
+-- was called. Enter cannot skip the wait either.
 --
 -- The window is NOT draggable. It always opens in the middle of the screen.
 -- OnContinue still receives the window position (always centered) so main.lua keeps working.
@@ -16,12 +14,8 @@
 --   local Welcome = <this file>
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
---       Title = "yur1",
---       Logo = "Y1",
 --       ButtonText = "Continue",
---       DefaultRole = "Tester",
 --       WaitSeconds = 10,
---       Roles = { [12345678] = "Owner" },
 --       OnContinue = function(position) end,
 --       OnClose = function() end,
 --   })
@@ -36,17 +30,12 @@ local Welcome = {}
 function Welcome.new(opts)
 	opts = opts or {}
 	local guiName = opts.Name or "Y1Welcome"
-	local title = opts.Title or "yur1"
-	local logoName = opts.Logo or "Y1"
 	local buttonText = opts.ButtonText or "Continue"
-	local defaultRole = opts.DefaultRole or "Tester"
 	local WAIT_SECONDS = opts.WaitSeconds or 10
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
-	local HttpService = game:GetService("HttpService")
-	local MarketplaceService = game:GetService("MarketplaceService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
@@ -71,8 +60,6 @@ function Welcome.new(opts)
 	---------------------------------------------------------------------
 	local BLACK      = Color3.fromRGB(10, 10, 11)
 	local BORDER     = Color3.fromRGB(36, 36, 39)
-	local SIDEBAR_BG = Color3.fromRGB(17, 17, 19)
-	local CARD_BG    = Color3.fromRGB(28, 28, 31)
 	local CLUSTER_BG = Color3.fromRGB(30, 30, 33)
 	local ICON       = Color3.fromRGB(176, 176, 182)
 	local ICON_HOVER = Color3.fromRGB(240, 240, 244)
@@ -82,7 +69,6 @@ function Welcome.new(opts)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 
 	local RADIUS = 4
-	local SQUARE_RADIUS = 10
 
 	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local SMOOTH = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -121,15 +107,6 @@ function Welcome.new(opts)
 		return s
 	end
 
-	local function pad(o, l, t, r, b)
-		local p = Instance.new("UIPadding")
-		p.PaddingLeft = UDim.new(0, l)
-		p.PaddingTop = UDim.new(0, t)
-		p.PaddingRight = UDim.new(0, r)
-		p.PaddingBottom = UDim.new(0, b)
-		p.Parent = o
-	end
-
 	local function label(parent, text, pos, size, font, textSize, color, align)
 		local l = Instance.new("TextLabel")
 		l.BackgroundTransparency = 1
@@ -146,77 +123,20 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- ACCOUNT INFO
+	-- WINDOW
 	---------------------------------------------------------------------
-	local MONTHS = {
-		"January", "February", "March", "April", "May", "June",
-		"July", "August", "September", "October", "November", "December",
-	}
-
-	local function plural(n, word)
-		if n == 1 then
-			return n .. " " .. word
-		end
-		return n .. " " .. word .. "s"
-	end
-
-	local function formatAge(days)
-		if days < 1 then
-			return "Today"
-		end
-		local y = math.floor(days / 365)
-		local rest = days - y * 365
-		local m = math.floor(rest / 30)
-		local d = rest - m * 30
-		if y > 0 then
-			if m > 0 then
-				return plural(y, "year") .. ", " .. plural(m, "month")
-			end
-			return plural(y, "year")
-		end
-		if m > 0 then
-			if d > 0 then
-				return plural(m, "month") .. ", " .. plural(d, "day")
-			end
-			return plural(m, "month")
-		end
-		return plural(d, "day")
-	end
-
-	local function formatDate(m, d, y)
-		return (MONTHS[m] or "?") .. " " .. d .. ", " .. y
-	end
-
-	local days = player.AccountAge
-	local createdText = "Unknown"
-	do
-		local ok, t = pcall(function()
-			return os.date("!*t", os.time() - days * 86400)
-		end)
-		if ok and type(t) == "table" then
-			createdText = formatDate(t.month, t.day, t.year)
-		end
-	end
-
-	local role = defaultRole
-	if opts.Roles and opts.Roles[player.UserId] then
-		role = opts.Roles[player.UserId]
-	end
-
-	---------------------------------------------------------------------
-	-- WINDOW (same base as ui.lua, smaller)
-	---------------------------------------------------------------------
-	local WIN_W = 460
-	local WIN_H = 360
+	local WIN_W = 340
+	local WIN_H = 220
 	local BAR_H = 34
 	local CONTENT_W = WIN_W - 12
+	local CONTENT_H = WIN_H - (BAR_H + 6)
 	local BTN_W = 240
 	local BTN_H = 38
 	if touch then
 		BTN_H = 46
 	end
 	local BOT_W = BTN_W + 16            -- a little wider than the button so its grow animation is not clipped
-	local STATUS_Y = BTN_H + 10
+	local STATUS_Y = BTN_H + 16
 	local BOT_H = STATUS_Y + 14
 
 	local gui = new("ScreenGui", {
@@ -289,8 +209,6 @@ function Welcome.new(opts)
 		Size = UDim2.new(1, 0, 0, BAR_H),
 		BackgroundTransparency = 1,
 	}, window)
-
-	-- (no sidebar)
 
 	-- close button (top right), same look as the control cluster in ui.lua
 	local closeBtn = nil
@@ -376,7 +294,7 @@ function Welcome.new(opts)
 		end)
 	end
 
-	-- content area, same layout idea as ui.lua
+	-- content area
 	local content = new("Frame", {
 		Name = "Content",
 		Position = UDim2.fromOffset(6, BAR_H),
@@ -384,156 +302,18 @@ function Welcome.new(opts)
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- each part of the content is its own canvas group so it can fade in on its own.
-	-- groups with outlined children are 2px bigger with 2px padding so outlines are not cut off.
-	local sections = {}
-	local function makeSection(x, y, w, h, outlined)
-		local g = new("CanvasGroup", {
-			Position = UDim2.fromOffset(x, y),
-			Size = UDim2.fromOffset(w, h),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			GroupTransparency = 1,
-		}, content)
-		if outlined then
-			g.Position = UDim2.fromOffset(x - 2, y - 2)
-			g.Size = UDim2.fromOffset(w + 4, h + 4)
-			pad(g, 2, 2, 2, 2)
-		end
-		table.insert(sections, { group = g, pos = g.Position })
-		return g
-	end
-
-	-- ===== header: "yur1" on top middle, "Welcome to yur1" under it =====
-	local header = makeSection(0, 6, CONTENT_W, 78, false)
-
-	local titleLabel = new("TextLabel", {
+	---------------------------------------------------------------------
+	-- BOTTOM (the only content): loading wheel first, Continue button after the wait
+	---------------------------------------------------------------------
+	local bottomBase = UDim2.fromOffset(math.floor((CONTENT_W - BOT_W) / 2), math.floor((CONTENT_H - BOT_H) / 2) - 6)
+	local bottom = new("CanvasGroup", {
+		Name = "Bottom",
+		Position = bottomBase + UDim2.fromOffset(0, 12),
+		Size = UDim2.fromOffset(BOT_W, BOT_H),
 		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.new(1, 0, 0, 40),
-		Font = Enum.Font.GothamBlack,
-		Text = title,
-		TextSize = 34,
-		TextColor3 = Color3.new(1, 1, 1),
-		TextXAlignment = Enum.TextXAlignment.Center,
-		TextYAlignment = Enum.TextYAlignment.Center,
-	}, header)
-	new("UIGradient", {
-		Rotation = 90,
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
-			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
-		}),
-	}, titleLabel)
-
-	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 42), UDim2.new(1, 0, 0, 18),
-		Enum.Font.GothamMedium, 14, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(header, "Built for amazing people just like you :)", UDim2.fromOffset(0, 62), UDim2.new(1, 0, 0, 14),
-		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
-
-	-- ===== profile card (left) + game card (right) =====
-	local profile = makeSection(2, 90, CONTENT_W - 4, 58, true)
-
-	local profCard = new("Frame", {
-		Size = UDim2.new(0.5, -4, 1, 0),
-		BackgroundColor3 = SIDEBAR_BG,
 		BorderSizePixel = 0,
-	}, profile)
-	corner(profCard, SQUARE_RADIUS)
-	stroke(profCard, BORDER, 1, 0)
-
-	local avatar = new("ImageLabel", {
-		Position = UDim2.fromOffset(9, 9),
-		Size = UDim2.fromOffset(40, 40),
-		BackgroundColor3 = CARD_BG,
-		BorderSizePixel = 0,
-		Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
-	}, profCard)
-	corner(avatar, 10)
-
-	label(profCard, player.DisplayName, UDim2.fromOffset(60, 11), UDim2.new(1, -68, 0, 18),
-		Enum.Font.GothamBold, 14, TEXT_COLOR)
-	label(profCard, "@" .. player.Name, UDim2.fromOffset(60, 30), UDim2.new(1, -68, 0, 14),
-		Enum.Font.Gotham, 11, DIM_TEXT)
-
-	local gameCard = new("Frame", {
-		Position = UDim2.new(0.5, 4, 0, 0),
-		Size = UDim2.new(0.5, -4, 1, 0),
-		BackgroundColor3 = SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, profile)
-	corner(gameCard, SQUARE_RADIUS)
-	stroke(gameCard, BORDER, 1, 0)
-
-	local gameIcon = new("ImageLabel", {
-		Position = UDim2.fromOffset(9, 9),
-		Size = UDim2.fromOffset(40, 40),
-		BackgroundColor3 = CARD_BG,
-		BorderSizePixel = 0,
-		Image = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=256&h=256",
-	}, gameCard)
-	corner(gameIcon, 10)
-
-	label(gameCard, "Current game", UDim2.fromOffset(60, 8), UDim2.new(1, -68, 0, 12),
-		Enum.Font.Gotham, 10, DIM_TEXT)
-	local gameNameLabel = label(gameCard, game.Name, UDim2.fromOffset(60, 21), UDim2.new(1, -68, 0, 18),
-		Enum.Font.GothamBold, 13, TEXT_COLOR)
-	label(gameCard, "Place ID: " .. tostring(game.PlaceId), UDim2.fromOffset(60, 40), UDim2.new(1, -68, 0, 12),
-		Enum.Font.Gotham, 10, DIM_TEXT)
-
-	-- the real game name comes from the marketplace (runs in the background)
-	task.spawn(function()
-		local ok, info = pcall(function()
-			return MarketplaceService:GetProductInfo(game.PlaceId)
-		end)
-		if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
-			if alive and gameNameLabel.Parent then
-				gameNameLabel.Text = info.Name
-			end
-		end
-	end)
-
-	-- ===== info tiles in a 2x2 grid: user ID, account age, creation date, role =====
-	local TILE_H = 40
-	local tilesGroup = makeSection(2, 156, CONTENT_W - 4, TILE_H * 2 + 8, true)
-	local TILE_W = (CONTENT_W - 4 - 8) / 2
-
-	local function makeTile(index, caption)
-		local col = (index - 1) % 2
-		local row = math.floor((index - 1) / 2)
-		local f = new("Frame", {
-			Position = UDim2.fromOffset(col * (TILE_W + 8), row * (TILE_H + 8)),
-			Size = UDim2.fromOffset(TILE_W, TILE_H),
-			BackgroundColor3 = SIDEBAR_BG,
-			BorderSizePixel = 0,
-		}, tilesGroup)
-		corner(f, RADIUS + 4)
-		stroke(f, BORDER, 1, 0)
-		local cap = label(f, caption, UDim2.fromOffset(10, 6), UDim2.new(1, -20, 0, 12),
-			Enum.Font.Gotham, 10, DIM_TEXT)
-		return f, cap
-	end
-
-	local function tileValue(tile, text)
-		return label(tile, text, UDim2.fromOffset(10, 20), UDim2.new(1, -20, 0, 16),
-			Enum.Font.GothamMedium, 12, TEXT_COLOR)
-	end
-
-	local idTile = makeTile(1, "User ID")
-	tileValue(idTile, tostring(player.UserId))
-
-	local ageTile, ageCaption = makeTile(2, "Account Age (" .. days .. " days)")
-	local ageValue = tileValue(ageTile, formatAge(days))
-
-	local createdTile = makeTile(3, "Created")
-	local createdValue = tileValue(createdTile, createdText)
-
-	-- role is plain text (no dot, no pill)
-	local roleTile = makeTile(4, "Role")
-	tileValue(roleTile, role)
-
-	-- ===== bottom: loading wheel first, Continue button after the wait =====
-	local bottom = makeSection((CONTENT_W - BOT_W) / 2, 254, BOT_W, BOT_H, false)
+		GroupTransparency = 1,
+	}, content)
 
 	-- loading part: wheel + "Loading everything safely"
 	local loaderGroup = new("CanvasGroup", {
@@ -547,8 +327,8 @@ function Welcome.new(opts)
 	local function ringFrame()
 		local f = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0, 14),
-			Size = UDim2.fromOffset(24, 24),
+			Position = UDim2.new(0.5, 0, 0, 18),
+			Size = UDim2.fromOffset(30, 30),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, loaderGroup)
@@ -574,7 +354,7 @@ function Welcome.new(opts)
 	)
 	spin:Play()
 
-	local loaderText = label(loaderGroup, "Loading everything safely", UDim2.fromOffset(0, 34), UDim2.new(1, 0, 0, 16),
+	local loaderText = label(loaderGroup, "Loading everything safely", UDim2.fromOffset(0, 42), UDim2.new(1, 0, 0, 16),
 		Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Center)
 
 	-- button part (hidden until the wait is over and the state is "ready")
@@ -646,7 +426,7 @@ function Welcome.new(opts)
 		TweenService:Create(chev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
 	end
 
-	-- decides what the bottom of the window shows
+	-- decides what the window shows
 	local function refreshBottom()
 		if not alive then
 			return
@@ -765,8 +545,6 @@ function Welcome.new(opts)
 		end
 	end))
 
-	-- (no dragging: the welcome window stays in the middle of the screen)
-
 	---------------------------------------------------------------------
 	-- PUBLIC API
 	---------------------------------------------------------------------
@@ -814,71 +592,24 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- INTRO: window pops in, then each part fades up one after the other
+	-- INTRO: window pops in, then the wheel fades up
 	---------------------------------------------------------------------
 	paintButton()
 	refreshBottom()
 
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-
-	for i = 1, #sections do
-		local s = sections[i]
-		local base = s.pos
-		s.group.Position = base + UDim2.fromOffset(0, 12)
-		task.delay(0.08 + (i - 1) * 0.07, function()
-			if alive then
-				TweenService:Create(s.group, SMOOTH, { Position = base, GroupTransparency = 0 }):Play()
-			end
-		end)
-	end
+	task.delay(0.1, function()
+		if alive then
+			TweenService:Create(bottom, SMOOTH, { Position = bottomBase, GroupTransparency = 0 }):Play()
+		end
+	end)
 
 	-- the wait: Continue can only show after WAIT_SECONDS, even if everything is loaded sooner
 	task.delay(WAIT_SECONDS, function()
 		if alive then
 			waitDone = true
 			refreshBottom()
-		end
-	end)
-
-	---------------------------------------------------------------------
-	-- exact creation date from the Roblox users API (needs an executor request function)
-	---------------------------------------------------------------------
-	task.spawn(function()
-		local req = (syn and syn.request) or (http and http.request) or http_request or request
-		if not req then
-			return
-		end
-		local ok, res = pcall(function()
-			return req({ Url = "https://users.roblox.com/v1/users/" .. tostring(player.UserId), Method = "GET" })
-		end)
-		if not ok or not res or res.StatusCode ~= 200 then
-			return
-		end
-		local okJ, data = pcall(function()
-			return HttpService:JSONDecode(res.Body)
-		end)
-		if not okJ or type(data) ~= "table" or type(data.created) ~= "string" then
-			return
-		end
-		local ys, ms, ds = string.match(data.created, "^(%d+)-(%d+)-(%d+)")
-		if not ys then
-			return
-		end
-		local y = tonumber(ys)
-		local m = tonumber(ms)
-		local d = tonumber(ds)
-		if not y or not m or not d or not alive then
-			return
-		end
-		createdValue.Text = formatDate(m, d, y)
-		local okT, t = pcall(function()
-			return os.time({ year = y, month = m, day = d, hour = 12 })
-		end)
-		if okT and t then
-			local exact = math.max(0, math.floor((os.time() - t) / 86400))
-			ageValue.Text = formatAge(exact)
-			ageCaption.Text = "Account Age (" .. exact .. " days)"
 		end
 	end)
 
