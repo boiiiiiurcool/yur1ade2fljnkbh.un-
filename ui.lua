@@ -439,7 +439,11 @@ function UI.new(opts)
 					color = ICON_HOVER
 				end
 				for i = 1, #inks do
-					TweenService:Create(inks[i], FAST, { BackgroundColor3 = color }):Play()
+					if inks[i]:IsA("UIStroke") then
+						TweenService:Create(inks[i], FAST, { Color = color }):Play()
+					else
+						TweenService:Create(inks[i], FAST, { BackgroundColor3 = color }):Play()
+					end
 				end
 			end
 
@@ -525,55 +529,67 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon: the roof is two square frames, each cut diagonally with a UIGradient whose
-		-- transparency has a tiny soft step (smooth slope, no rotated frames). The halves overlap
-		-- by 2px at the middle so the peak is one clean point; wide eaves, rounded body, rounded door.
+		-- house icon (outline style): a rounded diamond outline clipped to its top half makes the
+		-- roof, a rounded outline box clipped to its lower part makes the walls (no top edge),
+		-- plus a small door. Only outlines, no fill, no text.
 		local function buildHome(glyph)
 			local inks = {}
-			local function half(anchorX, xOff, rot, seq)
-				local f = new("Frame", {
-					AnchorPoint = Vector2.new(anchorX, 0),
-					Position = UDim2.new(0.5, xOff, 0.5, -12),
-					Size = UDim2.fromOffset(13, 13),
-					BackgroundColor3 = ICON,
-					BorderSizePixel = 0,
-					ZIndex = 3,
-				}, glyph)
-				new("UIGradient", { Rotation = rot, Transparency = seq }, f)
-				table.insert(inks, f)
-			end
-			-- left half keeps its lower-right triangle, right half keeps its lower-left triangle
-			half(1, 1, 45, NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 1),
-				NumberSequenceKeypoint.new(0.47, 1),
-				NumberSequenceKeypoint.new(0.53, 0),
-				NumberSequenceKeypoint.new(1, 0),
-			}))
-			half(0, -1, -45, NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0),
-				NumberSequenceKeypoint.new(0.47, 0),
-				NumberSequenceKeypoint.new(0.53, 1),
-				NumberSequenceKeypoint.new(1, 1),
-			}))
-			local body = new("Frame", {
+
+			-- roof: only the part of the diamond above y = 0 is shown
+			local roofClip = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, -12),
+				Size = UDim2.fromOffset(26, 12),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ClipsDescendants = true,
+				ZIndex = 3,
+			}, glyph)
+			local roof = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0, 11),
+				Size = UDim2.fromOffset(11, 11),
+				Rotation = 45,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, roofClip)
+			corner(roof, 3)
+			table.insert(inks, stroke(roof, ICON, 2, 0))
+
+			-- walls: a tall outline box, only its lower part is shown (the top edge is cut away)
+			local wallClip = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
 				Position = UDim2.new(0.5, 0, 0.5, 0),
-				Size = UDim2.fromOffset(18, 11),
-				BackgroundColor3 = ICON,
+				Size = UDim2.fromOffset(20, 12),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ClipsDescendants = true,
+				ZIndex = 3,
+			}, glyph)
+			local walls = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 1),
+				Position = UDim2.new(0.5, 0, 0, 11),
+				Size = UDim2.fromOffset(14, 18),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, wallClip)
+			corner(walls, 4)
+			table.insert(inks, stroke(walls, ICON, 2, 0))
+
+			-- door
+			local door = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 1),
+				Position = UDim2.new(0.5, 0, 0.5, 10),
+				Size = UDim2.fromOffset(6, 7),
+				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(body, 3)
-			table.insert(inks, body)
-			local door = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0.5, 11),
-				Size = UDim2.fromOffset(5, 7),
-				BackgroundColor3 = SIDEBAR_BG,
-				BorderSizePixel = 0,
-				ZIndex = 4,
-			}, glyph)
 			corner(door, 2)
+			table.insert(inks, stroke(door, ICON, 1.5, 0))
+
 			return inks
 		end
 
