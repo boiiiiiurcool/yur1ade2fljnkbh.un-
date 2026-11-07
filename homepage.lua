@@ -177,7 +177,7 @@ function HomePage.build(parent, T, H, opts)
 	local card = new("Frame", {
 		Name = "GameCard",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -28, 0.5, -14),
+		Position = UDim2.new(1, -28, 0.5, -30),
 		Size = UDim2.fromOffset(CARD_S, CARD_S),
 		BackgroundColor3 = T.SIDEBAR_BG,
 		BorderSizePixel = 0,
@@ -196,7 +196,40 @@ function HomePage.build(parent, T, H, opts)
 	}, card)
 	corner(cardImage, 16)
 
-	return { Root = root }
+	-- NEXT button under the game card, same width as the card (does nothing yet)
+	local TweenService = game:GetService("TweenService")
+	local nextBtn = new("TextButton", {
+		Name = "NextButton",
+		AutoButtonColor = false,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -28, 0.5, 80),
+		Size = UDim2.fromOffset(CARD_S, 38),
+		BackgroundColor3 = T.JOIN_BG,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		Text = "Next",
+		TextSize = 14,
+		TextColor3 = T.BLACK,
+		ZIndex = 3,
+	}, root)
+	corner(nextBtn, 8)
+	local nextScale = new("UIScale", { Scale = 1 }, nextBtn)
+	local nextInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	nextBtn.MouseEnter:Connect(function()
+		TweenService:Create(nextBtn, nextInfo, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+	end)
+	nextBtn.MouseLeave:Connect(function()
+		TweenService:Create(nextBtn, nextInfo, { BackgroundColor3 = T.JOIN_BG }):Play()
+		TweenService:Create(nextScale, nextInfo, { Scale = 1 }):Play()
+	end)
+	nextBtn.MouseButton1Down:Connect(function()
+		TweenService:Create(nextScale, nextInfo, { Scale = 0.97 }):Play()
+	end)
+	nextBtn.MouseButton1Up:Connect(function()
+		TweenService:Create(nextScale, nextInfo, { Scale = 1 }):Play()
+	end)
+
+	return { Root = root, NextButton = nextBtn }
 end
 
 return HomePage
