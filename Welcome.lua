@@ -1,7 +1,7 @@
 -- Welcome.lua  (welcome screen module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same base layout as ui.lua: black window with tiny rounded corners, slim sidebar with the Y1 logo,
+-- Same look as ui.lua: black window with tiny rounded corners (no sidebar),
 -- title card top left, close button top right, content area on the right.
 -- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
 -- (current game name + icon), tiles for user ID, account age, creation date and role, and a
@@ -202,11 +202,9 @@ function Welcome.new(opts)
 	local WIN_W = 760
 	local WIN_H = 480
 	local BAR_H = 40
-	local SIDEBAR_W = 56
-	local TILE = 40
-	local CHIP_X = SIDEBAR_W + 14
+	local CHIP_X = 6
 	local CHIP_W = 128
-	local CONTENT_W = WIN_W - (SIDEBAR_W + 18)
+	local CONTENT_W = WIN_W - 12
 	local BTN_W = 320
 	local BTN_H = 46
 	if touch then
@@ -265,44 +263,7 @@ function Welcome.new(opts)
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- sidebar: just the Y1 logo on top
-	local sidebar = new("Frame", {
-		Name = "Sidebar",
-		Position = UDim2.fromOffset(6, 6),
-		Size = UDim2.new(0, SIDEBAR_W, 1, -12),
-		BackgroundColor3 = SIDEBAR_BG,
-		BorderSizePixel = 0,
-		ZIndex = 2,
-	}, window)
-	corner(sidebar)
-
-	do
-		local logo = new("Frame", {
-			Name = "Logo",
-			Position = UDim2.fromOffset(14, 14),
-			Size = UDim2.fromOffset(TILE, 32),
-			BackgroundTransparency = 1,
-			ZIndex = 3,
-		}, window)
-		local logoLabel = new("TextLabel", {
-			BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 30),
-			Font = Enum.Font.GothamBlack,
-			Text = logoName,
-			TextSize = 24,
-			TextColor3 = Color3.new(1, 1, 1),
-			TextXAlignment = Enum.TextXAlignment.Center,
-			TextYAlignment = Enum.TextYAlignment.Center,
-			ZIndex = 4,
-		}, logo)
-		new("UIGradient", {
-			Rotation = 90,
-			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
-			}),
-		}, logoLabel)
-	end
+	-- (no sidebar)
 
 	-- title card (top left), same as the "Tab / <page>" card in ui.lua
 	do
@@ -407,8 +368,8 @@ function Welcome.new(opts)
 	-- content area, same position and size as in ui.lua
 	local content = new("Frame", {
 		Name = "Content",
-		Position = UDim2.fromOffset(SIDEBAR_W + 12, BAR_H),
-		Size = UDim2.new(1, -(SIDEBAR_W + 18), 1, -(BAR_H + 6)),
+		Position = UDim2.fromOffset(6, BAR_H),
+		Size = UDim2.new(1, -12, 1, -(BAR_H + 6)),
 		BackgroundTransparency = 1,
 	}, window)
 
