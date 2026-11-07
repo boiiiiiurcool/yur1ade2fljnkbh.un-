@@ -4,6 +4,9 @@
 -- Black window with tiny rounded corners, slim sidebar, title card, window controls,
 -- Home tab (separate module), Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
+-- Sidebar layout: logo, then Home and Info icons right under it (top group),
+-- and the server icon, gear and profile card at the bottom (bottom group).
+--
 --   local UI = <this file>
 --   local HomePage = <homepage.lua>
 --   local win = UI.new({
@@ -410,7 +413,8 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- SIDEBAR ICONS (house, server, gear; one marker slides between them)
+	-- SIDEBAR ICONS (house + ID card at the top, server + gear at the bottom;
+	-- one marker slides between them)
 	---------------------------------------------------------------------
 	do
 		local TIP_X = 14 + TILE + 10
@@ -431,6 +435,8 @@ function UI.new(opts)
 		table.insert(bodyParts, marker)
 
 		-- o.page / o.tip / o.tipW / o.anchorY / o.yScale / o.yOffset
+		-- anchorY 0 + yScale 0 = hangs from the top (yOffset = distance from the top of the window)
+		-- anchorY 1 + yScale 1 = stands on the bottom (yOffset is negative = distance from the bottom)
 		-- o.build(glyph) draws the icon and returns the frames that take the icon colour
 		local function makeNavIcon(o)
 			local slot = new("Frame", {
@@ -559,43 +565,62 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon, same style as the server and gear icons: solid rounded shapes + a cut-out.
-		-- Roof = a rounded diamond (same trick as the gear). The body is drawn over its lower half,
-		-- and only the two small wedges that stick out at the sides stay visible, which gives the
-		-- roof soft rounded eaves. The door is cut out with the sidebar colour.
+		-- house icon: a clean "home" shape made of three solid parts plus a door cut-out.
+		--   roof  = a rounded square turned 45 degrees (16x16, corner radius 3). Its widest point
+		--           is about 20px (16 / 2 - 3) * 1.414 + 3 = 10.07 each side of the middle.
+		--   walls = a rounded block exactly 20px wide that starts at that widest point, so the roof
+		--           slopes flow straight into the walls with no ledge or eave sticking out.
+		--   fill  = a small square-cornered strip at the top of the walls so the shoulders are smooth.
+		--   door  = cut out with the sidebar colour. It is taller than the walls so its rounded
+		--           bottom corners hang outside (invisible on the sidebar), which leaves a door
+		--           that is open at the bottom and rounded at the top.
+		-- Every size and position is a whole, even number so the edges stay crisp.
 		local function buildHome(glyph)
+			local R = 3          -- corner radius shared by the roof and the walls
+			local SHOULDER = -1  -- y of the roof centre = top of the walls (relative to the icon middle)
+
 			local roof = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, -3),
-				Size = UDim2.fromOffset(14, 14),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(16, 16),
 				Rotation = 45,
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(roof, 3)
+			corner(roof, R)
 
-			local body = new("Frame", {
+			local walls = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.new(0.5, 0, 0.5, -2),
-				Size = UDim2.fromOffset(15, 12),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(20, 12),
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(body, 3)
+			corner(walls, R)
+
+			-- square top corners for the walls (the rounded ones would leave a tiny dip under the roof)
+			local fill = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(20, 4),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
 
 			local door = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(5, 6),
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, 3),
+				Size = UDim2.fromOffset(6, 11),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
 			}, glyph)
-			corner(door, 2)
+			corner(door, 3)
 
-			return { roof, body }
+			return { roof, walls, fill }
 		end
 
 		-- info icon (ID card): a solid rounded card with cut-outs: a person on the left,
@@ -691,12 +716,17 @@ function UI.new(opts)
 		end
 
 		local tipW = math.max(66, #mainTip * 7 + 20)
-		local GEAR_Y = -(14 + TILE + 8)       -- bottom edge of the gear tile
-		local SERVER_Y = GEAR_Y - TILE - 6    -- server tile sits a tiny bit above the gear
-		local INFO_Y = SERVER_Y - TILE - 6    -- ID card tile sits a tiny bit above the server
-		local HOME_Y = INFO_Y - TILE - 6      -- house tile sits a tiny bit above the ID card
-		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 1, yScale = 1, yOffset = HOME_Y, build = buildHome })
-		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 1, yScale = 1, yOffset = INFO_Y, build = buildInfo })
+
+		-- TOP group: hangs from the top, right under the Y1 logo (the logo ends at y = 46)
+		local HOME_TOP = 58                    -- top edge of the house tile
+		local INFO_TOP = HOME_TOP + TILE + 6   -- ID card tile sits a tiny bit under the house
+
+		-- BOTTOM group: stands on the bottom, above the profile card
+		local GEAR_Y = -(14 + TILE + 8)        -- bottom edge of the gear tile
+		local SERVER_Y = GEAR_Y - TILE - 6     -- server tile sits a tiny bit above the gear
+
+		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 0, yScale = 0, yOffset = HOME_TOP, build = buildHome })
+		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 0, yScale = 0, yOffset = INFO_TOP, build = buildInfo })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
