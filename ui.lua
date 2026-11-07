@@ -1118,7 +1118,7 @@ function UI.new(opts)
 	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
-		local PAGE_TITLES = { Home = "Home", Info = "Info tab", Combat = "Combat", Main = mainTitle, Settings = "Settings" }
+		local PAGE_TITLES = { Home = "Home", Info = "Info", Combat = "Combat", Main = mainTitle, Settings = "Settings" }
 
 		local titleChip = new("Frame", {
 			Name = "TitleCard",
@@ -1128,9 +1128,11 @@ function UI.new(opts)
 			BorderSizePixel = 0,
 		}, window)
 		corner(titleChip, RADIUS + 2)
+		stroke(titleChip, BORDER, 1, 0)
 
-		label(titleChip, "Tab", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
-			Enum.Font.Gotham, 11, DIM_TEXT)
+		-- small caption in the same style as the section headers on the Settings page
+		label(titleChip, "CURRENT TAB", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
+			Enum.Font.GothamMedium, 10, DIM_TEXT)
 		local titleLabel = label(titleChip, PAGE_TITLES[currentPage] or currentPage, UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
 
