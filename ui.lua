@@ -2,16 +2,25 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Black window with tiny rounded corners, slim sidebar, title card, window controls,
--- Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
+-- Home tab (separate module), Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
 --   local UI = <this file>
---   local win = UI.new({ Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater" })
+--   local HomePage = <homepage.lua>
+--   local win = UI.new({
+--       Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater",
+--       Position = positionFromWelcome,
+--       StartPage = "Home",            -- "Home" (default), "Main" or "Settings"
+--       HomeModule = HomePage,         -- the homepage.lua module
+--       Home = { Product = "yur1", Subtitle = "...", Access = "Lifetime access",
+--                Build = "Beta 0.6", Component = "Rock and Roll by reruinz" },
+--   })
 --
 -- What you get back:
---   win.MainPage / win.SettingsPage   frames you put your controls in
+--   win.HomePage / win.MainPage / win.SettingsPage   frames you put your controls in
 --   win.T                             theme colours, radii and tween infos
 --   win.H                             helpers: new, corner, stroke, pad, label, hoverable
 --   win.Touch                         true while Touch Mode is on
+--   win:ShowPage("Home" | "Main" | "Settings")
 --   win:Toast(text)                   small pop-up at the bottom
 --   win:SetStats(text)                small text in the top bar (left of the window controls)
 --   win:OnTouchChange(fn)             fn(isTouch) runs whenever Touch Mode changes
@@ -55,7 +64,11 @@ function UI.new(opts)
 	local minimized = false
 	local maximized = false
 	local uiHidden = false
-	local currentPage = "Main"
+	local currentPage = "Home"
+	if opts.StartPage == "Main" or opts.StartPage == "Settings" then
+		currentPage = opts.StartPage
+	end
+	local returnPage = "Home"  -- where the back arrow on Settings goes
 	local bodyParts = {}      -- everything that hides while the window is minimized
 	local ui = {}             -- layout functions and buttons shared between sections
 	local showPage = function(_name) end
@@ -276,28 +289,28 @@ function UI.new(opts)
 	local PAGE_POS = UDim2.fromOffset(0, 0)
 	local PAGE_SIZE_UD = UDim2.fromScale(1, 1)
 
-	local mainPage = new("CanvasGroup", {
-		Name = "MainPage",
-		Position = PAGE_POS,
-		Size = PAGE_SIZE_UD,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = 0,
-		Visible = true,
-	}, content)
+	local function makePage(name)
+		local shown = (name == currentPage)
+		local gt = 1
+		if shown then
+			gt = 0
+		end
+		local p = new("CanvasGroup", {
+			Name = name .. "Page",
+			Position = PAGE_POS,
+			Size = PAGE_SIZE_UD,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			GroupTransparency = gt,
+			Visible = shown,
+		}, content)
+		pad(p, 2, 2, 2, 2)
+		return p
+	end
 
-	local settingsPage = new("CanvasGroup", {
-		Name = "SettingsPage",
-		Position = PAGE_POS,
-		Size = PAGE_SIZE_UD,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = 1,
-		Visible = false,
-	}, content)
-
-	pad(mainPage, 2, 2, 2, 2)
-	pad(settingsPage, 2, 2, 2, 2)
+	local homePage = makePage("Home")
+	local mainPage = makePage("Main")
+	local settingsPage = makePage("Settings")
 
 	table.insert(bodyParts, sidebar)
 	table.insert(bodyParts, content)
@@ -305,8 +318,29 @@ function UI.new(opts)
 	W.Gui = gui
 	W.Window = window
 	W.Bar = bar
+	W.HomePage = homePage
 	W.MainPage = mainPage
 	W.SettingsPage = settingsPage
+
+	---------------------------------------------------------------------
+	-- HOME TAB CONTENT (comes from the separate homepage module)
+	---------------------------------------------------------------------
+	do
+		local mod = opts.HomeModule
+		local okBuild = false
+		if type(mod) == "table" and type(mod.build) == "function" then
+			local ok, err = pcall(mod.build, homePage, W.T, W.H, opts.Home or {})
+			if ok then
+				okBuild = true
+			else
+				warn("[ui] home page error: " .. tostring(err))
+			end
+		end
+		if not okBuild then
+			label(homePage, "Home", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+				Enum.Font.GothamBold, 18, TEXT_COLOR)
+		end
+	end
 
 	---------------------------------------------------------------------
 	-- LOGO TEXT
@@ -346,7 +380,7 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- SIDEBAR ICONS (server icon sits just above the gear, one marker slides between them)
+	-- SIDEBAR ICONS (house, server, gear; one marker slides between them)
 	---------------------------------------------------------------------
 	do
 		local TIP_X = 14 + TILE + 10
@@ -491,6 +525,39 @@ function UI.new(opts)
 			end
 		end
 
+		-- house icon: rotated rounded square for the roof, rounded body, small door cut-out
+		local function buildHome(glyph)
+			local roof = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, -4),
+				Size = UDim2.fromOffset(14, 14),
+				Rotation = 45,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(roof, 3)
+			local body = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, 4.5),
+				Size = UDim2.fromOffset(18, 11),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(body, 3)
+			local door = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 1),
+				Position = UDim2.new(0.5, 0, 0.5, 10),
+				Size = UDim2.fromOffset(4, 6),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, glyph)
+			corner(door, 2)
+			return { roof, body }
+		end
+
 		-- server icon: two stacked rounded units, each with a status dot and a dash
 		local function buildServer(glyph)
 			local inks = {}
@@ -553,6 +620,8 @@ function UI.new(opts)
 		local tipW = math.max(66, #mainTip * 7 + 20)
 		local GEAR_Y = -(14 + TILE + 8)       -- bottom edge of the gear tile
 		local SERVER_Y = GEAR_Y - TILE - 6    -- server tile sits a tiny bit above the gear
+		local HOME_Y = SERVER_Y - TILE - 6    -- house tile sits a tiny bit above the server
+		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 1, yScale = 1, yOffset = HOME_Y, build = buildHome })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
@@ -857,7 +926,7 @@ function UI.new(opts)
 	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
-		local PAGE_TITLES = { Main = mainTitle, Settings = "Settings" }
+		local PAGE_TITLES = { Home = "Home", Main = mainTitle, Settings = "Settings" }
 
 		local titleChip = new("Frame", {
 			Name = "TitleCard",
@@ -870,7 +939,7 @@ function UI.new(opts)
 
 		label(titleChip, "Tab", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
 			Enum.Font.Gotham, 11, DIM_TEXT)
-		local titleLabel = label(titleChip, PAGE_TITLES.Main, UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
+		local titleLabel = label(titleChip, PAGE_TITLES[currentPage] or currentPage, UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR)
 
 		local backBtn = new("TextButton", {
@@ -882,7 +951,7 @@ function UI.new(opts)
 			Size = UDim2.fromOffset(24, 24),
 			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
-			Visible = false,
+			Visible = (currentPage == "Settings"),
 			ZIndex = 3,
 		}, window)
 		corner(backBtn, RADIUS + 2)
@@ -937,14 +1006,18 @@ function UI.new(opts)
 
 		local titleToken = 0
 		local pageToken = 0
-		local pages = { Main = mainPage, Settings = settingsPage }
+		local pages = { Home = homePage, Main = mainPage, Settings = settingsPage }
 
 		showPage = function(name)
-			if name == currentPage then
+			if name == currentPage or not pages[name] then
 				return
 			end
+			-- Settings remembers the page you came from so the back arrow returns there
+			if name == "Settings" then
+				returnPage = currentPage
+			end
 			currentPage = name
-			backBtn.Visible = (name ~= "Main") and not minimized
+			backBtn.Visible = (name == "Settings") and not minimized
 			if ui.navUpdate then
 				ui.navUpdate()
 			end
@@ -981,7 +1054,7 @@ function UI.new(opts)
 		end
 
 		backBtn.Activated:Connect(function()
-			showPage("Main")
+			showPage(returnPage or "Home")
 		end)
 	end
 
@@ -1808,6 +1881,10 @@ function UI.new(opts)
 				warn("[ui] touch callback error: " .. tostring(err))
 			end
 		end
+	end
+
+	function W:ShowPage(name)
+		showPage(name)
 	end
 
 	function W:SetTouch(on)
