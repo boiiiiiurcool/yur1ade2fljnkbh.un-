@@ -69,6 +69,7 @@ function UI.new(opts)
 	local minimized = false
 	local maximized = false
 	local uiHidden = false
+	local confirmOpen = false   -- true while the unload dialog is showing (the window is locked)
 	local currentPage = "Home"
 	if opts.StartPage == "Main" or opts.StartPage == "Settings" or opts.StartPage == "Info" or opts.StartPage == "Combat" then
 		currentPage = opts.StartPage
@@ -1564,7 +1565,7 @@ function UI.new(opts)
 				paintKeyBtn(false)
 				return
 			end
-			if processed then
+			if processed or confirmOpen then
 				return
 			end
 			if input.KeyCode == keybind then
@@ -1577,8 +1578,9 @@ function UI.new(opts)
 	-- WINDOW BEHAVIOUR: minimize (Y1 square) / maximize / unload dialog / drag
 	---------------------------------------------------------------------
 	do
-		local normalSize = WINDOW_SIZE
-		local normalPos = window.Position
+		local normalPos = window.Position   -- where the window was before it was maximized
+		local preSize = WINDOW_SIZE         -- size it had before it was maximized
+		local sizeTweens = {}               -- running maximize / restore animations
 		local winToken = 0
 		local miniToken = 0
 		local miniSaved = nil   -- where you last left the square (nil = left middle)
@@ -1650,7 +1652,7 @@ function UI.new(opts)
 		end
 
 		local function minimizeWindow()
-			if minimized then
+			if minimized or confirmOpen then
 				return
 			end
 			closePopup()
@@ -1696,29 +1698,50 @@ function UI.new(opts)
 		ui.minimize.Activated:Connect(minimizeWindow)
 
 		ui.maximize.Activated:Connect(function()
-			if minimized then
+			if minimized or confirmOpen then
 				return
 			end
+			-- stop animations that are still running so quick double clicks cannot fight each other
+			for i = 1, #sizeTweens do
+				sizeTweens[i]:Cancel()
+			end
+			sizeTweens = {}
+
 			if maximized then
 				maximized = false
 				if ui.gripVis then
 					ui.gripVis()
 				end
-				TweenService:Create(window, SMOOTH, { Size = normalSize, Position = normalPos }):Play()
-				TweenService:Create(windowScale, SMOOTH, { Scale = fitScale }):Play()
+				-- always goes back to the normal small size. The top-left corner of the window ends up
+				-- where it was before maximizing (the window is centre-anchored, so the centre moves).
+				local sc = fitScale
+				local backPos = UDim2.new(
+					normalPos.X.Scale, normalPos.X.Offset + (WINDOW_SIZE.X.Offset - preSize.X.Offset) * sc / 2,
+					normalPos.Y.Scale, normalPos.Y.Offset + (WINDOW_SIZE.Y.Offset - preSize.Y.Offset) * sc / 2
+				)
+				local t1 = TweenService:Create(window, SMOOTH, { Size = WINDOW_SIZE, Position = backPos })
+				local t2 = TweenService:Create(windowScale, SMOOTH, { Scale = fitScale })
+				sizeTweens = { t1, t2 }
+				t1:Play()
+				t2:Play()
+				normalPos = backPos
 				return
 			end
-			normalSize = window.Size
+
+			preSize = window.Size
 			normalPos = window.Position
 			maximized = true
 			if ui.gripVis then
 				ui.gripVis()
 			end
-			TweenService:Create(window, SMOOTH, {
+			local t1 = TweenService:Create(window, SMOOTH, {
 				Size = UDim2.new(1, -48, 1, -48),
 				Position = UDim2.fromScale(0.5, 0.5),
-			}):Play()
-			TweenService:Create(windowScale, SMOOTH, { Scale = 1 }):Play()
+			})
+			local t2 = TweenService:Create(windowScale, SMOOTH, { Scale = 1 })
+			sizeTweens = { t1, t2 }
+			t1:Play()
+			t2:Play()
 		end)
 
 		-- drag the square anywhere; a tap without moving opens the window again
@@ -1774,15 +1797,19 @@ function UI.new(opts)
 		end))
 
 		-- ===== unload confirmation (pops up when you press X) =====
+		-- It is modal: while it is open nothing behind it can be clicked, dragged, resized,
+		-- minimized, maximized or toggled with the keybind. Only Cancel and Confirm work.
 		local PAD = 3
-		local confirmOpen = false
+		local DLG_W = 320
+		local BTN_W = 135
 		local confirmToken = 0
+		local confirming = false
 
 		local overlay = new("CanvasGroup", {
 			Name = "ConfirmOverlay",
 			Size = UDim2.fromScale(1, 1),
 			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
-			BackgroundTransparency = 0.45,
+			BackgroundTransparency = 0.4,
 			BorderSizePixel = 0,
 			Active = true,
 			GroupTransparency = 1,
@@ -1791,11 +1818,22 @@ function UI.new(opts)
 		}, window)
 		corner(overlay, RADIUS)
 
+		-- full size button that swallows every click and tap outside the dialog
+		new("TextButton", {
+			Name = "Blocker",
+			AutoButtonColor = false,
+			Text = "",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 30,
+		}, overlay)
+
 		local dialog = new("Frame", {
 			Name = "Dialog",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(300, 128),
+			Size = UDim2.fromOffset(DLG_W, 160),
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 			ZIndex = 31,
@@ -1805,60 +1843,187 @@ function UI.new(opts)
 
 		local dialogScale = new("UIScale", { Scale = 0.9 }, dialog)
 
-		local dialogCaption = label(dialog, "Confirm", UDim2.fromOffset(18, 14), UDim2.fromOffset(264, 12),
-			Enum.Font.Gotham, 11, DIM_TEXT)
-		dialogCaption.ZIndex = 32
+		-- title: "Yur1" with the same soft white-to-grey gradient as the logo
+		local dialogTitle = new("TextLabel", {
+			Name = "Title",
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(20, 16),
+			Size = UDim2.fromOffset(DLG_W - 40, 24),
+			Font = Enum.Font.GothamBlack,
+			Text = "Yur1",
+			TextSize = 20,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 32,
+		}, dialog)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, dialogTitle)
 
-		local dialogText = label(dialog, "Are you sure you want to unload the script?",
-			UDim2.fromOffset(18, 30), UDim2.fromOffset(264, 36), Enum.Font.GothamMedium, 13, TEXT_COLOR)
-		dialogText.TextWrapped = true
-		dialogText.TextTruncate = Enum.TextTruncate.None
-		dialogText.TextYAlignment = Enum.TextYAlignment.Top
-		dialogText.ZIndex = 32
+		local dialogText = new("TextLabel", {
+			Name = "Message",
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(20, 48),
+			Size = UDim2.fromOffset(DLG_W - 40, 54),
+			Font = Enum.Font.Gotham,
+			Text = "You will completely unload the script and you'll have to rerun the script again.",
+			TextSize = 13,
+			TextColor3 = ICON,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			ZIndex = 32,
+		}, dialog)
 
 		local trayFrame = new("Frame", {
 			Name = "ButtonTray",
-			Position = UDim2.fromOffset(18, 78),
-			Size = UDim2.fromOffset(264, 24 + PAD * 2),
+			Position = UDim2.fromOffset(20, 112),
+			Size = UDim2.fromOffset(DLG_W - 40, 30),
 			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
 			ZIndex = 32,
 		}, dialog)
 		corner(trayFrame, RADIUS + 2)
 
-		local function dialogButton(text, x, hoverColor)
+		-- cancel icon: a ring with a diagonal slash through it (the "no" sign)
+		local function buildCancelIcon(holder, inks)
+			local ring = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(12, 12),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 35,
+			}, holder)
+			corner(ring, 100)
+			local ringStroke = stroke(ring, ICON, 2, 0)
+			inks[#inks + 1] = { ringStroke, "Color" }
+
+			local slash = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(14, 2),
+				Rotation = 45,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 35,
+			}, holder)
+			corner(slash, 1)
+			inks[#inks + 1] = { slash, "BackgroundColor3" }
+		end
+
+		-- confirm icon: an open door frame with an arrow leaving through it
+		local function buildExitIcon(holder, inks)
+			local function bar(cx, cy, w, h, rot)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(cx, cy),
+					Size = UDim2.fromOffset(w, h),
+					Rotation = rot,
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 35,
+				}, holder)
+				corner(f, 1)
+				inks[#inks + 1] = { f, "BackgroundColor3" }
+			end
+			-- door frame (open on the right): post, top, bottom
+			bar(1, 8, 2, 16, 0)
+			bar(4.5, 1, 9, 2, 0)
+			bar(4.5, 15, 9, 2, 0)
+			-- arrow: shaft + two head strokes, pointing out of the door
+			bar(12.5, 8, 13, 2, 0)
+			bar(16.9, 5.9, 6, 2, 45)
+			bar(16.9, 10.1, 6, 2, -45)
+		end
+
+		-- button with an icon on the left of its text; hover paints background, text and icon
+		local function dialogButton(text, x, hoverColor, buildIcon, iconW, iconH)
 			local b = new("TextButton", {
 				AutoButtonColor = false,
-				Text = text,
-				Font = Enum.Font.GothamMedium,
-				TextSize = 13,
-				TextColor3 = ICON,
+				Text = "",
 				Position = UDim2.fromOffset(x, PAD),
-				Size = UDim2.fromOffset(127, 24),
+				Size = UDim2.fromOffset(BTN_W, 24),
 				BackgroundColor3 = hoverColor,
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
 				ZIndex = 33,
 			}, trayFrame)
 			corner(b, 4)
+
+			local row = new("Frame", {
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 34,
+			}, b)
+			new("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				Padding = UDim.new(0, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}, row)
+
+			local holder = new("Frame", {
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = UDim2.fromOffset(iconW, iconH),
+				LayoutOrder = 1,
+				ZIndex = 34,
+			}, row)
+			local inks = {}
+			buildIcon(holder, inks)
+
+			local lbl = new("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 1, 0),
+				LayoutOrder = 2,
+				Font = Enum.Font.GothamMedium,
+				Text = text,
+				TextSize = 13,
+				TextColor3 = ICON,
+				ZIndex = 34,
+			}, row)
+
+			local function paint(over)
+				local bgT = 1
+				local col = ICON
+				if over then
+					bgT = 0
+					col = ICON_HOVER
+				end
+				TweenService:Create(b, FAST, { BackgroundTransparency = bgT }):Play()
+				TweenService:Create(lbl, FAST, { TextColor3 = col }):Play()
+				for i = 1, #inks do
+					TweenService:Create(inks[i][1], FAST, { [inks[i][2]] = col }):Play()
+				end
+			end
 			b.MouseEnter:Connect(function()
-				TweenService:Create(b, FAST, { BackgroundTransparency = 0, TextColor3 = ICON_HOVER }):Play()
+				paint(true)
 			end)
 			b.MouseLeave:Connect(function()
-				TweenService:Create(b, FAST, { BackgroundTransparency = 1, TextColor3 = ICON }):Play()
+				paint(false)
 			end)
 			return b
 		end
 
-		local yesBtn = dialogButton("Yes", PAD, HOVER_RED)
-		local noBtn = dialogButton("No", PAD + 127 + 4, HOVER_GREY)
+		-- Cancel on the left, Confirm on the right
+		local cancelBtn = dialogButton("Cancel", PAD, HOVER_GREY, buildCancelIcon, 18, 18)
+		local confirmBtn = dialogButton("Confirm", PAD + BTN_W + 4, HOVER_RED, buildExitIcon, 20, 16)
 
 		ui.layoutDialog = function()
 			local th = M.dlgBtn + PAD * 2
-			dialog.Size = UDim2.fromOffset(300, 78 + th + 20)
-			trayFrame.Size = UDim2.fromOffset(264, th)
-			yesBtn.Size = UDim2.fromOffset(127, M.dlgBtn)
-			noBtn.Size = UDim2.fromOffset(127, M.dlgBtn)
+			dialog.Size = UDim2.fromOffset(DLG_W, 112 + th + 20)
+			trayFrame.Size = UDim2.fromOffset(DLG_W - 40, th)
+			cancelBtn.Size = UDim2.fromOffset(BTN_W, M.dlgBtn)
+			confirmBtn.Size = UDim2.fromOffset(BTN_W, M.dlgBtn)
 		end
 		ui.layoutDialog()
 
@@ -1870,6 +2035,7 @@ function UI.new(opts)
 				return
 			end
 			confirmOpen = true
+			confirming = false
 			confirmToken = confirmToken + 1
 			closePopup()
 			overlay.GroupTransparency = 1
@@ -1880,7 +2046,7 @@ function UI.new(opts)
 		end
 
 		local function hideConfirm()
-			if not confirmOpen then
+			if not confirmOpen or confirming then
 				return
 			end
 			confirmOpen = false
@@ -1902,7 +2068,11 @@ function UI.new(opts)
 			showConfirm()
 		end)
 
-		yesBtn.Activated:Connect(function()
+		confirmBtn.Activated:Connect(function()
+			if confirming then
+				return
+			end
+			confirming = true
 			confirmToken = confirmToken + 1
 			TweenService:Create(window, CONFIRM_OUT, { GroupTransparency = 1 }):Play()
 			TweenService:Create(windowScale, CONFIRM_OUT, { Scale = windowScale.Scale * 0.92 }):Play()
@@ -1911,7 +2081,7 @@ function UI.new(opts)
 			end)
 		end)
 
-		noBtn.Activated:Connect(hideConfirm)
+		cancelBtn.Activated:Connect(hideConfirm)
 
 		-- ===== drag the top bar (or the empty sidebar) to move; disabled while maximized =====
 		local dragging = false
@@ -1920,7 +2090,7 @@ function UI.new(opts)
 
 		local function bindDrag(handle)
 			handle.InputBegan:Connect(function(input)
-				if maximized or minimized then
+				if maximized or minimized or confirmOpen then
 					return
 				end
 				if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -2016,7 +2186,7 @@ function UI.new(opts)
 		end
 
 		grip.InputBegan:Connect(function(input)
-			if maximized or minimized then
+			if maximized or minimized or confirmOpen then
 				return
 			end
 			if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -2029,7 +2199,6 @@ function UI.new(opts)
 					if input.UserInputState == Enum.UserInputState.End then
 						resizing = false
 						paintGrip(false)
-						normalSize = window.Size
 						normalPos = window.Position
 					end
 				end)
