@@ -8,8 +8,8 @@
 --   Aimbot.build(parentFrame, themeTable, helperTable, opts)
 --
 -- Layout: an "Enable" row with a switch and a "..." (three dots) button. The dots open one small
--- settings panel next to them (Aimbot: Key, Mode, Target Lock). It closes when you click anywhere
--- else. Aim Type, Target, Distance, Prediction and Smoothness stay on the page as cards.
+-- settings panel next to them (Aimbot: Key, Mode, Aim Type, Target Lock). Clicking the dots again,
+-- or anywhere else, closes it. Target, Distance, Prediction and Smoothness stay on the page as cards.
 --
 --   Aim Type   Mouse  = the camera turns so the target moves toward your CURSOR
 --                         (also works with a locked cursor: first person / shift lock = screen middle)
@@ -508,10 +508,9 @@ function AimbotPage.build(parent, T, H, opts)
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -58, 0, 23),
 		Size = UDim2.fromOffset(32, 26),
-		BackgroundColor3 = T.CLUSTER_BG,
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, enableCard)
-	corner(dotsBtn, RADIUS + 2)
 
 	local dotParts = {}
 	for i = 1, 3 do
@@ -525,10 +524,6 @@ function AimbotPage.build(parent, T, H, opts)
 		corner(d, 100)
 		dotParts[i] = d
 	end
-
-	segmentedCard(1, "Aim Type", { "Mouse", "Camera" }, S.aim, function(v)
-		S.aim = v
-	end)
 
 	segmentedCard(1, "Target", { "Head", "Torso", "Arms", "Legs" }, S.part, function(v)
 		S.part = v
@@ -587,7 +582,7 @@ function AimbotPage.build(parent, T, H, opts)
 	--   Aimbot (title) / Key / Mode / Target Lock
 	---------------------------------------------------------------------
 	local POP_W = 264
-	local POP_H = 208
+	local POP_H = 256
 	-- it sits right next to the dots (the dots end 58px from the right edge of the card)
 	local POP_SHOWN = UDim2.new(1, -50, 0, -8)
 	local POP_HIDDEN = UDim2.new(1, -60, 0, -8)
@@ -638,17 +633,20 @@ function AimbotPage.build(parent, T, H, opts)
 		setActive(false)
 	end)
 
-	line(148)
+	-- Aim Type
+	segmented(popup, 146, 16, "Aim Type", { "Mouse", "Camera" }, S.aim, function(v)
+		S.aim = v
+	end)
 
-	-- Target Lock
-	label(popup, "Target Lock", UDim2.fromOffset(16, 158), UDim2.new(1, -90, 0, 16),
+	line(204)
+
+	-- Target Lock (one line, switch on the right)
+	label(popup, "Target Lock", UDim2.fromOffset(16, 214), UDim2.new(1, -90, 0, 28),
 		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	label(popup, "Stay on one target until it is gone", UDim2.fromOffset(16, 176), UDim2.new(1, -90, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
 	makeSwitch(popup, S.lockOn, function(on)
 		S.lockOn = on
 		locked = nil
-	end, 176, 16)
+	end, 228, 16)
 
 	---------------------------------------------------------------------
 	-- open / close the panel
@@ -656,15 +654,14 @@ function AimbotPage.build(parent, T, H, opts)
 	local popupOpen = false
 	local popupToken = 0
 	local dotsOver = false
+	local popupOver = false
 
+	-- no background: only the dots change colour (lit while hovered or while the panel is open)
 	local function paintDots()
-		local bg = T.CLUSTER_BG
 		local colr = T.ICON
 		if popupOpen or dotsOver then
-			bg = T.HOVER_GREY
 			colr = T.ICON_HOVER
 		end
-		TweenService:Create(dotsBtn, FAST, { BackgroundColor3 = bg }):Play()
 		for i = 1, #dotParts do
 			TweenService:Create(dotParts[i], FAST, { BackgroundColor3 = colr }):Play()
 		end
@@ -676,6 +673,7 @@ function AimbotPage.build(parent, T, H, opts)
 		end
 		popupOpen = true
 		popupToken = popupToken + 1
+		popupOver = false
 		popup.Position = POP_HIDDEN
 		popup.GroupTransparency = 1
 		popup.Visible = true
@@ -689,6 +687,7 @@ function AimbotPage.build(parent, T, H, opts)
 		end
 		popupOpen = false
 		popupToken = popupToken + 1
+		popupOver = false
 		local token = popupToken
 		-- stop recording a key if the panel goes away in the middle of it
 		if listening then
@@ -712,6 +711,12 @@ function AimbotPage.build(parent, T, H, opts)
 		dotsOver = false
 		paintDots()
 	end)
+	popup.MouseEnter:Connect(function()
+		popupOver = true
+	end)
+	popup.MouseLeave:Connect(function()
+		popupOver = false
+	end)
 	dotsBtn.Activated:Connect(function()
 		if popupOpen then
 			closePopup()
@@ -720,15 +725,24 @@ function AimbotPage.build(parent, T, H, opts)
 		end
 	end)
 
-	-- true when the pointer of this input is over a gui object
-	-- (input positions leave out the top inset, the gui does not, so add it back)
-	local function overGui(obj, input)
-		local inset = GuiService:GetGuiInset()
-		local px = input.Position.X + inset.X
-		local py = input.Position.Y + inset.Y
+	-- true when the pointer of this input is over a gui object.
+	-- Mouse: GetMouseLocation is in the same screen space as AbsolutePosition (the window gui
+	-- ignores the top inset), so no inset maths is needed. Touch: the input position may or may not
+	-- include the top inset on a given device, so both readings are tried.
+	local function inRect(obj, x, y)
 		local p = obj.AbsolutePosition
 		local sz = obj.AbsoluteSize
-		return px >= p.X and px <= p.X + sz.X and py >= p.Y and py <= p.Y + sz.Y
+		return x >= p.X and x <= p.X + sz.X and y >= p.Y and y <= p.Y + sz.Y
+	end
+
+	local function pointerOver(obj, input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			local inset = GuiService:GetGuiInset()
+			return inRect(obj, input.Position.X, input.Position.Y)
+				or inRect(obj, input.Position.X + inset.X, input.Position.Y + inset.Y)
+		end
+		local m = UserInputService:GetMouseLocation()
+		return inRect(obj, m.X, m.Y)
 	end
 
 	-- leaving the Combat tab closes the panel too
@@ -969,7 +983,8 @@ function AimbotPage.build(parent, T, H, opts)
 		-- a click or tap anywhere except the panel (and the dots) closes the panel
 		if popupOpen and (input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch) then
-			if not overGui(popup, input) and not overGui(dotsBtn, input) then
+			local inside = popupOver or dotsOver or pointerOver(popup, input) or pointerOver(dotsBtn, input)
+			if not inside then
 				closePopup()
 			end
 		end
