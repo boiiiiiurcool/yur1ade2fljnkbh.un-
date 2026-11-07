@@ -208,19 +208,36 @@ function InfoPage.build(parent, T, H, opts)
 	section("Credits", 444)
 	local cred = card(468, 76)
 
-	-- Discord symbol drawn with shapes: blurple tile, white face, two eyes
-	local BLURPLE = Color3.fromRGB(88, 101, 242)
-	local tile = new("Frame", {
-		Name = "DiscordSymbol",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 16, 0.5, 0),
-		Size = UDim2.fromOffset(44, 44),
-		BackgroundColor3 = BLURPLE,
+	-- text on the left
+	local credText = label(cred, "<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord",
+		UDim2.fromOffset(18, 10), UDim2.new(1, -206, 1, -20), Enum.Font.GothamMedium, 13, T.TEXT_COLOR, LEFT)
+	credText.RichText = true
+	credText.TextWrapped = true
+	credText.TextTruncate = Enum.TextTruncate.None
+	credText.TextYAlignment = Enum.TextYAlignment.Center
+
+	-- Discord lockup on the right: white Clyde mark + bold "Discord" wordmark (drawn with shapes)
+	local lock = new("Frame", {
+		Name = "DiscordLockup",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -20, 0.5, 0),
+		Size = UDim2.fromOffset(148, 36),
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, cred)
-	corner(tile, 12)
 
-	local function tileShape(x, y, w, h, r, color, rot)
+	local mark = new("Frame", {
+		Name = "Mark",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(34, 28),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, lock)
+
+	local WHITE = Color3.new(1, 1, 1)
+	local CUT = T.SIDEBAR_BG   -- cut-outs use the card colour
+	local function markShape(x, y, w, h, r, color, rot)
 		local f = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.new(0.5, x, 0.5, y),
@@ -229,24 +246,21 @@ function InfoPage.build(parent, T, H, opts)
 			BackgroundColor3 = color,
 			BorderSizePixel = 0,
 			ZIndex = 2,
-		}, tile)
+		}, mark)
 		corner(f, r)
 		return f
 	end
-	local WHITE = Color3.new(1, 1, 1)
-	tileShape(0, 0, 28, 20, 9, WHITE)            -- face
-	tileShape(-11, -9, 7, 6, 3, WHITE, -20)      -- left ear
-	tileShape(11, -9, 7, 6, 3, WHITE, 20)        -- right ear
-	tileShape(-5.5, 0, 4, 7, 2, BLURPLE)         -- left eye
-	tileShape(5.5, 0, 4, 7, 2, BLURPLE)          -- right eye
-	tileShape(0, 7, 10, 2, 1, BLURPLE)           -- small mouth
+	markShape(0, 1, 30, 20, 9, WHITE)          -- body
+	markShape(-11, -8, 9, 6, 3, WHITE, -25)    -- left ear
+	markShape(11, -8, 9, 6, 3, WHITE, 25)      -- right ear
+	markShape(0, -10, 14, 6, 100, CUT)         -- dip between the ears
+	markShape(-6, 2, 5, 7, 100, CUT, 8)        -- left eye
+	markShape(6, 2, 5, 7, 100, CUT, -8)        -- right eye
+	markShape(0, 12, 8, 4, 100, CUT)           -- soft notch at the bottom
 
-	local credText = label(cred, "<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord",
-		UDim2.fromOffset(74, 10), UDim2.new(1, -90, 1, -20), Enum.Font.GothamMedium, 13, T.TEXT_COLOR, LEFT)
-	credText.RichText = true
-	credText.TextWrapped = true
-	credText.TextTruncate = Enum.TextTruncate.None
-	credText.TextYAlignment = Enum.TextYAlignment.Center
+	local word = label(lock, "Discord", UDim2.fromOffset(42, 0), UDim2.new(1, -42, 1, 0),
+		Enum.Font.GothamBlack, 22, WHITE, LEFT)
+	word.TextYAlignment = Enum.TextYAlignment.Center
 
 	return { Root = root }
 end
