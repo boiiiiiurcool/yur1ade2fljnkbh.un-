@@ -5,7 +5,9 @@
 -- than the window:
 --   Overview     : account (profile picture + username) and plan, license + time remaining
 --   yur1 info    : yur1 version, yur1 status, supported games
---   Executor info: which executor is running (if it can be detected) and its version
+--   Executor info: which executor is running (if it can be detected), its version, and a feature
+--                  support line: Xeno and Solara say "Some features might not be supported due to
+--                  sunc and unc", every other executor says "Features are supported"
 --   Credits      : who made yur1 + Discord symbol
 --
 --   local InfoPage = <this file>
@@ -32,13 +34,14 @@ function InfoPage.build(parent, T, H, opts)
 	local INF = utf8.char(8734)   -- infinity symbol (kept out of the file so it stays ASCII)
 	local LEFT = Enum.TextXAlignment.Left
 	local RIGHT = Enum.TextXAlignment.Right
+	local WARN = Color3.fromRGB(255, 190, 90)   -- amber for the "some features" warning
 
 	local root = new("ScrollingFrame", {
 		Name = "InfoRoot",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		CanvasSize = UDim2.new(0, 0, 0, 560),
+		CanvasSize = UDim2.new(0, 0, 0, 618),
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ScrollBarThickness = 3,
 		ScrollBarImageColor3 = T.HOVER_GREY,
@@ -197,16 +200,32 @@ function InfoPage.build(parent, T, H, opts)
 	end
 
 	section("Executor info", 342)
-	local exec = card(366, 58)
+	local exec = card(366, 116)
 	divider(exec, UDim2.new(0.5, 0, 0, 10), UDim2.fromOffset(1, 38))
+	divider(exec, UDim2.fromOffset(14, 58), UDim2.new(1, -28, 0, 1))
 	cell(exec, 0, 0, "Executor", execName)
 	cell(exec, 1, 0, "Version", execVersion)
+
+	-- Xeno and Solara do not fully support sUNC / UNC, every other executor is shown as supported
+	local lowerName = string.lower(execName)
+	local limited = false
+	if string.find(lowerName, "xeno", 1, true) or string.find(lowerName, "solara", 1, true) then
+		limited = true
+	end
+	local featText = "Features are supported"
+	local featColor = T.GREEN
+	if limited then
+		featText = "Some features might not be supported due to sunc and unc"
+		featColor = WARN
+	end
+	local featV = cell(exec, 2, 58, "Feature Support", featText, featColor, 12)
+	featV.Font = Enum.Font.GothamMedium
 
 	---------------------------------------------------------------------
 	-- CREDITS
 	---------------------------------------------------------------------
-	section("Credits", 444)
-	local cred = card(468, 76)
+	section("Credits", 502)
+	local cred = card(526, 76)
 
 	-- text on the left
 	local credText = label(cred, "<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord",
