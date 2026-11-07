@@ -9,18 +9,19 @@
 --   local win = UI.new({
 --       Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater",
 --       Position = positionFromWelcome,
---       StartPage = "Home",            -- "Home" (default), "Main" or "Settings"
+--       StartPage = "Home",            -- "Home" (default), "Info", "Main" or "Settings"
 --       HomeModule = HomePage,         -- the homepage.lua module
+--       InfoModule = InfoPage,         -- the infopage.lua module
 --       Home = { Product = "yur1", Subtitle = "...", Access = "Lifetime access",
 --                Build = "Beta 0.6", Component = "Rock and Roll by reruinz" },
 --   })
 --
 -- What you get back:
---   win.HomePage / win.MainPage / win.SettingsPage   frames you put your controls in
+--   win.HomePage / win.InfoPage / win.MainPage / win.SettingsPage   frames you put your controls in
 --   win.T                             theme colours, radii and tween infos
 --   win.H                             helpers: new, corner, stroke, pad, label, hoverable
 --   win.Touch                         true while Touch Mode is on
---   win:ShowPage("Home" | "Main" | "Settings")
+--   win:ShowPage("Home" | "Info" | "Main" | "Settings")
 --   win:Toast(text)                   small pop-up at the bottom
 --   win:SetStats(text)                small text in the top bar (left of the window controls)
 --   win:OnTouchChange(fn)             fn(isTouch) runs whenever Touch Mode changes
@@ -65,7 +66,7 @@ function UI.new(opts)
 	local maximized = false
 	local uiHidden = false
 	local currentPage = "Home"
-	if opts.StartPage == "Main" or opts.StartPage == "Settings" then
+	if opts.StartPage == "Main" or opts.StartPage == "Settings" or opts.StartPage == "Info" then
 		currentPage = opts.StartPage
 	end
 	local returnPage = "Home"  -- where the back arrow on Settings goes
@@ -310,6 +311,7 @@ function UI.new(opts)
 
 	local homePage = makePage("Home")
 	local mainPage = makePage("Main")
+	local infoPage = makePage("Info")
 	local settingsPage = makePage("Settings")
 
 	table.insert(bodyParts, sidebar)
@@ -319,6 +321,7 @@ function UI.new(opts)
 	W.Window = window
 	W.Bar = bar
 	W.HomePage = homePage
+	W.InfoPage = infoPage
 	W.MainPage = mainPage
 	W.SettingsPage = settingsPage
 
@@ -329,7 +332,14 @@ function UI.new(opts)
 		local mod = opts.HomeModule
 		local okBuild = false
 		if type(mod) == "table" and type(mod.build) == "function" then
-			local ok, err = pcall(mod.build, homePage, W.T, W.H, opts.Home or {})
+			local homeOpts = {}
+			for k, v in pairs(opts.Home or {}) do
+				homeOpts[k] = v
+			end
+			homeOpts.OnNext = function()
+				showPage("Info")
+			end
+			local ok, err = pcall(mod.build, homePage, W.T, W.H, homeOpts)
 			if ok then
 				okBuild = true
 			else
@@ -338,6 +348,26 @@ function UI.new(opts)
 		end
 		if not okBuild then
 			label(homePage, "Home", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+				Enum.Font.GothamBold, 18, TEXT_COLOR)
+		end
+	end
+
+	---------------------------------------------------------------------
+	-- INFO TAB CONTENT (comes from the separate infopage module)
+	---------------------------------------------------------------------
+	do
+		local mod = opts.InfoModule
+		local okBuild = false
+		if type(mod) == "table" and type(mod.build) == "function" then
+			local ok, err = pcall(mod.build, infoPage, W.T, W.H, opts.Info or {})
+			if ok then
+				okBuild = true
+			else
+				warn("[ui] info page error: " .. tostring(err))
+			end
+		end
+		if not okBuild then
+			label(infoPage, "Info", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
 				Enum.Font.GothamBold, 18, TEXT_COLOR)
 		end
 	end
@@ -529,68 +559,76 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon (outline style): a rounded diamond outline clipped to its top half makes the
-		-- roof, a rounded outline box clipped to its lower part makes the walls (no top edge),
-		-- plus a small door. Only outlines, no fill, no text.
+		-- house icon, same style as the server and gear icons: solid rounded shapes + a cut-out.
+		-- Roof = a rounded diamond (same trick as the gear). The body is drawn over its lower half,
+		-- and only the two small wedges that stick out at the sides stay visible, which gives the
+		-- roof soft rounded eaves. The door is cut out with the sidebar colour.
 		local function buildHome(glyph)
-			local inks = {}
-
-			-- roof: only the part of the diamond above y = 0 is shown
-			local roofClip = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.new(0.5, 0, 0.5, -12),
-				Size = UDim2.fromOffset(26, 12),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ClipsDescendants = true,
-				ZIndex = 3,
-			}, glyph)
 			local roof = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0, 11),
-				Size = UDim2.fromOffset(11, 11),
+				Position = UDim2.new(0.5, 0, 0.5, -3),
+				Size = UDim2.fromOffset(14, 14),
 				Rotation = 45,
-				BackgroundTransparency = 1,
+				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, roofClip)
-			corner(roof, 3)
-			table.insert(inks, stroke(roof, ICON, 2, 0))
-
-			-- walls: a tall outline box, only its lower part is shown (the top edge is cut away)
-			local wallClip = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.new(0.5, 0, 0.5, 0),
-				Size = UDim2.fromOffset(20, 12),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ClipsDescendants = true,
 				ZIndex = 3,
 			}, glyph)
-			local walls = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0, 11),
-				Size = UDim2.fromOffset(14, 18),
-				BackgroundTransparency = 1,
+			corner(roof, 3)
+
+			local body = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, -2),
+				Size = UDim2.fromOffset(15, 12),
+				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
-			}, wallClip)
-			corner(walls, 4)
-			table.insert(inks, stroke(walls, ICON, 2, 0))
+			}, glyph)
+			corner(body, 3)
 
-			-- door
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
 				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(6, 7),
-				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(5, 6),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, glyph)
+			corner(door, 2)
+
+			return { roof, body }
+		end
+
+		-- info icon (ID card): a solid rounded card with cut-outs: a person on the left,
+		-- three text lines on the right
+		local function buildInfo(glyph)
+			local card = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(24, 18),
+				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(door, 2)
-			table.insert(inks, stroke(door, ICON, 1.5, 0))
-
-			return inks
+			corner(card, 4)
+			local function cut(x, y, w, h, r, anchorX)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(anchorX or 0, 0),
+					Position = UDim2.fromOffset(x, y),
+					Size = UDim2.fromOffset(w, h),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					ZIndex = 4,
+				}, card)
+				corner(f, r)
+			end
+			-- person: head + shoulders
+			cut(8, 4, 5, 5, 3, 0.5)
+			cut(8, 10, 9, 5, 3, 0.5)
+			-- text lines
+			cut(14, 5, 7, 2, 1)
+			cut(14, 9, 7, 2, 1)
+			cut(14, 13, 4, 2, 1)
+			return { card }
 		end
 
 		-- server icon: two stacked rounded units, each with a status dot and a dash
@@ -655,8 +693,10 @@ function UI.new(opts)
 		local tipW = math.max(66, #mainTip * 7 + 20)
 		local GEAR_Y = -(14 + TILE + 8)       -- bottom edge of the gear tile
 		local SERVER_Y = GEAR_Y - TILE - 6    -- server tile sits a tiny bit above the gear
-		local HOME_Y = SERVER_Y - TILE - 6    -- house tile sits a tiny bit above the server
+		local INFO_Y = SERVER_Y - TILE - 6    -- ID card tile sits a tiny bit above the server
+		local HOME_Y = INFO_Y - TILE - 6      -- house tile sits a tiny bit above the ID card
 		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 1, yScale = 1, yOffset = HOME_Y, build = buildHome })
+		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 1, yScale = 1, yOffset = INFO_Y, build = buildInfo })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
@@ -961,7 +1001,7 @@ function UI.new(opts)
 	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
-		local PAGE_TITLES = { Home = "Home", Main = mainTitle, Settings = "Settings" }
+		local PAGE_TITLES = { Home = "Home", Info = "Info tab", Main = mainTitle, Settings = "Settings" }
 
 		local titleChip = new("Frame", {
 			Name = "TitleCard",
@@ -1041,7 +1081,7 @@ function UI.new(opts)
 
 		local titleToken = 0
 		local pageToken = 0
-		local pages = { Home = homePage, Main = mainPage, Settings = settingsPage }
+		local pages = { Home = homePage, Info = infoPage, Main = mainPage, Settings = settingsPage }
 
 		showPage = function(name)
 			if name == currentPage or not pages[name] then
@@ -1797,8 +1837,9 @@ function UI.new(opts)
 		end))
 
 		-- ===== resize: drag the grip in the bottom-right corner =====
-		local MIN_W = 520
-		local MIN_H = 340
+		-- the window can only grow from its original size, never get smaller
+		local MIN_W = WINDOW_SIZE.X.Offset
+		local MIN_H = WINDOW_SIZE.Y.Offset
 		local resizing = false
 		local rStart = nil
 		local rSize = nil
