@@ -196,13 +196,13 @@ function HomePage.build(parent, T, H, opts)
 	}, card)
 	corner(cardImage, 16)
 
-	-- NEXT button under the game card, same width as the card (does nothing yet)
+	-- NEXT button under the game card, same width as the card (opens the Info tab via opts.OnNext)
 	local TweenService = game:GetService("TweenService")
 	local nextBtn = new("TextButton", {
 		Name = "NextButton",
 		AutoButtonColor = false,
 		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -28, 0.5, 80),
+		Position = UDim2.new(1, -28, 0.5, 92),
 		Size = UDim2.fromOffset(CARD_S, 38),
 		BackgroundColor3 = T.JOIN_BG,
 		BorderSizePixel = 0,
@@ -221,6 +221,11 @@ function HomePage.build(parent, T, H, opts)
 	nextBtn.MouseLeave:Connect(function()
 		TweenService:Create(nextBtn, nextInfo, { BackgroundColor3 = T.JOIN_BG }):Play()
 		TweenService:Create(nextScale, nextInfo, { Scale = 1 }):Play()
+	end)
+	nextBtn.Activated:Connect(function()
+		if type(opts.OnNext) == "function" then
+			opts.OnNext()
+		end
 	end)
 	nextBtn.MouseButton1Down:Connect(function()
 		TweenService:Create(nextScale, nextInfo, { Scale = 0.97 }):Play()
