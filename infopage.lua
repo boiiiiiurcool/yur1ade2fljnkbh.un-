@@ -226,44 +226,64 @@ function InfoPage.build(parent, T, H, opts)
 		BorderSizePixel = 0,
 	}, cred)
 
+	-- Discord mark: the real Discord logo shape, taken from the official outline and drawn with
+	-- small frames. Each entry is { x, y, width, height, opacity in sixteenths }. Edge pixels use a
+	-- lower opacity so the curves look smooth. The eyes are real holes (nothing is drawn there).
+	local WHITE = Color3.new(1, 1, 1)
+	local MARK_W = 32
+	local MARK_H = 26
+	local MARK = {
+		{8,2,1,1,4}, {9,2,1,1,8}, {10,2,1,1,12}, {11,2,1,1,15}, {12,2,1,1,2}, {19,2,1,1,2},
+		{20,2,1,1,14}, {21,2,1,1,12}, {22,2,1,1,8}, {23,2,1,1,4}, {5,3,1,1,2}, {6,3,1,1,8},
+		{7,3,1,1,14}, {8,3,4,1,16}, {12,3,1,1,11}, {13,3,1,1,9}, {14,3,1,1,10}, {15,3,2,1,11},
+		{17,3,1,1,10}, {18,3,1,1,9}, {19,3,1,1,11}, {20,3,4,1,16}, {24,3,1,1,14}, {25,3,1,1,8},
+		{26,3,1,1,2}, {5,4,1,1,13}, {6,4,20,1,16}, {26,4,1,1,13}, {4,5,1,1,7}, {5,5,22,2,16},
+		{27,5,1,1,7}, {3,6,1,1,1}, {4,6,1,1,15}, {27,6,1,1,15}, {28,6,1,1,1}, {3,7,1,1,8},
+		{4,7,24,2,16}, {28,7,1,1,8}, {2,8,1,1,1}, {3,8,1,1,15}, {28,8,1,1,15}, {29,8,1,1,1},
+		{2,9,1,1,6}, {3,9,26,2,16}, {29,9,1,1,6}, {2,10,1,1,12}, {29,10,1,1,12}, {1,11,1,1,1},
+		{2,11,7,1,16}, {9,11,1,1,15}, {10,11,1,1,10}, {11,11,1,1,9}, {12,11,1,1,15}, {13,11,6,1,16},
+		{19,11,1,1,15}, {20,11,2,1,10}, {22,11,1,1,15}, {23,11,7,1,16}, {30,11,1,1,1}, {1,12,1,1,6},
+		{2,12,6,4,16}, {8,12,1,1,15}, {9,12,1,1,2}, {12,12,1,1,2}, {13,12,1,1,14}, {14,12,4,5,16},
+		{18,12,1,1,15}, {19,12,1,1,2}, {22,12,1,1,2}, {23,12,1,1,15}, {24,12,6,5,16}, {30,12,1,1,5},
+		{1,13,1,1,9}, {8,13,1,1,8}, {13,13,1,1,7}, {18,13,1,1,8}, {23,13,1,1,8}, {30,13,1,1,9},
+		{1,14,1,1,12}, {8,14,1,1,5}, {13,14,1,1,4}, {18,14,1,1,4}, {23,14,1,1,5}, {30,14,1,1,12},
+		{1,15,1,1,14}, {8,15,1,1,7}, {13,15,1,1,6}, {18,15,1,1,7}, {23,15,1,1,7}, {30,15,1,1,14},
+		{1,16,7,1,16}, {8,16,1,1,14}, {9,16,1,1,1}, {12,16,1,1,1}, {13,16,1,1,13}, {18,16,1,1,14},
+		{19,16,1,1,1}, {22,16,1,1,1}, {23,16,1,1,14}, {30,16,1,1,15}, {1,17,8,1,16}, {9,17,1,1,14},
+		{10,17,2,1,7}, {12,17,1,1,14}, {13,17,6,1,16}, {19,17,1,1,14}, {20,17,2,1,7}, {22,17,1,1,14},
+		{23,17,8,1,16}, {1,18,30,2,16}, {31,18,1,1,1}, {1,20,1,1,15}, {2,20,6,1,16}, {8,20,1,1,11},
+		{9,20,1,1,15}, {10,20,12,1,16}, {22,20,1,1,15}, {23,20,1,1,11}, {24,20,6,1,16}, {30,20,1,1,15},
+		{1,21,1,1,6}, {2,21,1,1,15}, {3,21,5,1,16}, {8,21,1,1,10}, {9,21,1,1,3}, {10,21,1,1,6},
+		{11,21,1,1,10}, {12,21,1,1,14}, {13,21,6,1,16}, {19,21,1,1,15}, {20,21,1,1,10}, {21,21,1,1,6},
+		{22,21,1,1,3}, {23,21,1,1,10}, {24,21,5,1,16}, {29,21,1,1,15}, {30,21,1,1,5}, {2,22,1,1,2},
+		{3,22,1,1,10}, {4,22,6,1,16}, {10,22,1,1,2}, {13,22,1,1,1}, {14,22,1,1,3}, {15,22,2,1,4},
+		{17,22,1,1,3}, {18,22,1,1,1}, {21,22,1,1,3}, {22,22,6,1,16}, {28,22,1,1,10}, {29,22,1,1,2},
+		{4,23,1,1,3}, {5,23,1,1,10}, {6,23,3,1,16}, {9,23,1,1,11}, {22,23,1,1,11}, {23,23,3,1,16},
+		{26,23,1,1,10}, {27,23,1,1,3}, {6,24,1,1,2}, {7,24,1,1,8}, {8,24,1,1,12}, {9,24,1,1,1},
+		{22,24,1,1,2}, {23,24,1,1,12}, {24,24,1,1,8}, {25,24,1,1,2},
+	}
+
 	local mark = new("Frame", {
 		Name = "Mark",
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.fromOffset(34, 28),
+		Size = UDim2.fromOffset(MARK_W, MARK_H),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, lock)
 
-	-- Shape follows the real Discord mark: wide rounded body, narrower top with two tiny bumps,
-	-- two tall eyes, and two small feet at the bottom corners with a soft notch between them.
-	local WHITE = Color3.new(1, 1, 1)
-	local CUT = T.SIDEBAR_BG   -- cut-outs use the card colour
-	local function markShape(x, y, w, h, r, color, rot)
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, x, 0.5, y),
-			Size = UDim2.fromOffset(w, h),
-			Rotation = rot or 0,
-			BackgroundColor3 = color,
+	for i = 1, #MARK do
+		local r = MARK[i]
+		new("Frame", {
+			Position = UDim2.fromOffset(r[1], r[2]),
+			Size = UDim2.fromOffset(r[3], r[4]),
+			BackgroundColor3 = WHITE,
+			BackgroundTransparency = 1 - (r[5] / 16),
 			BorderSizePixel = 0,
-			ZIndex = 2,
 		}, mark)
-		corner(f, r)
-		return f
 	end
-	markShape(0, -1, 28, 18, 6, WHITE)         -- body (wide, rounded): spans y -10 to 8
-	markShape(-14, -10, 5, 5, 0, CUT, 45)      -- cuts the top-left corner so the top is narrower
-	markShape(14, -10, 5, 5, 0, CUT, 45)       -- cuts the top-right corner
-	markShape(-5, -10.2, 4, 1.5, 1, WHITE)     -- tiny bump on top (left), only about 1px high
-	markShape(5, -10.2, 4, 1.5, 1, WHITE)      -- tiny bump on top (right)
-	markShape(-7, 9, 3, 3, 1, WHITE)           -- small foot, bottom left
-	markShape(7, 9, 3, 3, 1, WHITE)            -- small foot, bottom right
-	markShape(0, 8.8, 9, 2, 100, CUT)          -- very soft notch between the feet
-	markShape(-5.2, 0, 5, 6, 100, CUT)         -- left eye (tall oval)
-	markShape(5.2, 0, 5, 6, 100, CUT)          -- right eye (tall oval)
 
-	local word = label(lock, "Discord", UDim2.fromOffset(42, 0), UDim2.new(1, -42, 1, 0),
+	local word = label(lock, "Discord", UDim2.fromOffset(40, 0), UDim2.new(1, -40, 1, 0),
 		Enum.Font.GothamBlack, 22, WHITE, LEFT)
 	word.TextYAlignment = Enum.TextYAlignment.Center
 
