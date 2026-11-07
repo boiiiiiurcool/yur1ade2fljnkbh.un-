@@ -525,43 +525,34 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon: two thick bars make the roof, a rounded body and a small door cut-out
+		-- house icon: no rotated frames (they look jagged at this size). The roof is a stack of
+		-- 1px rows that grow by 1px on each side (a clean 45 degree edge), under it a body and a door.
 		local function buildHome(glyph)
 			local inks = {}
-			local body = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, 1),
-				Size = UDim2.fromOffset(14, 14),
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, glyph)
-			corner(body, 2)
-			table.insert(inks, body)
-			local function roofBar(x, rot)
+			local function row(y, w, h)
 				local f = new("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.new(0.5, x, 0.5, -6.4),
-					Size = UDim2.fromOffset(18, 4),
-					Rotation = rot,
+					AnchorPoint = Vector2.new(0.5, 0),
+					Position = UDim2.new(0.5, 0, 0.5, y),
+					Size = UDim2.fromOffset(w, h),
 					BackgroundColor3 = ICON,
 					BorderSizePixel = 0,
 					ZIndex = 3,
 				}, glyph)
-				corner(f, 2)
 				table.insert(inks, f)
+				return f
 			end
-			roofBar(-3.7, -35)
-			roofBar(3.7, 35)
+			for i = 0, 10 do
+				row(-10 + i, 2 + i * 2, 1)
+			end
+			row(1, 16, 9)
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0.5, 8),
-				Size = UDim2.fromOffset(4, 7),
+				Position = UDim2.new(0.5, 0, 0.5, 10),
+				Size = UDim2.fromOffset(4, 6),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
 			}, glyph)
-			corner(door, 2)
 			return inks
 		end
 
