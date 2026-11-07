@@ -2,8 +2,8 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Same look as ui.lua: small black window with tiny rounded corners and a close button.
--- It shows ONLY a spinning wheel with "Loading everything safely". No profile, no user ID,
--- no game card, no tiles.
+-- It shows the "yur1" title (gradient text) and a spinning wheel with "Loading everything safely".
+-- No profile, no user ID, no game card, no tiles.
 --
 -- The Continue button only appears after WaitSeconds (default 10) AND once SetState("ready")
 -- was called. Enter cannot skip the wait either.
@@ -14,6 +14,7 @@
 --   local Welcome = <this file>
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
+--       Title = "yur1",
 --       ButtonText = "Continue",
 --       WaitSeconds = 10,
 --       OnContinue = function(position) end,
@@ -30,6 +31,7 @@ local Welcome = {}
 function Welcome.new(opts)
 	opts = opts or {}
 	local guiName = opts.Name or "Y1Welcome"
+	local title = opts.Title or "yur1"
 	local buttonText = opts.ButtonText or "Continue"
 	local WAIT_SECONDS = opts.WaitSeconds or 10
 
@@ -303,9 +305,40 @@ function Welcome.new(opts)
 	}, window)
 
 	---------------------------------------------------------------------
-	-- BOTTOM (the only content): loading wheel first, Continue button after the wait
+	-- TITLE: "yur1" with the soft white-to-grey gradient
 	---------------------------------------------------------------------
-	local bottomBase = UDim2.fromOffset(math.floor((CONTENT_W - BOT_W) / 2), math.floor((CONTENT_H - BOT_H) / 2) - 6)
+	local titleBase = UDim2.fromOffset(0, 8)
+	local titleGroup = new("CanvasGroup", {
+		Name = "Title",
+		Position = titleBase + UDim2.fromOffset(0, 12),
+		Size = UDim2.fromOffset(CONTENT_W, 56),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+	}, content)
+
+	local titleLabel = new("TextLabel", {
+		BackgroundTransparency = 1,
+		Size = UDim2.fromScale(1, 1),
+		Font = Enum.Font.GothamBlack,
+		Text = title,
+		TextSize = 44,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}, titleGroup)
+	new("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+		}),
+	}, titleLabel)
+
+	---------------------------------------------------------------------
+	-- BOTTOM (the other content): loading wheel first, Continue button after the wait
+	---------------------------------------------------------------------
+	local bottomBase = UDim2.fromOffset(math.floor((CONTENT_W - BOT_W) / 2), math.floor((CONTENT_H - BOT_H) / 2) + 14)
 	local bottom = new("CanvasGroup", {
 		Name = "Bottom",
 		Position = bottomBase + UDim2.fromOffset(0, 12),
@@ -592,13 +625,14 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- INTRO: window pops in, then the wheel fades up
+	-- INTRO: window pops in, then the title and the wheel fade up
 	---------------------------------------------------------------------
 	paintButton()
 	refreshBottom()
 
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
+	TweenService:Create(titleGroup, SMOOTH, { Position = titleBase, GroupTransparency = 0 }):Play()
 	task.delay(0.1, function()
 		if alive then
 			TweenService:Create(bottom, SMOOTH, { Position = bottomBase, GroupTransparency = 0 }):Play()
