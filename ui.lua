@@ -525,34 +525,40 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon: no rotated frames (they look jagged at this size). The roof is a stack of
-		-- 1px rows that grow by 1px on each side (a clean 45 degree edge), under it a body and a door.
+		-- house icon: soft and rounded. A rounded diamond is the roof (big corner radius so the
+		-- tip and the eaves are round), a rounded body sits under it, and a rounded door cuts in.
 		local function buildHome(glyph)
 			local inks = {}
-			local function row(y, w, h)
-				local f = new("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0),
-					Position = UDim2.new(0.5, 0, 0.5, y),
-					Size = UDim2.fromOffset(w, h),
-					BackgroundColor3 = ICON,
-					BorderSizePixel = 0,
-					ZIndex = 3,
-				}, glyph)
-				table.insert(inks, f)
-				return f
-			end
-			for i = 0, 10 do
-				row(-10 + i, 2 + i * 2, 1)
-			end
-			row(1, 16, 9)
+			local body = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, 4),
+				Size = UDim2.fromOffset(16, 12),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(body, 4)
+			table.insert(inks, body)
+			local roof = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, -3),
+				Size = UDim2.fromOffset(15, 15),
+				Rotation = 45,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(roof, 5)
+			table.insert(inks, roof)
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
 				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(4, 6),
+				Size = UDim2.fromOffset(5, 7),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
 			}, glyph)
+			corner(door, 2)
 			return inks
 		end
 
