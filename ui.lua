@@ -4,7 +4,7 @@
 -- Black window with tiny rounded corners, slim sidebar, title card, window controls,
 -- Home tab (separate module), Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
--- Sidebar layout: logo, then Home and Info icons right under it (top group),
+-- Sidebar layout: logo, then Home, Info and Combat icons right under it (top group),
 -- and the server icon, gear and profile card at the bottom (bottom group).
 --
 --   local UI = <this file>
@@ -12,19 +12,20 @@
 --   local win = UI.new({
 --       Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater",
 --       Position = positionFromWelcome,
---       StartPage = "Home",            -- "Home" (default), "Info", "Main" or "Settings"
+--       StartPage = "Home",            -- "Home" (default), "Info", "Combat", "Main" or "Settings"
 --       HomeModule = HomePage,         -- the homepage.lua module
 --       InfoModule = InfoPage,         -- the infopage.lua module
+--       CombatModule = CombatPage,     -- optional: a module with .build(page, T, H, opts) for the Combat tab
 --       Home = { Product = "yur1", Subtitle = "...", Access = "Lifetime access",
 --                Build = "Beta 0.6", Component = "Rock and Roll by reruinz" },
 --   })
 --
 -- What you get back:
---   win.HomePage / win.InfoPage / win.MainPage / win.SettingsPage   frames you put your controls in
+--   win.HomePage / win.InfoPage / win.CombatPage / win.MainPage / win.SettingsPage   frames you put your controls in
 --   win.T                             theme colours, radii and tween infos
 --   win.H                             helpers: new, corner, stroke, pad, label, hoverable
 --   win.Touch                         true while Touch Mode is on
---   win:ShowPage("Home" | "Info" | "Main" | "Settings")
+--   win:ShowPage("Home" | "Info" | "Combat" | "Main" | "Settings")
 --   win:Toast(text)                   small pop-up at the bottom
 --   win:SetStats(text)                small text in the top bar (left of the window controls)
 --   win:OnTouchChange(fn)             fn(isTouch) runs whenever Touch Mode changes
@@ -69,7 +70,7 @@ function UI.new(opts)
 	local maximized = false
 	local uiHidden = false
 	local currentPage = "Home"
-	if opts.StartPage == "Main" or opts.StartPage == "Settings" or opts.StartPage == "Info" then
+	if opts.StartPage == "Main" or opts.StartPage == "Settings" or opts.StartPage == "Info" or opts.StartPage == "Combat" then
 		currentPage = opts.StartPage
 	end
 	local returnPage = "Home"  -- where the back arrow on Settings goes
@@ -315,6 +316,7 @@ function UI.new(opts)
 	local homePage = makePage("Home")
 	local mainPage = makePage("Main")
 	local infoPage = makePage("Info")
+	local combatPage = makePage("Combat")
 	local settingsPage = makePage("Settings")
 
 	table.insert(bodyParts, sidebar)
@@ -325,6 +327,7 @@ function UI.new(opts)
 	W.Bar = bar
 	W.HomePage = homePage
 	W.InfoPage = infoPage
+	W.CombatPage = combatPage
 	W.MainPage = mainPage
 	W.SettingsPage = settingsPage
 
@@ -376,6 +379,26 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
+	-- COMBAT TAB CONTENT (optional separate module, otherwise an empty page with a title)
+	---------------------------------------------------------------------
+	do
+		local mod = opts.CombatModule
+		local okBuild = false
+		if type(mod) == "table" and type(mod.build) == "function" then
+			local ok, err = pcall(mod.build, combatPage, W.T, W.H, opts.Combat or {})
+			if ok then
+				okBuild = true
+			else
+				warn("[ui] combat page error: " .. tostring(err))
+			end
+		end
+		if not okBuild then
+			label(combatPage, "Combat", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+				Enum.Font.GothamBold, 18, TEXT_COLOR)
+		end
+	end
+
+	---------------------------------------------------------------------
 	-- LOGO TEXT
 	---------------------------------------------------------------------
 	do
@@ -413,7 +436,7 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- SIDEBAR ICONS (house + ID card at the top, server + gear at the bottom;
+	-- SIDEBAR ICONS (house, ID card and crosshair at the top, server + gear at the bottom;
 	-- one marker slides between them)
 	---------------------------------------------------------------------
 	do
@@ -656,6 +679,68 @@ function UI.new(opts)
 			return { card }
 		end
 
+		-- combat icon (crosshair): a solid ring (disc with a sidebar-coloured hole), four short
+		-- ticks that cross the ring and point at the middle, and a small centre dot.
+		--   ring   = 22px disc, hole 16px  -> ring is 3px thick
+		--   ticks  = 2px wide, 8px long, centred 9px from the middle (they stick out 2px past the ring
+		--            and reach 5px from the middle)
+		--   dot    = 4px circle in the middle
+		-- Ticks and dot sit above the hole (higher ZIndex) so they stay visible.
+		local function buildCombat(glyph)
+			local inks = {}
+
+			local disc = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(22, 22),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(disc, 100)
+			table.insert(inks, disc)
+
+			local hole = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(16, 16),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, glyph)
+			corner(hole, 100)
+
+			local function tick(x, y, w, h)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, x, 0.5, y),
+					Size = UDim2.fromOffset(w, h),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 5,
+				}, glyph)
+				corner(f, 1)
+				table.insert(inks, f)
+			end
+			tick(0, -9, 2, 8)   -- top
+			tick(0, 9, 2, 8)    -- bottom
+			tick(-9, 0, 8, 2)   -- left
+			tick(9, 0, 8, 2)    -- right
+
+			local dot = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(4, 4),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 5,
+			}, glyph)
+			corner(dot, 100)
+			table.insert(inks, dot)
+
+			return inks
+		end
+
 		-- server icon: two stacked rounded units, each with a status dot and a dash
 		local function buildServer(glyph)
 			local inks = {}
@@ -718,8 +803,9 @@ function UI.new(opts)
 		local tipW = math.max(66, #mainTip * 7 + 20)
 
 		-- TOP group: hangs from the top, right under the Y1 logo (the logo ends at y = 46)
-		local HOME_TOP = 58                    -- top edge of the house tile
-		local INFO_TOP = HOME_TOP + TILE + 6   -- ID card tile sits a tiny bit under the house
+		local HOME_TOP = 58                      -- top edge of the house tile
+		local INFO_TOP = HOME_TOP + TILE + 6     -- ID card tile sits a tiny bit under the house
+		local COMBAT_TOP = INFO_TOP + TILE + 6   -- crosshair tile sits a tiny bit under the ID card
 
 		-- BOTTOM group: stands on the bottom, above the profile card
 		local GEAR_Y = -(14 + TILE + 8)        -- bottom edge of the gear tile
@@ -727,6 +813,7 @@ function UI.new(opts)
 
 		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 0, yScale = 0, yOffset = HOME_TOP, build = buildHome })
 		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 0, yScale = 0, yOffset = INFO_TOP, build = buildInfo })
+		makeNavIcon({ page = "Combat", tip = "Combat", tipW = 70, anchorY = 0, yScale = 0, yOffset = COMBAT_TOP, build = buildCombat })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
@@ -1031,7 +1118,7 @@ function UI.new(opts)
 	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
-		local PAGE_TITLES = { Home = "Home", Info = "Info tab", Main = mainTitle, Settings = "Settings" }
+		local PAGE_TITLES = { Home = "Home", Info = "Info tab", Combat = "Combat", Main = mainTitle, Settings = "Settings" }
 
 		local titleChip = new("Frame", {
 			Name = "TitleCard",
@@ -1111,7 +1198,7 @@ function UI.new(opts)
 
 		local titleToken = 0
 		local pageToken = 0
-		local pages = { Home = homePage, Info = infoPage, Main = mainPage, Settings = settingsPage }
+		local pages = { Home = homePage, Info = infoPage, Combat = combatPage, Main = mainPage, Settings = settingsPage }
 
 		showPage = function(name)
 			if name == currentPage or not pages[name] then
