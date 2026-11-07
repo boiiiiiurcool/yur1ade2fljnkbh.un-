@@ -525,37 +525,44 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon: rotated rounded square for the roof, rounded body, small door cut-out
+		-- house icon: two thick bars make the roof, a rounded body and a small door cut-out
 		local function buildHome(glyph)
-			local roof = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, -4),
-				Size = UDim2.fromOffset(14, 14),
-				Rotation = 45,
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, glyph)
-			corner(roof, 3)
+			local inks = {}
 			local body = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, 4.5),
-				Size = UDim2.fromOffset(18, 11),
+				Position = UDim2.new(0.5, 0, 0.5, 1),
+				Size = UDim2.fromOffset(14, 14),
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(body, 3)
+			corner(body, 2)
+			table.insert(inks, body)
+			local function roofBar(x, rot)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, x, 0.5, -6.4),
+					Size = UDim2.fromOffset(18, 4),
+					Rotation = rot,
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 3,
+				}, glyph)
+				corner(f, 2)
+				table.insert(inks, f)
+			end
+			roofBar(-3.7, -35)
+			roofBar(3.7, 35)
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(4, 6),
+				Position = UDim2.new(0.5, 0, 0.5, 8),
+				Size = UDim2.fromOffset(4, 7),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
 			}, glyph)
 			corner(door, 2)
-			return { roof, body }
+			return inks
 		end
 
 		-- server icon: two stacked rounded units, each with a status dot and a dash
