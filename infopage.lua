@@ -235,6 +235,10 @@ function InfoPage.build(parent, T, H, opts)
 		BorderSizePixel = 0,
 	}, lock)
 
+	-- Roblox rotation is clockwise-positive. The ears must flare UP and OUTWARD:
+	--   left ear  = positive (clockwise)         -> its outer (left) end rises
+	--   right ear = negative (counter-clockwise) -> its outer (right) end rises
+	-- (they were the other way round before, which made the ears droop and the logo look upside down)
 	local WHITE = Color3.new(1, 1, 1)
 	local CUT = T.SIDEBAR_BG   -- cut-outs use the card colour
 	local function markShape(x, y, w, h, r, color, rot)
@@ -251,11 +255,11 @@ function InfoPage.build(parent, T, H, opts)
 		return f
 	end
 	markShape(0, 1, 30, 20, 9, WHITE)          -- body
-	markShape(-11, -8, 9, 6, 3, WHITE, -25)    -- left ear
-	markShape(11, -8, 9, 6, 3, WHITE, 25)      -- right ear
-	markShape(0, -10, 14, 6, 100, CUT)         -- dip between the ears
-	markShape(-6, 2, 5, 7, 100, CUT, 8)        -- left eye
-	markShape(6, 2, 5, 7, 100, CUT, -8)        -- right eye
+	markShape(-11, -8, 9, 6, 3, WHITE, 25)     -- left ear  (flares up and out)
+	markShape(11, -8, 9, 6, 3, WHITE, -25)     -- right ear (flares up and out)
+	markShape(0, -10, 14, 6, 100, CUT)         -- dip between the ears (top)
+	markShape(-6, 2, 5, 7, 100, CUT, -8)       -- left eye  (top tilts toward the middle)
+	markShape(6, 2, 5, 7, 100, CUT, 8)         -- right eye (top tilts toward the middle)
 	markShape(0, 12, 8, 4, 100, CUT)           -- soft notch at the bottom
 
 	local word = label(lock, "Discord", UDim2.fromOffset(42, 0), UDim2.new(1, -42, 1, 0),
