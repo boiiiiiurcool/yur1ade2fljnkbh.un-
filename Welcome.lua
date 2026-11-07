@@ -1,28 +1,42 @@
--- Welcome.lua  (welcome screen module, minimal)
+-- Welcome.lua  (welcome screen + module loader)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Same look as ui.lua: small black window with tiny rounded corners and a close button.
 -- It shows the "yur1" title (gradient text) and a spinning wheel with "Loading everything safely".
--- No profile, no user ID, no game card, no tiles.
+-- Under that it shows which module is being checked right now.
 --
--- The Continue button only appears after WaitSeconds (default 10) AND once SetState("ready")
--- was called. Enter cannot skip the wait either.
+-- LOADING (done here, not in main.lua):
+--   Pass 1: every module in opts.Modules is checked ONE AT A TIME. Each one is downloaded
+--           opts.Checks times (default 10) and all copies must be identical, so we know
+--           we hold the newest version and not a stale cached one. Then it is compiled.
+--   Pass 2: after all modules passed, every module is downloaded once more, very quickly,
+--           and compared with what we hold. If one changed it is recompiled.
+--   Then the state becomes "ready" and the Continue button can show.
+--
+-- The Continue button only appears after WaitSeconds (default 10) AND once loading finished.
+-- Enter cannot skip the wait either.
 --
 -- The window is NOT draggable. It always opens in the middle of the screen.
--- OnContinue still receives the window position (always centered) so main.lua keeps working.
+-- OnContinue receives (position, modules). modules is a table keyed by each entry's Id.
 --
---   local Welcome = <this file>
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
 --       Title = "yur1",
 --       ButtonText = "Continue",
 --       WaitSeconds = 10,
---       OnContinue = function(position) end,
+--       Base = "https://.../main/",      -- must end with a slash
+--       NoCache = true,
+--       LocalDir = nil,                  -- for testing: workspace folder to use readfile
+--       Checks = 10,
+--       Modules = {
+--           { Id = "UI", Name = "ui.lua", Key = "new", Required = true },
+--           ...
+--       },
+--       OnContinue = function(position, modules) end,
 --       OnClose = function() end,
 --   })
---   welcome:SetState("loading", "Loading modules...")
---   welcome:SetState("ready")
---   welcome:SetState("error", "Could not load")
+--   welcome:SetState("loading", "text")  -- still available
+--   welcome:GetModules()
 --   welcome:GetPosition()
 --   welcome:Close(instant)
 
@@ -34,6 +48,12 @@ function Welcome.new(opts)
 	local title = opts.Title or "yur1"
 	local buttonText = opts.ButtonText or "Continue"
 	local WAIT_SECONDS = opts.WaitSeconds or 10
+
+	local BASE = opts.Base or ""
+	local NO_CACHE = (opts.NoCache ~= false)
+	local LOCAL_DIR = opts.LocalDir
+	local CHECKS = opts.Checks or 10
+	local moduleList = opts.Modules or {}
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
@@ -56,6 +76,8 @@ function Welcome.new(opts)
 	local state = "loading"
 	local waitDone = false      -- true once WAIT_SECONDS have passed
 	local btnShown = false      -- true while the Continue button is the thing on screen
+	local loaded = {}           -- Id -> module table
+	local sources = {}          -- file name -> source text we are holding
 
 	---------------------------------------------------------------------
 	-- THEME (same colours as ui.lua)
@@ -436,7 +458,7 @@ function Welcome.new(opts)
 	chevBar(-2.5, 45)
 	chevBar(2.5, -45)
 
-	-- status line (text from SetState), sits under both the wheel text and the button
+	-- status line: shows which module is being checked right now (also text from SetState)
 	local status = label(bottom, "", UDim2.fromOffset(0, STATUS_Y), UDim2.new(1, 0, 0, 14),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 
@@ -510,7 +532,7 @@ function Welcome.new(opts)
 		local cb = opts.OnContinue
 		W:Close(true)
 		if cb then
-			local ok, err = pcall(cb, leavePos)
+			local ok, err = pcall(cb, leavePos, loaded)
 			if not ok then
 				warn("[welcome] OnContinue error: " .. tostring(err))
 			end
@@ -601,6 +623,10 @@ function Welcome.new(opts)
 		return window.Position
 	end
 
+	function W:GetModules()
+		return loaded
+	end
+
 	function W:Close(instant)
 		if not alive then
 			return
@@ -625,6 +651,174 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
+	-- MODULE LOADER (runs behind the welcome window)
+	---------------------------------------------------------------------
+	local bust = 0
+
+	-- shows what is being checked (only while still loading)
+	local function setInfo(text)
+		if alive and state == "loading" then
+			status.Text = text
+		end
+	end
+
+	-- one download, no retries
+	local function fetchOnce(name)
+		if LOCAL_DIR then
+			return readfile(LOCAL_DIR .. name)
+		end
+		bust = bust + 1
+		local url = BASE .. name
+		if NO_CACHE then
+			url = url .. "?v=" .. tostring(os.time()) .. "_" .. tostring(bust)
+		end
+		local ok, body = pcall(function()
+			return game:HttpGet(url)
+		end)
+		if ok and type(body) == "string" and body ~= "" then
+			return body
+		end
+		-- fallback to the executor's request function
+		local req = (syn and syn.request) or (http and http.request) or http_request or request
+		if req then
+			local ok2, res = pcall(function()
+				return req({ Url = url, Method = "GET" })
+			end)
+			if ok2 and res and res.StatusCode == 200 and res.Body then
+				return res.Body
+			end
+		end
+		error("could not download " .. name, 0)
+	end
+
+	-- one download, up to 3 tries
+	local function fetch(name)
+		local lastErr = "unknown"
+		for attempt = 1, 3 do
+			local ok, res = pcall(fetchOnce, name)
+			if ok then
+				return res
+			end
+			lastErr = tostring(res)
+			if not alive then
+				break
+			end
+			task.wait(0.3)
+		end
+		error(lastErr, 0)
+	end
+
+	-- turns source text into the module table and makes sure it has the needed function
+	local function compile(entry, src)
+		local fn, err = loadstring(src, "=" .. entry.Name)
+		if not fn then
+			error("could not compile " .. entry.Name .. ": " .. tostring(err), 0)
+		end
+		local result = fn()
+		local key = entry.Key or "new"
+		if type(result) ~= "table" or type(result[key]) ~= "function" then
+			error(entry.Name .. " did not return a module with ." .. key .. " (got " .. typeof(result) .. ")", 0)
+		end
+		return result
+	end
+
+	-- pass 1 for one module: download it CHECKS times in a row, all copies must match.
+	-- if a copy differs (stale cache), the newest one becomes the reference and counting restarts.
+	local function checkModule(entry, index, total)
+		local ref = nil
+		local count = 0
+		local restarts = 0
+		while count < CHECKS do
+			if not alive then
+				return nil
+			end
+			setInfo("[" .. index .. "/" .. total .. "] Checking " .. entry.Name .. " (" .. (count + 1) .. "/" .. CHECKS .. ")")
+			local src = fetch(entry.Name)
+			if ref == nil or src == ref then
+				ref = src
+				count = count + 1
+			else
+				restarts = restarts + 1
+				ref = src
+				count = 1
+				if restarts > 3 then
+					count = CHECKS    -- keeps changing: accept the newest copy and move on
+				end
+			end
+			task.wait(0.05)
+		end
+		return ref
+	end
+
+	-- returns true when the failure must stop everything
+	local function handleFail(entry, err)
+		warn("[Y1] " .. entry.Name .. " failed: " .. tostring(err))
+		if entry.Required then
+			W:SetState("error", "Could not load " .. entry.Name .. " - see console (F9)")
+			return true
+		end
+		return false
+	end
+
+	local function runLoader()
+		local total = #moduleList
+
+		-- pass 1: one module at a time, checked CHECKS times each
+		for i = 1, total do
+			local entry = moduleList[i]
+			local ok, src = pcall(checkModule, entry, i, total)
+			if not alive then
+				return
+			end
+			if ok and src then
+				local ok2, mod = pcall(compile, entry, src)
+				if ok2 then
+					loaded[entry.Id] = mod
+					sources[entry.Name] = src
+					print("[Y1] loaded " .. entry.Name)
+				elseif handleFail(entry, mod) then
+					return
+				end
+			else
+				if handleFail(entry, src) then
+					return
+				end
+			end
+		end
+
+		-- pass 2: one very quick scan of everything again
+		for i = 1, total do
+			local entry = moduleList[i]
+			if not alive then
+				return
+			end
+			if sources[entry.Name] then
+				setInfo("Final scan: " .. entry.Name .. " (" .. i .. "/" .. total .. ")")
+				local ok, src = pcall(fetch, entry.Name)
+				if ok and src ~= sources[entry.Name] then
+					local ok2, mod = pcall(compile, entry, src)
+					if ok2 then
+						loaded[entry.Id] = mod
+						sources[entry.Name] = src
+						print("[Y1] updated " .. entry.Name)
+					else
+						warn("[Y1] " .. entry.Name .. " changed but failed to compile, keeping the old copy: " .. tostring(mod))
+					end
+				end
+				task.wait()
+			end
+		end
+
+		if not alive then
+			return
+		end
+		W:SetState("ready", "")
+		if opts.OnLoaded then
+			pcall(opts.OnLoaded, loaded)
+		end
+	end
+
+	---------------------------------------------------------------------
 	-- INTRO: window pops in, then the title and the wheel fade up
 	---------------------------------------------------------------------
 	paintButton()
@@ -644,6 +838,15 @@ function Welcome.new(opts)
 		if alive then
 			waitDone = true
 			refreshBottom()
+		end
+	end)
+
+	-- start loading the modules behind the window
+	task.spawn(function()
+		local ok, err = pcall(runLoader)
+		if not ok and alive then
+			warn("[Y1] loader crashed: " .. tostring(err))
+			W:SetState("error", "Could not load - see console (F9)")
 		end
 	end)
 
