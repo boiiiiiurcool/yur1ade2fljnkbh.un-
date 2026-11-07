@@ -252,16 +252,16 @@ function InfoPage.build(parent, T, H, opts)
 		corner(f, r)
 		return f
 	end
-	markShape(0, -1, 28, 17, 5, WHITE)         -- body (wide, rounded)
-	markShape(-14, -9.5, 6, 6, 0, CUT, 45)     -- cuts the top-left corner so the top is narrower
-	markShape(14, -9.5, 6, 6, 0, CUT, 45)      -- cuts the top-right corner
-	markShape(-6, -10, 5, 2, 1, WHITE)         -- small bump on top (left)
-	markShape(6, -10, 5, 2, 1, WHITE)          -- small bump on top (right)
-	markShape(-7.5, 8.5, 4, 4, 1, WHITE)       -- foot, bottom left
-	markShape(7.5, 8.5, 4, 4, 1, WHITE)        -- foot, bottom right
-	markShape(0, 8.5, 9, 3, 100, CUT)          -- soft notch between the feet
-	markShape(-4.7, 0, 5, 6, 100, CUT)         -- left eye (tall oval)
-	markShape(4.7, 0, 5, 6, 100, CUT)          -- right eye (tall oval)
+	markShape(0, -1, 28, 18, 6, WHITE)         -- body (wide, rounded): spans y -10 to 8
+	markShape(-14, -10, 5, 5, 0, CUT, 45)      -- cuts the top-left corner so the top is narrower
+	markShape(14, -10, 5, 5, 0, CUT, 45)       -- cuts the top-right corner
+	markShape(-5, -10.2, 4, 1.5, 1, WHITE)     -- tiny bump on top (left), only about 1px high
+	markShape(5, -10.2, 4, 1.5, 1, WHITE)      -- tiny bump on top (right)
+	markShape(-7, 9, 3, 3, 1, WHITE)           -- small foot, bottom left
+	markShape(7, 9, 3, 3, 1, WHITE)            -- small foot, bottom right
+	markShape(0, 8.8, 9, 2, 100, CUT)          -- very soft notch between the feet
+	markShape(-5.2, 0, 5, 6, 100, CUT)         -- left eye (tall oval)
+	markShape(5.2, 0, 5, 6, 100, CUT)          -- right eye (tall oval)
 
 	local word = label(lock, "Discord", UDim2.fromOffset(42, 0), UDim2.new(1, -42, 1, 0),
 		Enum.Font.GothamBlack, 22, WHITE, LEFT)
