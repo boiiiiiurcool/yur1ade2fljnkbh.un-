@@ -526,14 +526,15 @@ function UI.new(opts)
 		end
 
 		-- house icon: the roof is two square frames, each cut diagonally with a UIGradient whose
-		-- transparency has a tiny soft step. That gives a clean smooth slope with no rotated frames.
+		-- transparency has a tiny soft step (smooth slope, no rotated frames). The halves overlap
+		-- by 2px at the middle so the peak is one clean point; wide eaves, rounded body, rounded door.
 		local function buildHome(glyph)
 			local inks = {}
-			local function half(anchorX, rot, seq)
+			local function half(anchorX, xOff, rot, seq)
 				local f = new("Frame", {
 					AnchorPoint = Vector2.new(anchorX, 0),
-					Position = UDim2.new(0.5, 0, 0.5, -10),
-					Size = UDim2.fromOffset(10, 10),
+					Position = UDim2.new(0.5, xOff, 0.5, -12),
+					Size = UDim2.fromOffset(13, 13),
 					BackgroundColor3 = ICON,
 					BorderSizePixel = 0,
 					ZIndex = 3,
@@ -542,33 +543,22 @@ function UI.new(opts)
 				table.insert(inks, f)
 			end
 			-- left half keeps its lower-right triangle, right half keeps its lower-left triangle
-			half(1, 45, NumberSequence.new({
+			half(1, 1, 45, NumberSequence.new({
 				NumberSequenceKeypoint.new(0, 1),
-				NumberSequenceKeypoint.new(0.46, 1),
-				NumberSequenceKeypoint.new(0.54, 0),
+				NumberSequenceKeypoint.new(0.47, 1),
+				NumberSequenceKeypoint.new(0.53, 0),
 				NumberSequenceKeypoint.new(1, 0),
 			}))
-			half(0, -45, NumberSequence.new({
+			half(0, -1, -45, NumberSequence.new({
 				NumberSequenceKeypoint.new(0, 0),
-				NumberSequenceKeypoint.new(0.46, 0),
-				NumberSequenceKeypoint.new(0.54, 1),
+				NumberSequenceKeypoint.new(0.47, 0),
+				NumberSequenceKeypoint.new(0.53, 1),
 				NumberSequenceKeypoint.new(1, 1),
 			}))
-			-- small rounded tip so the two halves join without a seam
-			local tip = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0),
-				Position = UDim2.new(0.5, 0, 0.5, -10),
-				Size = UDim2.fromOffset(2, 8),
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, glyph)
-			corner(tip, 1)
-			table.insert(inks, tip)
 			local body = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),
 				Position = UDim2.new(0.5, 0, 0.5, 0),
-				Size = UDim2.fromOffset(16, 10),
+				Size = UDim2.fromOffset(18, 11),
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
@@ -577,8 +567,8 @@ function UI.new(opts)
 			table.insert(inks, body)
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
-				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(4, 6),
+				Position = UDim2.new(0.5, 0, 0.5, 11),
+				Size = UDim2.fromOffset(5, 7),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
