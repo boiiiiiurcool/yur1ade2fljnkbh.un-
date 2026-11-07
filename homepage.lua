@@ -39,35 +39,55 @@ function HomePage.build(parent, T, H, opts)
 		BorderSizePixel = 0,
 	}, parent)
 
-	-- very dim game image on the right, with a dark fade so the left side stays clean
+	-- very dim game image over the whole page. Four black fades (left, right, top, bottom)
+	-- melt it into the window, so no hard edge is visible. Everything is scale based,
+	-- so it follows the window when it is resized or maximized.
 	local bgImage = new("ImageLabel", {
 		Name = "GameBackdrop",
-		Position = UDim2.fromScale(0.35, 0),
-		Size = UDim2.fromScale(0.65, 1),
+		Position = UDim2.fromScale(0, 0),
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Image = gameIconUrl,
 		ScaleType = Enum.ScaleType.Crop,
-		ImageTransparency = 0.78,
+		ImageTransparency = 0.7,
 		ZIndex = 1,
 	}, root)
-	corner(bgImage, T.RADIUS)
 
-	local fade = new("Frame", {
-		Name = "BackdropFade",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundColor3 = T.BLACK,
-		BorderSizePixel = 0,
-		ZIndex = 2,
-	}, root)
-	corner(fade, T.RADIUS)
-	new("UIGradient", {
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0),
-			NumberSequenceKeypoint.new(0.4, 0.1),
-			NumberSequenceKeypoint.new(1, 0.55),
-		}),
-	}, fade)
+	local function fadeEdge(name, pos, size, rotation, seq)
+		local f = new("Frame", {
+			Name = name,
+			Position = pos,
+			Size = size,
+			BackgroundColor3 = T.BLACK,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, root)
+		new("UIGradient", { Rotation = rotation, Transparency = seq }, f)
+		return f
+	end
+
+	-- left: solid black on the far left so the text stays clean, then softly into the image
+	fadeEdge("FadeLeft", UDim2.fromScale(0, 0), UDim2.fromScale(0.7, 1), 0, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.35, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	}))
+	-- right: image melts into black at the right edge
+	fadeEdge("FadeRight", UDim2.fromScale(0.6, 0), UDim2.fromScale(0.4, 1), 0, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	}))
+	-- top
+	fadeEdge("FadeTop", UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.45), 90, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	}))
+	-- bottom
+	fadeEdge("FadeBottom", UDim2.fromScale(0, 0.55), UDim2.fromScale(1, 0.45), 90, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(1, 0),
+	}))
 
 	-- LEFT: game name, Ready pill, "<product> is ready", small text
 	local leftW = UDim2.new(1, -(CARD_S + 24 + 28 + 10), 0, 30)
