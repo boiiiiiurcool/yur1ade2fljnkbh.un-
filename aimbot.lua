@@ -7,6 +7,10 @@
 --   local Aimbot = <this file>
 --   Aimbot.build(parentFrame, themeTable, helperTable, opts)
 --
+-- Layout: an "Enable" row with a switch and a "..." (three dots) button. The dots open one small
+-- settings panel next to them (Aimbot: Key, Mode, Target Lock). It closes when you click anywhere
+-- else. Aim Type, Target, Distance, Prediction and Smoothness stay on the page as cards.
+--
 --   Aim Type   Mouse  = the camera turns so the target moves toward your CURSOR
 --                         (also works with a locked cursor: first person / shift lock = screen middle)
 --              Camera = the camera turns so the target moves to the SCREEN MIDDLE
@@ -28,6 +32,7 @@ function AimbotPage.build(parent, T, H, opts)
 	local RunService = game:GetService("RunService")
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
+	local GuiService = game:GetService("GuiService")
 	local player = Players.LocalPlayer
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
@@ -35,8 +40,6 @@ function AimbotPage.build(parent, T, H, opts)
 	local FAST = T.FAST
 	local SMOOTH = T.SMOOTH
 	local RADIUS = T.RADIUS
-	local PILL_ON_BG = Color3.fromRGB(22, 52, 38)
-	local PILL_ON_LINE = Color3.fromRGB(36, 92, 62)
 
 	-- every render step gets its own name, so a re-run can never unbind a newer copy
 	local STEP_NAME = string.format("Y1AimbotStep_%d_%d", math.floor(os.clock() * 1000), math.random(1, 1000000))
@@ -90,7 +93,7 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- PAGE LAYOUT: a scrolling page, a header card, then two columns of cards
+	-- PAGE LAYOUT: a scrolling page with two columns of cards
 	---------------------------------------------------------------------
 	local scroll = new("ScrollingFrame", {
 		Name = "AimbotRoot",
@@ -105,19 +108,8 @@ function AimbotPage.build(parent, T, H, opts)
 		ElasticBehavior = Enum.ElasticBehavior.Never,
 	}, parent)
 
-	local HEADER_H = 58
-	local BODY_Y = 2 + HEADER_H + 14
+	local BODY_Y = 2
 	local GAP = 8
-
-	local header = new("Frame", {
-		Name = "Header",
-		Position = UDim2.fromOffset(2, 2),
-		Size = UDim2.new(1, -12, 0, HEADER_H),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, scroll)
-	corner(header, RADIUS + 4)
-	stroke(header, T.BORDER, 1, 0)
 
 	local body = new("Frame", {
 		Name = "Body",
@@ -153,13 +145,13 @@ function AimbotPage.build(parent, T, H, opts)
 	---------------------------------------------------------------------
 	-- CONTROLS
 	---------------------------------------------------------------------
-	local function makeSwitch(c, startOn, onChange, cy)
+	local function makeSwitch(c, startOn, onChange, cy, rightPad)
 		local on = startOn
 		local track = new("TextButton", {
 			AutoButtonColor = false,
 			Text = "",
 			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -12, 0, cy),
+			Position = UDim2.new(1, -(rightPad or 12), 0, cy),
 			Size = UDim2.fromOffset(38, 20),
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
@@ -202,19 +194,13 @@ function AimbotPage.build(parent, T, H, opts)
 		end)
 	end
 
-	-- title + sub text on the left, a button on the right that records the next key / mouse button
-	local function bindRow(col, title, sub, getBind, setBind, allowMouse)
-		local c = place(col, 46)
-		label(c, title, UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		label(c, sub, UDim2.fromOffset(14, 25), UDim2.new(1, -140, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-
+	-- a button that records the next key / mouse button (shows the current one on it)
+	local function bindButton(c, pos, size, getBind, setBind, allowMouse)
 		local btn = new("TextButton", {
 			AutoButtonColor = false,
-			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -10, 0.5, 0),
-			Size = UDim2.fromOffset(100, 28),
+			AnchorPoint = Vector2.new(1, 0),
+			Position = pos,
+			Size = size,
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamMedium,
@@ -255,6 +241,7 @@ function AimbotPage.build(parent, T, H, opts)
 					set = function(b)
 						setBind(b)
 						btn.Text = bindName(b)
+						paint()
 					end,
 					restore = function()
 						return bindName(getBind())
@@ -264,20 +251,21 @@ function AimbotPage.build(parent, T, H, opts)
 			end
 			paint()
 		end)
+		return btn
 	end
 
-	-- a row of options with a sliding highlight
-	local function segmented(col, title, options, startValue, onChange)
-		local c = place(col, 62)
-		label(c, title, UDim2.fromOffset(14, 8), UDim2.new(1, -28, 0, 12),
+	-- a caption and a row of options with a sliding highlight, drawn inside any container
+	-- y0 = top of the caption, inset = space left and right
+	local function segmented(container, y0, inset, title, options, startValue, onChange)
+		label(container, title, UDim2.fromOffset(inset + 2, y0), UDim2.new(1, -(inset * 2), 0, 12),
 			Enum.Font.Gotham, 11, T.DIM_TEXT)
 
 		local tray = new("Frame", {
-			Position = UDim2.fromOffset(12, 26),
-			Size = UDim2.new(1, -24, 0, 28),
+			Position = UDim2.fromOffset(inset, y0 + 18),
+			Size = UDim2.new(1, -(inset * 2), 0, 28),
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
-		}, c)
+		}, container)
 		corner(tray, RADIUS + 2)
 
 		local inner = new("Frame", {
@@ -342,6 +330,12 @@ function AimbotPage.build(parent, T, H, opts)
 			end)
 		end
 		choose(current, false)
+	end
+
+	-- the same thing as its own card
+	local function segmentedCard(col, title, options, startValue, onChange)
+		local c = place(col, 62)
+		segmented(c, 8, 12, title, options, startValue, onChange)
 	end
 
 	-- a slider row inside a card; returns { dim = fn(enabled), set = fn(value) }
@@ -463,47 +457,30 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- HEADER: title, status pill and the master switch
+	-- LEFT COLUMN: the Enable row (switch + three dots), Aim Type, Target, Distance
 	---------------------------------------------------------------------
-	label(header, "Aimbot", UDim2.fromOffset(14, 11), UDim2.new(1, -150, 0, 18),
-		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
-	label(header, "Hold the aim key to lock onto a target", UDim2.fromOffset(14, 31), UDim2.new(1, -150, 0, 14),
+	section(1, "AIMBOT")
+
+	local enableCard = place(1, 46)
+	enableCard.ZIndex = 20   -- the settings panel opens from this card, so it must draw above the other cards
+
+	label(enableCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local enableSub = label(enableCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -140, 0, 14),
 		Enum.Font.Gotham, 11, T.DIM_TEXT)
 
-	local pill = new("Frame", {
-		Name = "StatusPill",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -66, 0.5, 0),
-		Size = UDim2.fromOffset(54, 22),
-		BackgroundColor3 = T.CLUSTER_BG,
-		BorderSizePixel = 0,
-	}, header)
-	corner(pill, 11)
-	local pillStroke = stroke(pill, T.BORDER, 1, 0)
-	local pillText = label(pill, "Idle", UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1),
-		Enum.Font.GothamBold, 11, T.DIM_TEXT, Enum.TextXAlignment.Center)
-
+	-- what the small line under "Enable" says: Off / the key and mode / Active
 	local function refreshStatus()
-		local text = "Idle"
-		local isOn = false
+		local text = S.mode .. " " .. bindName(S.keybind)
+		local colr = T.DIM_TEXT
 		if not S.enabled then
 			text = "Off"
 		elseif active then
 			text = "Active"
-			isOn = true
+			colr = T.GREEN
 		end
-		pillText.Text = text
-		local bg = T.CLUSTER_BG
-		local line = T.BORDER
-		local txt = T.DIM_TEXT
-		if isOn then
-			bg = PILL_ON_BG
-			line = PILL_ON_LINE
-			txt = T.GREEN
-		end
-		TweenService:Create(pill, FAST, { BackgroundColor3 = bg }):Play()
-		TweenService:Create(pillStroke, FAST, { Color = line }):Play()
-		TweenService:Create(pillText, FAST, { TextColor3 = txt }):Play()
+		enableSub.Text = text
+		enableSub.TextColor3 = colr
 	end
 
 	setActive = function(v)
@@ -517,56 +494,50 @@ function AimbotPage.build(parent, T, H, opts)
 		refreshStatus()
 	end
 
-	makeSwitch(header, S.enabled, function(on)
+	makeSwitch(enableCard, S.enabled, function(on)
 		S.enabled = on
 		setActive(false)
 		refreshStatus()
-	end, HEADER_H / 2)
+	end, 23)
 
-	---------------------------------------------------------------------
-	-- BUILD THE CARDS
-	---------------------------------------------------------------------
-	-- left column
-	section(1, "AIMING")
+	-- three horizontal dots, left of the switch
+	local dotsBtn = new("TextButton", {
+		Name = "MoreButton",
+		AutoButtonColor = false,
+		Text = "",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -58, 0, 23),
+		Size = UDim2.fromOffset(32, 26),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BorderSizePixel = 0,
+	}, enableCard)
+	corner(dotsBtn, RADIUS + 2)
 
-	bindRow(1, "Aim Key", "Click, then press a key",
-		function() return S.keybind end,
-		function(b)
-			S.keybind = b
-			setActive(false)
-		end,
-		true)
+	local dotParts = {}
+	for i = 1, 3 do
+		local d = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, (i - 2) * 7, 0.5, 0),
+			Size = UDim2.fromOffset(4, 4),
+			BackgroundColor3 = T.ICON,
+			BorderSizePixel = 0,
+		}, dotsBtn)
+		corner(d, 100)
+		dotParts[i] = d
+	end
 
-	segmented(1, "Mode", { "Hold", "Toggle" }, S.mode, function(v)
-		S.mode = v
-		setActive(false)
-	end)
-
-	segmented(1, "Aim Type", { "Mouse", "Camera" }, S.aim, function(v)
+	segmentedCard(1, "Aim Type", { "Mouse", "Camera" }, S.aim, function(v)
 		S.aim = v
 	end)
 
-	segmented(1, "Target", { "Head", "Torso", "Arms", "Legs" }, S.part, function(v)
+	segmentedCard(1, "Target", { "Head", "Torso", "Arms", "Legs" }, S.part, function(v)
 		S.part = v
 	end)
 
-	do
-		local c = place(1, 46)
-		label(c, "Target Lock", UDim2.fromOffset(14, 7), UDim2.new(1, -80, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		label(c, "Stay on one target until it is gone", UDim2.fromOffset(14, 25), UDim2.new(1, -80, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-		makeSwitch(c, S.lockOn, function(on)
-			S.lockOn = on
-			locked = nil
-		end, 23)
-	end
-
-	-- right column
-	section(2, "RANGE")
+	section(1, "RANGE")
 
 	do
-		local c = place(2, 104)
+		local c = place(1, 104)
 		label(c, "Distance (studs)", UDim2.fromOffset(14, 0), UDim2.new(1, -28, 0, 36),
 			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
 		local minApi = nil
@@ -589,6 +560,9 @@ function AimbotPage.build(parent, T, H, opts)
 		maxApi.dim(true)
 	end
 
+	---------------------------------------------------------------------
+	-- RIGHT COLUMN: Prediction and Smoothness
+	---------------------------------------------------------------------
 	section(2, "ASSIST")
 
 	switchSliders(2, "Prediction", S.predOn, S.predX, S.predY,
@@ -607,6 +581,166 @@ function AimbotPage.build(parent, T, H, opts)
 		body.Size = UDim2.new(1, -12, 0, bodyH)
 		scroll.CanvasSize = UDim2.new(0, 0, 0, BODY_Y + bodyH + 8)
 	end
+
+	---------------------------------------------------------------------
+	-- SETTINGS PANEL (opens from the three dots; ONE background for everything inside)
+	--   Aimbot (title) / Key / Mode / Target Lock
+	---------------------------------------------------------------------
+	local POP_W = 264
+	local POP_H = 208
+	-- it sits right next to the dots (the dots end 58px from the right edge of the card)
+	local POP_SHOWN = UDim2.new(1, -50, 0, -8)
+	local POP_HIDDEN = UDim2.new(1, -60, 0, -8)
+	local OPEN_INFO = TweenInfo.new(0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local CLOSE_INFO = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+	local popup = new("CanvasGroup", {
+		Name = "AimbotSettings",
+		Position = POP_HIDDEN,
+		Size = UDim2.fromOffset(POP_W, POP_H),
+		BackgroundColor3 = T.POPUP_BG,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+		Visible = false,
+		ZIndex = 50,
+	}, enableCard)
+	corner(popup, RADIUS + 4)
+	stroke(popup, T.BORDER, 1, 0)
+
+	-- top left: "Aimbot"
+	label(popup, "Aimbot", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+
+	local function line(y)
+		new("Frame", {
+			Position = UDim2.fromOffset(16, y),
+			Size = UDim2.new(1, -32, 0, 1),
+			BackgroundColor3 = T.BORDER,
+			BorderSizePixel = 0,
+		}, popup)
+	end
+	line(40)
+
+	-- Key
+	label(popup, "Key", UDim2.fromOffset(16, 50), UDim2.new(1, -150, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	bindButton(popup, UDim2.new(1, -16, 0, 50), UDim2.fromOffset(110, 28),
+		function() return S.keybind end,
+		function(b)
+			S.keybind = b
+			setActive(false)
+		end,
+		true)
+
+	-- Mode
+	segmented(popup, 90, 16, "Mode", { "Hold", "Toggle" }, S.mode, function(v)
+		S.mode = v
+		setActive(false)
+	end)
+
+	line(148)
+
+	-- Target Lock
+	label(popup, "Target Lock", UDim2.fromOffset(16, 158), UDim2.new(1, -90, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	label(popup, "Stay on one target until it is gone", UDim2.fromOffset(16, 176), UDim2.new(1, -90, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	makeSwitch(popup, S.lockOn, function(on)
+		S.lockOn = on
+		locked = nil
+	end, 176, 16)
+
+	---------------------------------------------------------------------
+	-- open / close the panel
+	---------------------------------------------------------------------
+	local popupOpen = false
+	local popupToken = 0
+	local dotsOver = false
+
+	local function paintDots()
+		local bg = T.CLUSTER_BG
+		local colr = T.ICON
+		if popupOpen or dotsOver then
+			bg = T.HOVER_GREY
+			colr = T.ICON_HOVER
+		end
+		TweenService:Create(dotsBtn, FAST, { BackgroundColor3 = bg }):Play()
+		for i = 1, #dotParts do
+			TweenService:Create(dotParts[i], FAST, { BackgroundColor3 = colr }):Play()
+		end
+	end
+
+	local function openPopup()
+		if popupOpen then
+			return
+		end
+		popupOpen = true
+		popupToken = popupToken + 1
+		popup.Position = POP_HIDDEN
+		popup.GroupTransparency = 1
+		popup.Visible = true
+		TweenService:Create(popup, OPEN_INFO, { Position = POP_SHOWN, GroupTransparency = 0 }):Play()
+		paintDots()
+	end
+
+	local function closePopup()
+		if not popupOpen then
+			return
+		end
+		popupOpen = false
+		popupToken = popupToken + 1
+		local token = popupToken
+		-- stop recording a key if the panel goes away in the middle of it
+		if listening then
+			listening.btn.Text = listening.restore()
+			listening = nil
+		end
+		TweenService:Create(popup, CLOSE_INFO, { Position = POP_HIDDEN, GroupTransparency = 1 }):Play()
+		task.delay(CLOSE_INFO.Time + 0.02, function()
+			if token == popupToken then
+				popup.Visible = false
+			end
+		end)
+		paintDots()
+	end
+
+	dotsBtn.MouseEnter:Connect(function()
+		dotsOver = true
+		paintDots()
+	end)
+	dotsBtn.MouseLeave:Connect(function()
+		dotsOver = false
+		paintDots()
+	end)
+	dotsBtn.Activated:Connect(function()
+		if popupOpen then
+			closePopup()
+		else
+			openPopup()
+		end
+	end)
+
+	-- true when the pointer of this input is over a gui object
+	-- (input positions leave out the top inset, the gui does not, so add it back)
+	local function overGui(obj, input)
+		local inset = GuiService:GetGuiInset()
+		local px = input.Position.X + inset.X
+		local py = input.Position.Y + inset.Y
+		local p = obj.AbsolutePosition
+		local sz = obj.AbsoluteSize
+		return px >= p.X and px <= p.X + sz.X and py >= p.Y and py <= p.Y + sz.Y
+	end
+
+	-- leaving the Combat tab closes the panel too
+	if parent:IsA("GuiObject") then
+		conns[#conns + 1] = parent:GetPropertyChangedSignal("Visible"):Connect(function()
+			if not parent.Visible then
+				closePopup()
+			end
+		end)
+	end
+
+	refreshStatus()
 
 	---------------------------------------------------------------------
 	-- TARGETING
@@ -830,6 +964,14 @@ function AimbotPage.build(parent, T, H, opts)
 				return
 			end
 			return
+		end
+
+		-- a click or tap anywhere except the panel (and the dots) closes the panel
+		if popupOpen and (input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			if not overGui(popup, input) and not overGui(dotsBtn, input) then
+				closePopup()
+			end
 		end
 
 		if not S.enabled or not matches(input, S.keybind) then
