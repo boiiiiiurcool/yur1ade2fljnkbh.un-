@@ -256,9 +256,9 @@ function Welcome.new(opts)
 		new("UIGradient", {
 			Rotation = 45,
 			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(44, 44, 60)),
-				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 18, 24)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 8, 10)),
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 31)),
+				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(16, 16, 17)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
 			}),
 		}, backdrop)
 	end
