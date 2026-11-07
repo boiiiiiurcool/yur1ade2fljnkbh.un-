@@ -225,7 +225,7 @@ function UI.new(opts)
 	local window = new("CanvasGroup", {
 		Name = "Window",
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
+		Position = opts.Position or UDim2.fromScale(0.5, 0.5),
 		Size = WINDOW_SIZE,
 		BackgroundColor3 = BLACK,
 		BorderSizePixel = 0,
