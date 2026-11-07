@@ -235,10 +235,8 @@ function InfoPage.build(parent, T, H, opts)
 		BorderSizePixel = 0,
 	}, lock)
 
-	-- Roblox rotation is clockwise-positive. The ears must flare UP and OUTWARD:
-	--   left ear  = positive (clockwise)         -> its outer (left) end rises
-	--   right ear = negative (counter-clockwise) -> its outer (right) end rises
-	-- (they were the other way round before, which made the ears droop and the logo look upside down)
+	-- Shape follows the real Discord mark: wide rounded body, narrower top with two tiny bumps,
+	-- two tall eyes, and two small feet at the bottom corners with a soft notch between them.
 	local WHITE = Color3.new(1, 1, 1)
 	local CUT = T.SIDEBAR_BG   -- cut-outs use the card colour
 	local function markShape(x, y, w, h, r, color, rot)
@@ -254,13 +252,16 @@ function InfoPage.build(parent, T, H, opts)
 		corner(f, r)
 		return f
 	end
-	markShape(0, 1, 30, 20, 9, WHITE)          -- body
-	markShape(-11, -8, 9, 6, 3, WHITE, 25)     -- left ear  (flares up and out)
-	markShape(11, -8, 9, 6, 3, WHITE, -25)     -- right ear (flares up and out)
-	markShape(0, -10, 14, 6, 100, CUT)         -- dip between the ears (top)
-	markShape(-6, 2, 5, 7, 100, CUT, -8)       -- left eye  (top tilts toward the middle)
-	markShape(6, 2, 5, 7, 100, CUT, 8)         -- right eye (top tilts toward the middle)
-	markShape(0, 12, 8, 4, 100, CUT)           -- soft notch at the bottom
+	markShape(0, -1, 28, 17, 5, WHITE)         -- body (wide, rounded)
+	markShape(-14, -9.5, 6, 6, 0, CUT, 45)     -- cuts the top-left corner so the top is narrower
+	markShape(14, -9.5, 6, 6, 0, CUT, 45)      -- cuts the top-right corner
+	markShape(-6, -10, 5, 2, 1, WHITE)         -- small bump on top (left)
+	markShape(6, -10, 5, 2, 1, WHITE)          -- small bump on top (right)
+	markShape(-7.5, 8.5, 4, 4, 1, WHITE)       -- foot, bottom left
+	markShape(7.5, 8.5, 4, 4, 1, WHITE)        -- foot, bottom right
+	markShape(0, 8.5, 9, 3, 100, CUT)          -- soft notch between the feet
+	markShape(-4.7, 0, 5, 6, 100, CUT)         -- left eye (tall oval)
+	markShape(4.7, 0, 5, 6, 100, CUT)          -- right eye (tall oval)
 
 	local word = label(lock, "Discord", UDim2.fromOffset(42, 0), UDim2.new(1, -42, 1, 0),
 		Enum.Font.GothamBlack, 22, WHITE, LEFT)
