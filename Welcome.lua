@@ -2,10 +2,13 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Same look as ui.lua: black window with tiny rounded corners (no sidebar),
--- close button top right, content area fills the window on a soft gradient.
+-- close button top right, content area on a soft gradient. This version is a smaller window.
 -- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
--- (current game name + icon), tiles for user ID, account age, creation date and role, and a
--- Continue button.
+-- (current game name + icon), tiles for user ID, account age, creation date and role.
+--
+-- At the bottom it shows a loading wheel with "Loading everything safely". The Continue button
+-- only appears after WaitSeconds (default 10) AND once SetState("ready") was called.
+-- Enter cannot skip the wait either.
 --
 -- The window is NOT draggable. It always opens in the middle of the screen.
 -- OnContinue still receives the window position (always centered) so main.lua keeps working.
@@ -17,6 +20,7 @@
 --       Logo = "Y1",
 --       ButtonText = "Continue",
 --       DefaultRole = "Tester",
+--       WaitSeconds = 10,
 --       Roles = { [12345678] = "Owner" },
 --       OnContinue = function(position) end,
 --       OnClose = function() end,
@@ -36,6 +40,7 @@ function Welcome.new(opts)
 	local logoName = opts.Logo or "Y1"
 	local buttonText = opts.ButtonText or "Continue"
 	local defaultRole = opts.DefaultRole or "Tester"
+	local WAIT_SECONDS = opts.WaitSeconds or 10
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
@@ -58,6 +63,8 @@ function Welcome.new(opts)
 	local alive = true
 	local continued = false
 	local state = "loading"
+	local waitDone = false      -- true once WAIT_SECONDS have passed
+	local btnShown = false      -- true while the Continue button is the thing on screen
 
 	---------------------------------------------------------------------
 	-- THEME (same colours as ui.lua)
@@ -197,20 +204,20 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- WINDOW (same base as ui.lua)
+	-- WINDOW (same base as ui.lua, smaller)
 	---------------------------------------------------------------------
-	local WIN_W = 760
-	local WIN_H = 480
-	local BAR_H = 40
-	local CHIP_X = 6
-	local CHIP_W = 128
+	local WIN_W = 460
+	local WIN_H = 360
+	local BAR_H = 34
 	local CONTENT_W = WIN_W - 12
-	local BTN_W = 320
-	local BTN_H = 46
+	local BTN_W = 240
+	local BTN_H = 38
 	if touch then
-		BTN_H = 54
+		BTN_H = 46
 	end
-	local STATUS_H = 14
+	local BOT_W = BTN_W + 16            -- a little wider than the button so its grow animation is not clipped
+	local STATUS_Y = BTN_H + 10
+	local BOT_H = STATUS_Y + 14
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
@@ -289,11 +296,11 @@ function Welcome.new(opts)
 	local closeBtn = nil
 	do
 		local PAD = 3
-		local bw = 30
-		local bh = 24
+		local bw = 26
+		local bh = 20
 		if touch then
 			bw = 40
-			bh = 30
+			bh = 28
 		end
 		local ch = bh + PAD * 2
 		local cluster = new("Frame", {
@@ -323,7 +330,7 @@ function Welcome.new(opts)
 			local f = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(14, 2),
+				Size = UDim2.fromOffset(12, 2),
 				Rotation = rot,
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
@@ -369,7 +376,7 @@ function Welcome.new(opts)
 		end)
 	end
 
-	-- content area, same position and size as in ui.lua
+	-- content area, same layout idea as ui.lua
 	local content = new("Frame", {
 		Name = "Content",
 		Position = UDim2.fromOffset(6, BAR_H),
@@ -398,15 +405,15 @@ function Welcome.new(opts)
 	end
 
 	-- ===== header: "yur1" on top middle, "Welcome to yur1" under it =====
-	local header = makeSection(0, 14, CONTENT_W, 108, false)
+	local header = makeSection(0, 6, CONTENT_W, 78, false)
 
 	local titleLabel = new("TextLabel", {
 		BackgroundTransparency = 1,
 		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.new(1, 0, 0, 52),
+		Size = UDim2.new(1, 0, 0, 40),
 		Font = Enum.Font.GothamBlack,
 		Text = title,
-		TextSize = 46,
+		TextSize = 34,
 		TextColor3 = Color3.new(1, 1, 1),
 		TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Center,
@@ -419,13 +426,13 @@ function Welcome.new(opts)
 		}),
 	}, titleLabel)
 
-	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 56), UDim2.new(1, 0, 0, 22),
-		Enum.Font.GothamMedium, 17, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(header, "Built for amazing people just like you :)", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
-		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
+	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 42), UDim2.new(1, 0, 0, 18),
+		Enum.Font.GothamMedium, 14, TEXT_COLOR, Enum.TextXAlignment.Center)
+	label(header, "Built for amazing people just like you :)", UDim2.fromOffset(0, 62), UDim2.new(1, 0, 0, 14),
+		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 
 	-- ===== profile card (left) + game card (right) =====
-	local profile = makeSection(2, 132, CONTENT_W - 4, 88, true)
+	local profile = makeSection(2, 90, CONTENT_W - 4, 58, true)
 
 	local profCard = new("Frame", {
 		Size = UDim2.new(0.5, -4, 1, 0),
@@ -436,18 +443,18 @@ function Welcome.new(opts)
 	stroke(profCard, BORDER, 1, 0)
 
 	local avatar = new("ImageLabel", {
-		Position = UDim2.fromOffset(12, 12),
-		Size = UDim2.fromOffset(64, 64),
+		Position = UDim2.fromOffset(9, 9),
+		Size = UDim2.fromOffset(40, 40),
 		BackgroundColor3 = CARD_BG,
 		BorderSizePixel = 0,
 		Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(player.UserId) .. "&w=150&h=150",
 	}, profCard)
-	corner(avatar, 14)
+	corner(avatar, 10)
 
-	label(profCard, player.DisplayName, UDim2.fromOffset(92, 18), UDim2.new(1, -104, 0, 24),
-		Enum.Font.GothamBold, 18, TEXT_COLOR)
-	label(profCard, "@" .. player.Name, UDim2.fromOffset(92, 46), UDim2.new(1, -104, 0, 18),
-		Enum.Font.Gotham, 13, DIM_TEXT)
+	label(profCard, player.DisplayName, UDim2.fromOffset(60, 11), UDim2.new(1, -68, 0, 18),
+		Enum.Font.GothamBold, 14, TEXT_COLOR)
+	label(profCard, "@" .. player.Name, UDim2.fromOffset(60, 30), UDim2.new(1, -68, 0, 14),
+		Enum.Font.Gotham, 11, DIM_TEXT)
 
 	local gameCard = new("Frame", {
 		Position = UDim2.new(0.5, 4, 0, 0),
@@ -459,20 +466,20 @@ function Welcome.new(opts)
 	stroke(gameCard, BORDER, 1, 0)
 
 	local gameIcon = new("ImageLabel", {
-		Position = UDim2.fromOffset(12, 12),
-		Size = UDim2.fromOffset(64, 64),
+		Position = UDim2.fromOffset(9, 9),
+		Size = UDim2.fromOffset(40, 40),
 		BackgroundColor3 = CARD_BG,
 		BorderSizePixel = 0,
 		Image = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=256&h=256",
 	}, gameCard)
-	corner(gameIcon, 14)
+	corner(gameIcon, 10)
 
-	label(gameCard, "Current game", UDim2.fromOffset(92, 14), UDim2.new(1, -104, 0, 14),
-		Enum.Font.Gotham, 11, DIM_TEXT)
-	local gameNameLabel = label(gameCard, game.Name, UDim2.fromOffset(92, 30), UDim2.new(1, -104, 0, 22),
-		Enum.Font.GothamBold, 16, TEXT_COLOR)
-	label(gameCard, "Place ID: " .. tostring(game.PlaceId), UDim2.fromOffset(92, 56), UDim2.new(1, -104, 0, 16),
-		Enum.Font.Gotham, 12, DIM_TEXT)
+	label(gameCard, "Current game", UDim2.fromOffset(60, 8), UDim2.new(1, -68, 0, 12),
+		Enum.Font.Gotham, 10, DIM_TEXT)
+	local gameNameLabel = label(gameCard, game.Name, UDim2.fromOffset(60, 21), UDim2.new(1, -68, 0, 18),
+		Enum.Font.GothamBold, 13, TEXT_COLOR)
+	label(gameCard, "Place ID: " .. tostring(game.PlaceId), UDim2.fromOffset(60, 40), UDim2.new(1, -68, 0, 12),
+		Enum.Font.Gotham, 10, DIM_TEXT)
 
 	-- the real game name comes from the marketplace (runs in the background)
 	task.spawn(function()
@@ -486,27 +493,30 @@ function Welcome.new(opts)
 		end
 	end)
 
-	-- ===== info tiles in one row: user ID, account age, creation date, role =====
-	local tilesGroup = makeSection(2, 234, CONTENT_W - 4, 60, true)
-	local TILE_W = (CONTENT_W - 4 - 24) / 4
+	-- ===== info tiles in a 2x2 grid: user ID, account age, creation date, role =====
+	local TILE_H = 40
+	local tilesGroup = makeSection(2, 156, CONTENT_W - 4, TILE_H * 2 + 8, true)
+	local TILE_W = (CONTENT_W - 4 - 8) / 2
 
 	local function makeTile(index, caption)
+		local col = (index - 1) % 2
+		local row = math.floor((index - 1) / 2)
 		local f = new("Frame", {
-			Position = UDim2.fromOffset((index - 1) * (TILE_W + 8), 0),
-			Size = UDim2.fromOffset(TILE_W, 60),
+			Position = UDim2.fromOffset(col * (TILE_W + 8), row * (TILE_H + 8)),
+			Size = UDim2.fromOffset(TILE_W, TILE_H),
 			BackgroundColor3 = SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, tilesGroup)
 		corner(f, RADIUS + 4)
 		stroke(f, BORDER, 1, 0)
-		local cap = label(f, caption, UDim2.fromOffset(12, 10), UDim2.new(1, -24, 0, 12),
-			Enum.Font.Gotham, 11, DIM_TEXT)
+		local cap = label(f, caption, UDim2.fromOffset(10, 6), UDim2.new(1, -20, 0, 12),
+			Enum.Font.Gotham, 10, DIM_TEXT)
 		return f, cap
 	end
 
 	local function tileValue(tile, text)
-		return label(tile, text, UDim2.fromOffset(12, 29), UDim2.new(1, -24, 0, 18),
-			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+		return label(tile, text, UDim2.fromOffset(10, 20), UDim2.new(1, -20, 0, 16),
+			Enum.Font.GothamMedium, 12, TEXT_COLOR)
 	end
 
 	local idTile = makeTile(1, "User ID")
@@ -518,34 +528,86 @@ function Welcome.new(opts)
 	local createdTile = makeTile(3, "Created")
 	local createdValue = tileValue(createdTile, createdText)
 
-	-- role is plain text now (no dot, no pill)
+	-- role is plain text (no dot, no pill)
 	local roleTile = makeTile(4, "Role")
 	tileValue(roleTile, role)
 
-	-- ===== continue button + status line =====
-	local btnSection = makeSection((CONTENT_W - BTN_W) / 2, 322, BTN_W, BTN_H + 8 + STATUS_H, false)
+	-- ===== bottom: loading wheel first, Continue button after the wait =====
+	local bottom = makeSection((CONTENT_W - BOT_W) / 2, 254, BOT_W, BOT_H, false)
+
+	-- loading part: wheel + "Loading everything safely"
+	local loaderGroup = new("CanvasGroup", {
+		Name = "Loader",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 0,
+	}, bottom)
+
+	local function ringFrame()
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0, 14),
+			Size = UDim2.fromOffset(24, 24),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, loaderGroup)
+		corner(f, 100)
+		return f
+	end
+	local track = ringFrame()
+	stroke(track, CLUSTER_BG, 3, 0)
+	local arc = ringFrame()
+	local arcStroke = stroke(arc, ICON_HOVER, 3, 0)
+	local grad = new("UIGradient", {
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.5, 0),
+			NumberSequenceKeypoint.new(0.501, 1),
+			NumberSequenceKeypoint.new(1, 1),
+		}),
+	}, arcStroke)
+	local spin = TweenService:Create(
+		grad,
+		TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
+		{ Rotation = 360 }
+	)
+	spin:Play()
+
+	local loaderText = label(loaderGroup, "Loading everything safely", UDim2.fromOffset(0, 34), UDim2.new(1, 0, 0, 16),
+		Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Center)
+
+	-- button part (hidden until the wait is over and the state is "ready")
+	local btnGroup = new("CanvasGroup", {
+		Name = "ButtonGroup",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+		Visible = false,
+	}, bottom)
 
 	local btn = new("TextButton", {
 		Name = "Continue",
 		AutoButtonColor = false,
-		Size = UDim2.new(1, 0, 0, BTN_H),
-		BackgroundColor3 = CLUSTER_BG,
+		Position = UDim2.fromOffset(8, 4),
+		Size = UDim2.fromOffset(BTN_W, BTN_H),
+		BackgroundColor3 = JOIN_BG,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamMedium,
-		Text = "Loading...",
-		TextSize = 15,
-		TextColor3 = DIM_TEXT,
-	}, btnSection)
+		Text = buttonText,
+		TextSize = 14,
+		TextColor3 = BLACK,
+	}, btnGroup)
 	corner(btn, 8)
 	local btnScale = new("UIScale", { Scale = 1 }, btn)
 
 	-- rounded chevron drawn with two bars (same style as the arrows in the main window)
 	local chev = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(1, -28, 0.5, 0),
+		Position = UDim2.new(1, -24, 0.5, 0),
 		Size = UDim2.fromOffset(12, 12),
 		BackgroundTransparency = 1,
-		Visible = false,
 	}, btn)
 	local function chevBar(y, rot)
 		local f = new("Frame", {
@@ -561,49 +623,73 @@ function Welcome.new(opts)
 	chevBar(-2.5, 45)
 	chevBar(2.5, -45)
 
-	local status = label(btnSection, "", UDim2.fromOffset(0, BTN_H + 8), UDim2.new(1, 0, 0, STATUS_H),
+	-- status line (text from SetState), sits under both the wheel text and the button
+	local status = label(bottom, "", UDim2.fromOffset(0, STATUS_Y), UDim2.new(1, 0, 0, 14),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 
 	---------------------------------------------------------------------
-	-- BUTTON STATES
+	-- LOADER <-> BUTTON SWITCH
 	---------------------------------------------------------------------
 	local hovering = false
-	local pulse = nil
+	local swapToken = 0
 
 	local function paintButton()
-		local bg = CLUSTER_BG
-		local tc = DIM_TEXT
-		local txt = "Loading..."
-		if state == "ready" then
-			txt = buttonText
-			tc = BLACK
-			bg = JOIN_BG
-			if hovering then
-				bg = Color3.fromRGB(255, 255, 255)
-			end
-		elseif state == "error" then
-			txt = "Could not load"
-			tc = HOVER_RED
+		local bg = JOIN_BG
+		if hovering then
+			bg = Color3.fromRGB(255, 255, 255)
 		end
-		btn.Text = txt
-		TweenService:Create(btn, FAST, { BackgroundColor3 = bg, TextColor3 = tc }):Play()
-
-		chev.Visible = (state == "ready")
-		local cx = -28
-		if state == "ready" and hovering then
-			cx = -24
+		TweenService:Create(btn, FAST, { BackgroundColor3 = bg }):Play()
+		local cx = -24
+		if hovering then
+			cx = -20
 		end
 		TweenService:Create(chev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
+	end
 
-		-- the text pulses while loading
-		if pulse then
-			pulse:Cancel()
-			pulse = nil
-			btn.TextTransparency = 0
+	-- decides what the bottom of the window shows
+	local function refreshBottom()
+		if not alive then
+			return
 		end
-		if state == "loading" then
-			pulse = TweenService:Create(btn, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { TextTransparency = 0.55 })
-			pulse:Play()
+
+		local isErr = (state == "error")
+		if isErr then
+			loaderText.Text = "Could not load"
+			loaderText.TextColor3 = HOVER_RED
+			track.Visible = false
+			arc.Visible = false
+		else
+			loaderText.Text = "Loading everything safely"
+			loaderText.TextColor3 = TEXT_COLOR
+			track.Visible = true
+			arc.Visible = true
+		end
+
+		local showBtn = (state == "ready" and waitDone)
+		if showBtn and not btnShown then
+			btnShown = true
+			swapToken = swapToken + 1
+			local tk = swapToken
+			btnGroup.Visible = true
+			TweenService:Create(loaderGroup, FAST, { GroupTransparency = 1 }):Play()
+			TweenService:Create(btnGroup, SMOOTH, { GroupTransparency = 0 }):Play()
+			task.delay(FAST.Time + 0.03, function()
+				if alive and tk == swapToken then
+					loaderGroup.Visible = false
+				end
+			end)
+		elseif (not showBtn) and btnShown then
+			btnShown = false
+			swapToken = swapToken + 1
+			local tk = swapToken
+			loaderGroup.Visible = true
+			TweenService:Create(btnGroup, FAST, { GroupTransparency = 1 }):Play()
+			TweenService:Create(loaderGroup, SMOOTH, { GroupTransparency = 0 }):Play()
+			task.delay(FAST.Time + 0.03, function()
+				if alive and tk == swapToken then
+					btnGroup.Visible = false
+				end
+			end)
 		end
 	end
 
@@ -619,7 +705,7 @@ function Welcome.new(opts)
 	end
 
 	local function doContinue()
-		if not alive or continued or state ~= "ready" then
+		if not alive or continued or state ~= "ready" or not waitDone or not btnShown then
 			return
 		end
 		continued = true
@@ -635,26 +721,20 @@ function Welcome.new(opts)
 
 	btn.MouseEnter:Connect(function()
 		hovering = true
-		if state == "ready" then
-			paintButton()
-			TweenService:Create(btnScale, SPRING, { Scale = 1.02 }):Play()
-		end
+		paintButton()
+		TweenService:Create(btnScale, SPRING, { Scale = 1.02 }):Play()
 	end)
 	btn.MouseLeave:Connect(function()
 		hovering = false
-		if state == "ready" then
-			paintButton()
-		end
+		paintButton()
 		TweenService:Create(btnScale, SPRING, { Scale = 1 }):Play()
 	end)
 	btn.MouseButton1Down:Connect(function()
-		if state == "ready" then
-			TweenService:Create(btnScale, FAST, { Scale = 0.96 }):Play()
-		end
+		TweenService:Create(btnScale, FAST, { Scale = 0.96 }):Play()
 	end)
 	btn.MouseButton1Up:Connect(function()
 		local s = 1
-		if hovering and state == "ready" then
+		if hovering then
 			s = 1.02
 		end
 		TweenService:Create(btnScale, SPRING, { Scale = s }):Play()
@@ -675,7 +755,7 @@ function Welcome.new(opts)
 		end
 	end)
 
-	-- Enter also continues
+	-- Enter also continues (but only once the button is showing)
 	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
 		if processed then
 			return
@@ -698,10 +778,12 @@ function Welcome.new(opts)
 		status.Text = text or ""
 		if newState == "error" then
 			status.TextColor3 = HOVER_RED
+			spin:Pause()
 		else
 			status.TextColor3 = DIM_TEXT
+			spin:Play()
 		end
-		paintButton()
+		refreshBottom()
 	end
 
 	function W:GetPosition()
@@ -713,10 +795,7 @@ function Welcome.new(opts)
 			return
 		end
 		alive = false
-		if pulse then
-			pulse:Cancel()
-			pulse = nil
-		end
+		spin:Cancel()
 		for i = 1, #conns do
 			pcall(function()
 				conns[i]:Disconnect()
@@ -738,6 +817,7 @@ function Welcome.new(opts)
 	-- INTRO: window pops in, then each part fades up one after the other
 	---------------------------------------------------------------------
 	paintButton()
+	refreshBottom()
 
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
@@ -752,6 +832,14 @@ function Welcome.new(opts)
 			end
 		end)
 	end
+
+	-- the wait: Continue can only show after WAIT_SECONDS, even if everything is loaded sooner
+	task.delay(WAIT_SECONDS, function()
+		if alive then
+			waitDone = true
+			refreshBottom()
+		end
+	end)
 
 	---------------------------------------------------------------------
 	-- exact creation date from the Roblox users API (needs an executor request function)
