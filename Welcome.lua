@@ -307,7 +307,7 @@ function Welcome.new(opts)
 	---------------------------------------------------------------------
 	-- TITLE: "yur1" with the soft white-to-grey gradient
 	---------------------------------------------------------------------
-	local titleBase = UDim2.fromOffset(0, 8)
+	local titleBase = UDim2.fromOffset(0, -6)
 	local titleGroup = new("CanvasGroup", {
 		Name = "Title",
 		Position = titleBase + UDim2.fromOffset(0, 12),
