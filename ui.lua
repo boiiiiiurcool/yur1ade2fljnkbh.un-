@@ -525,35 +525,60 @@ function UI.new(opts)
 			end
 		end
 
-		-- house icon: soft and rounded. A rounded diamond is the roof (big corner radius so the
-		-- tip and the eaves are round), a rounded body sits under it, and a rounded door cuts in.
+		-- house icon: the roof is two square frames, each cut diagonally with a UIGradient whose
+		-- transparency has a tiny soft step. That gives a clean smooth slope with no rotated frames.
 		local function buildHome(glyph)
 			local inks = {}
+			local function half(anchorX, rot, seq)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(anchorX, 0),
+					Position = UDim2.new(0.5, 0, 0.5, -10),
+					Size = UDim2.fromOffset(10, 10),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 3,
+				}, glyph)
+				new("UIGradient", { Rotation = rot, Transparency = seq }, f)
+				table.insert(inks, f)
+			end
+			-- left half keeps its lower-right triangle, right half keeps its lower-left triangle
+			half(1, 45, NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.46, 1),
+				NumberSequenceKeypoint.new(0.54, 0),
+				NumberSequenceKeypoint.new(1, 0),
+			}))
+			half(0, -45, NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(0.46, 0),
+				NumberSequenceKeypoint.new(0.54, 1),
+				NumberSequenceKeypoint.new(1, 1),
+			}))
+			-- small rounded tip so the two halves join without a seam
+			local tip = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, -10),
+				Size = UDim2.fromOffset(2, 8),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(tip, 1)
+			table.insert(inks, tip)
 			local body = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, 4),
-				Size = UDim2.fromOffset(16, 12),
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, 0),
+				Size = UDim2.fromOffset(16, 10),
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
 				ZIndex = 3,
 			}, glyph)
-			corner(body, 4)
+			corner(body, 3)
 			table.insert(inks, body)
-			local roof = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, -3),
-				Size = UDim2.fromOffset(15, 15),
-				Rotation = 45,
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 3,
-			}, glyph)
-			corner(roof, 5)
-			table.insert(inks, roof)
 			local door = new("Frame", {
 				AnchorPoint = Vector2.new(0.5, 1),
 				Position = UDim2.new(0.5, 0, 0.5, 10),
-				Size = UDim2.fromOffset(5, 7),
+				Size = UDim2.fromOffset(4, 6),
 				BackgroundColor3 = SIDEBAR_BG,
 				BorderSizePixel = 0,
 				ZIndex = 4,
