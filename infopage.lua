@@ -1,9 +1,12 @@
 -- infopage.lua  (Y1 Info tab content, separate module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Builds the Info tab INTO a frame (the Info page of ui.lua):
---   OVERVIEW : account (profile picture + username) and plan, license + time remaining
---   YUR1 INFO: yur1 version, yur1 status, supported games
+-- Builds the Info tab INTO a frame (the Info page of ui.lua). The page scrolls if it is taller
+-- than the window:
+--   Overview     : account (profile picture + username) and plan, license + time remaining
+--   yur1 info    : yur1 version, yur1 status, supported games
+--   Executor info: which executor is running (if it can be detected) and its version
+--   Credits      : who made yur1 + Discord symbol
 --
 --   local InfoPage = <this file>
 --   InfoPage.build(parentFrame, themeTable, helperTable, {
@@ -30,11 +33,16 @@ function InfoPage.build(parent, T, H, opts)
 	local LEFT = Enum.TextXAlignment.Left
 	local RIGHT = Enum.TextXAlignment.Right
 
-	local root = new("Frame", {
+	local root = new("ScrollingFrame", {
 		Name = "InfoRoot",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
+		CanvasSize = UDim2.new(0, 0, 0, 560),
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = T.HOVER_GREY,
+		ScrollBarImageTransparency = 0.3,
 	}, parent)
 
 	---------------------------------------------------------------------
@@ -166,6 +174,79 @@ function InfoPage.build(parent, T, H, opts)
 	cell(info, 0, 0, "yur1 Version", versionText)
 	cell(info, 1, 0, "yur1 Status", statusText, T.GREEN)
 	cell(info, 2, 58, "Supported Games", gamesText)
+
+	---------------------------------------------------------------------
+	-- EXECUTOR INFO (detected with identifyexecutor when the executor has it)
+	---------------------------------------------------------------------
+	local execName = "Unknown"
+	local execVersion = "Unknown"
+	local okExec, nameResult, verResult = pcall(function()
+		if identifyexecutor then
+			return identifyexecutor()
+		end
+		if getexecutorname then
+			return getexecutorname()
+		end
+		return nil
+	end)
+	if okExec and type(nameResult) == "string" and nameResult ~= "" then
+		execName = nameResult
+		if type(verResult) == "string" and verResult ~= "" then
+			execVersion = verResult
+		end
+	end
+
+	section("Executor info", 342)
+	local exec = card(366, 58)
+	divider(exec, UDim2.new(0.5, 0, 0, 10), UDim2.fromOffset(1, 38))
+	cell(exec, 0, 0, "Executor", execName)
+	cell(exec, 1, 0, "Version", execVersion)
+
+	---------------------------------------------------------------------
+	-- CREDITS
+	---------------------------------------------------------------------
+	section("Credits", 444)
+	local cred = card(468, 76)
+
+	-- Discord symbol drawn with shapes: blurple tile, white face, two eyes
+	local BLURPLE = Color3.fromRGB(88, 101, 242)
+	local tile = new("Frame", {
+		Name = "DiscordSymbol",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 16, 0.5, 0),
+		Size = UDim2.fromOffset(44, 44),
+		BackgroundColor3 = BLURPLE,
+		BorderSizePixel = 0,
+	}, cred)
+	corner(tile, 12)
+
+	local function tileShape(x, y, w, h, r, color, rot)
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, x, 0.5, y),
+			Size = UDim2.fromOffset(w, h),
+			Rotation = rot or 0,
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, tile)
+		corner(f, r)
+		return f
+	end
+	local WHITE = Color3.new(1, 1, 1)
+	tileShape(0, 0, 28, 20, 9, WHITE)            -- face
+	tileShape(-11, -9, 7, 6, 3, WHITE, -20)      -- left ear
+	tileShape(11, -9, 7, 6, 3, WHITE, 20)        -- right ear
+	tileShape(-5.5, 0, 4, 7, 2, BLURPLE)         -- left eye
+	tileShape(5.5, 0, 4, 7, 2, BLURPLE)          -- right eye
+	tileShape(0, 7, 10, 2, 1, BLURPLE)           -- small mouth
+
+	local credText = label(cred, "<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord",
+		UDim2.fromOffset(74, 10), UDim2.new(1, -90, 1, -20), Enum.Font.GothamMedium, 13, T.TEXT_COLOR, LEFT)
+	credText.RichText = true
+	credText.TextWrapped = true
+	credText.TextTruncate = Enum.TextTruncate.None
+	credText.TextYAlignment = Enum.TextYAlignment.Center
 
 	return { Root = root }
 end
