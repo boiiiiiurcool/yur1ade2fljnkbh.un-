@@ -2,7 +2,7 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Same look as ui.lua: black window with tiny rounded corners (no sidebar),
--- title card top left, close button top right, content area on the right.
+-- close button top right, content area fills the window on a soft gradient.
 -- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
 -- (current game name + icon), tiles for user ID, account age, creation date and role, and a
 -- Continue button.
@@ -243,6 +243,26 @@ function Welcome.new(opts)
 	corner(window)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
+	-- clean gradient background behind everything
+	do
+		local backdrop = new("Frame", {
+			Name = "Backdrop",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BorderSizePixel = 0,
+			ZIndex = 0,
+		}, window)
+		corner(backdrop, RADIUS)
+		new("UIGradient", {
+			Rotation = 45,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(44, 44, 60)),
+				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 18, 24)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 8, 10)),
+			}),
+		}, backdrop)
+	end
+
 	do
 		local outline = new("Frame", {
 			Name = "Outline",
@@ -264,22 +284,6 @@ function Welcome.new(opts)
 	}, window)
 
 	-- (no sidebar)
-
-	-- title card (top left), same as the "Tab / <page>" card in ui.lua
-	do
-		local titleChip = new("Frame", {
-			Name = "TitleCard",
-			Position = UDim2.fromOffset(CHIP_X, 6),
-			Size = UDim2.fromOffset(CHIP_W, 36),
-			BackgroundColor3 = SIDEBAR_BG,
-			BorderSizePixel = 0,
-		}, window)
-		corner(titleChip, RADIUS + 2)
-		label(titleChip, "Tab", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
-			Enum.Font.Gotham, 11, DIM_TEXT)
-		label(titleChip, "Welcome", UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
-			Enum.Font.GothamMedium, 13, TEXT_COLOR)
-	end
 
 	-- close button (top right), same look as the control cluster in ui.lua
 	local closeBtn = nil
