@@ -3,25 +3,29 @@
 --
 -- Same base layout as ui.lua: black window with tiny rounded corners, slim sidebar with the Y1 logo
 -- and your picture, title card top left, close button top right, content area on the right.
--- In the content area: "yur1" on top, "Welcome to yur1", your profile card, tiles for user ID,
--- account age, creation date and role (everybody is a Tester right now), and a Continue button.
--- No dimmed or blurred backdrop.
+-- In the content area: "yur1" on top, "Welcome to yur1", your profile card next to a game card
+-- (current game name + icon), tiles for user ID, account age, creation date and role, and a
+-- Continue button.
+--
+-- The window is draggable. When Continue is pressed, OnContinue receives the window's current
+-- position (a UDim2) so the main window can open in the exact same spot.
 --
 --   local Welcome = <this file>
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
---       Title = "yur1",                     -- big text on top + "Welcome to <Title>"
---       Logo = "Y1",                        -- small logo in the sidebar
+--       Title = "yur1",
+--       Logo = "Y1",
 --       ButtonText = "Continue",
---       DefaultRole = "Tester",             -- everybody is a Tester for now
---       Roles = { [12345678] = "Owner" },   -- optional: a different role for a specific user ID later
---       OnContinue = function() end,        -- runs after the welcome has faded out
---       OnClose = function() end,           -- runs if the welcome is closed with the X instead
+--       DefaultRole = "Tester",
+--       Roles = { [12345678] = "Owner" },
+--       OnContinue = function(position) end,  -- position = UDim2 where the welcome window was
+--       OnClose = function() end,
 --   })
---   welcome:SetState("loading", "Loading modules...")   -- Continue is disabled and pulses
---   welcome:SetState("ready")                           -- Continue works (Enter works too)
---   welcome:SetState("error", "Could not load")         -- Continue stays disabled
---   welcome:Close(instant)                              -- closes it without running OnContinue
+--   welcome:SetState("loading", "Loading modules...")
+--   welcome:SetState("ready")
+--   welcome:SetState("error", "Could not load")
+--   welcome:GetPosition()                              -- current window position (UDim2)
+--   welcome:Close(instant)                             -- closes it without running OnContinue
 
 local Welcome = {}
 
@@ -37,6 +41,7 @@ function Welcome.new(opts)
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
 	local HttpService = game:GetService("HttpService")
+	local MarketplaceService = game:GetService("MarketplaceService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
@@ -479,14 +484,14 @@ function Welcome.new(opts)
 
 	label(header, "Welcome to " .. title, UDim2.fromOffset(0, 56), UDim2.new(1, 0, 0, 22),
 		Enum.Font.GothamMedium, 17, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(header, "This is the account you are using", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
+	label(header, "Drag this window anywhere - the menu opens where you leave it", UDim2.fromOffset(0, 82), UDim2.new(1, 0, 0, 16),
 		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 
-	-- ===== profile card: picture, display name, username =====
+	-- ===== profile card (left) + game card (right) =====
 	local profile = makeSection(2, 132, CONTENT_W - 4, 88, true)
 
 	local profCard = new("Frame", {
-		Size = UDim2.fromScale(1, 1),
+		Size = UDim2.new(0.5, -4, 1, 0),
 		BackgroundColor3 = SIDEBAR_BG,
 		BorderSizePixel = 0,
 	}, profile)
@@ -506,6 +511,43 @@ function Welcome.new(opts)
 		Enum.Font.GothamBold, 18, TEXT_COLOR)
 	label(profCard, "@" .. player.Name, UDim2.fromOffset(92, 46), UDim2.new(1, -104, 0, 18),
 		Enum.Font.Gotham, 13, DIM_TEXT)
+
+	local gameCard = new("Frame", {
+		Position = UDim2.new(0.5, 4, 0, 0),
+		Size = UDim2.new(0.5, -4, 1, 0),
+		BackgroundColor3 = SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, profile)
+	corner(gameCard, SQUARE_RADIUS)
+	stroke(gameCard, BORDER, 1, 0)
+
+	local gameIcon = new("ImageLabel", {
+		Position = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(64, 64),
+		BackgroundColor3 = CARD_BG,
+		BorderSizePixel = 0,
+		Image = "rbxthumb://type=GameIcon&id=" .. tostring(game.GameId) .. "&w=256&h=256",
+	}, gameCard)
+	corner(gameIcon, 14)
+
+	label(gameCard, "Current game", UDim2.fromOffset(92, 14), UDim2.new(1, -104, 0, 14),
+		Enum.Font.Gotham, 11, DIM_TEXT)
+	local gameNameLabel = label(gameCard, game.Name, UDim2.fromOffset(92, 30), UDim2.new(1, -104, 0, 22),
+		Enum.Font.GothamBold, 16, TEXT_COLOR)
+	label(gameCard, "Place ID: " .. tostring(game.PlaceId), UDim2.fromOffset(92, 56), UDim2.new(1, -104, 0, 16),
+		Enum.Font.Gotham, 12, DIM_TEXT)
+
+	-- the real game name comes from the marketplace (runs in the background)
+	task.spawn(function()
+		local ok, info = pcall(function()
+			return MarketplaceService:GetProductInfo(game.PlaceId)
+		end)
+		if ok and type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+			if alive and gameNameLabel.Parent then
+				gameNameLabel.Text = info.Name
+			end
+		end
+	end)
 
 	-- ===== info tiles in one row: user ID, account age, creation date, role =====
 	local tilesGroup = makeSection(2, 234, CONTENT_W - 4, 60, true)
@@ -660,11 +702,12 @@ function Welcome.new(opts)
 		end
 	end
 
-	local function leaveAndCallback()
+	-- leavePos = where the window was when Continue was pressed
+	local function leaveAndCallback(leavePos)
 		local cb = opts.OnContinue
 		W:Close(true)
 		if cb then
-			local ok, err = pcall(cb)
+			local ok, err = pcall(cb, leavePos)
 			if not ok then
 				warn("[welcome] OnContinue error: " .. tostring(err))
 			end
@@ -676,11 +719,13 @@ function Welcome.new(opts)
 			return
 		end
 		continued = true
+		-- remember the spot before anything else happens
+		local leavePos = window.Position
 		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 		TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
 		task.delay(LEAVE.Time + 0.03, function()
 			if alive then
-				leaveAndCallback()
+				leaveAndCallback(leavePos)
 			end
 		end)
 	end
@@ -746,6 +791,9 @@ function Welcome.new(opts)
 
 	local function bindDrag(handle)
 		handle.InputBegan:Connect(function(input)
+			if continued then
+				return
+			end
 			if input.UserInputType == Enum.UserInputType.MouseButton1
 				or input.UserInputType == Enum.UserInputType.Touch then
 				dragging = true
@@ -763,7 +811,7 @@ function Welcome.new(opts)
 	bindDrag(sidebar)
 
 	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not dragging then
+		if not dragging or continued then
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseMovement
@@ -791,6 +839,10 @@ function Welcome.new(opts)
 			status.TextColor3 = DIM_TEXT
 		end
 		paintButton()
+	end
+
+	function W:GetPosition()
+		return window.Position
 	end
 
 	function W:Close(instant)
