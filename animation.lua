@@ -16,6 +16,9 @@
 -- animation and restarts the Animate script so the character animates from a clean start.
 -- Set RESPAWN_ON_RESET = true to also respawn your character (off by default: it kills you in game).
 --
+-- ANTI AFK: a second small card (Enable switch only, no dots) on the third row, left side. While it is on,
+-- the game's idle kick is blocked by sending a fake click when Roblox says you went idle.
+--
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
 -- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
 
@@ -487,6 +490,56 @@ function AnimationPage.build(parent, T, H, ctx)
 	refreshStatus()
 
 	---------------------------------------------------------------------
+	-- ANTI AFK (third row, left side): just an Enable switch
+	---------------------------------------------------------------------
+	local afkOn = false
+
+	local afkCard = new("Frame", {
+		Name = "AntiAfkCard",
+		Position = UDim2.fromOffset(2, 172),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, parent)
+	corner(afkCard, RADIUS + 4)
+	stroke(afkCard, T.BORDER, 1, 0)
+
+	local afkCaption = label(parent, "ANTI AFK", UDim2.fromOffset(4, 154), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(afkCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -90, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local afkSub = label(afkCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -90, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	afkSub.RichText = true
+
+	local function refreshAfk()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if afkOn then
+			state = '<font color="rgb(52,199,120)">Active</font>'
+		end
+		afkSub.Text = state
+	end
+	refreshAfk()
+
+	X.makeSwitch(afkCard, false, function(on)
+		afkOn = on
+		refreshAfk()
+	end, 23)
+
+	-- Roblox fires Idled after about 20 minutes without input; a fake click resets that timer
+	conns[#conns + 1] = player.Idled:Connect(function()
+		if not running or not afkOn then
+			return
+		end
+		pcall(function()
+			local vu = game:GetService("VirtualUser")
+			vu:CaptureController()
+			vu:ClickButton2(Vector2.new(0, 0))
+		end)
+	end)
+
+	---------------------------------------------------------------------
 	-- unload: put the original animations back
 	---------------------------------------------------------------------
 	local function unload()
@@ -494,6 +547,7 @@ function AnimationPage.build(parent, T, H, ctx)
 			return
 		end
 		enabled = false
+		afkOn = false
 		running = false
 		applyToken = applyToken + 1
 		runApply(true, false)
@@ -506,6 +560,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		pcall(function()
 			card:Destroy()
 			caption:Destroy()
+			afkCard:Destroy()
+			afkCaption:Destroy()
 		end)
 	end
 
