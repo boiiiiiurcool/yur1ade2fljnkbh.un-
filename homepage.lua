@@ -19,12 +19,14 @@
 -- Access / Build / Component at the bottom left. On the right a card with the game image.
 -- The game image also shows very dim behind the page. Layout follows the window size.
 --
--- In the empty space on the left a notification fades in for Zee Hood players. It is a soft
--- glass card (see-through, so the page behind it shows a little) with two ways out:
+-- In the empty space on the left a notification floats in for Zee Hood players, like a toast
+-- sitting on top of the page rather than a panel built into it. A soft drop shadow lifts it off
+-- the background, and the card itself is close to solid (no icon chip, a thin outline), so it
+-- reads as a notification rather than a blended-in section. Two ways out:
 --   * the X in its corner closes it for good,
 --   * Enable calls opts.OnEnable. That works ONCE: when it finishes the button turns into a
 --     greyed-out "Enabled" and the notification closes by itself after opts.AutoClose seconds
---     (default 3, set 0 to keep it open).
+--     (default 3, set 0 to keep it open), fading out while drifting upward, like a toast leaving.
 -- If OnEnable fails (for example the download failed or the file has an error) the full error
 -- text is shown inside the notification and the button becomes "Try again".
 
@@ -163,71 +165,74 @@ function HomePage.build(parent, T, H, opts)
 	sub.TextYAlignment = Enum.TextYAlignment.Top
 	sub.ZIndex = 3
 
-	-- ZEE HOOD NOTIFICATION: floats in the empty space on the left, under the subtitle.
-	-- It fades in a moment after the page opens. The X closes it for good, Enable runs it once.
-	-- Built as a soft glass card: a gradient that is more see-through towards the right, a very
-	-- faint outline and no hard fill, so it melts into the page instead of sitting on it like a box.
-	local NOTICE_H = 106        -- normal height
+	-- ZEE HOOD NOTIFICATION: floats in the empty space on the left, under the subtitle, like a
+	-- toast sitting on top of the page rather than a panel built into it. A soft drop shadow lifts
+	-- it off the background, and the card itself is close to solid (no icon chip, a thin outline),
+	-- so it reads as a notification rather than a blended-in section.
+	-- Two ways out: the X in its corner closes it for good, Enable runs it once.
+	local NOTICE_H = 106        -- normal height (the glass card itself)
 	local NOTICE_H_ERR = 150   -- height while an error message is showing
 	local AUTO_CLOSE = opts.AutoClose
 	if AUTO_CLOSE == nil then
 		AUTO_CLOSE = 3
 	end
-	local NOTICE_X = UDim2.new(1, -(CARD_S + 24 + 28 + 10) + 4, 0, 0)   -- width (4px more for the outline room)
+	local NOTICE_X = UDim2.new(1, -(CARD_S + 24 + 28 + 10) + 8, 0, 0)   -- width (room for the shadow + outline)
+	local MARGIN = 4            -- gap between the notice's own edge and the glass card (for the shadow/stroke)
 	local noticeBase = UDim2.fromOffset(22, 174)
 
-	-- canvas group so the whole notification fades together; it is 2px bigger than the glass
-	-- so the outline is not cut off at the edge
+	-- canvas group so the whole notification (shadow included) fades and moves together
 	local notice = new("CanvasGroup", {
 		Name = "ZeeHoodNotice",
 		Position = noticeBase + UDim2.fromOffset(0, 14),
-		Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, NOTICE_H + 4),
+		Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, NOTICE_H + MARGIN * 2),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
-		ZIndex = 3,
+		ZIndex = 6,
 	}, root)
+
+	-- drop shadow: a soft dark card sitting a little lower than the glass, peeking out at the
+	-- bottom edge, so the notification reads as lifted above the page instead of flat on it
+	local shadow = new("Frame", {
+		Name = "Shadow",
+		Position = UDim2.fromOffset(MARGIN, MARGIN + 3),
+		Size = UDim2.new(1, -MARGIN * 2, 1, -MARGIN * 2),
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 0.5,
+		BorderSizePixel = 0,
+		ZIndex = 5,
+	}, notice)
+	corner(shadow, 12)
 
 	local glass = new("Frame", {
 		Name = "Glass",
-		Position = UDim2.fromOffset(2, 2),
-		Size = UDim2.new(1, -4, 1, -4),
+		Position = UDim2.fromOffset(MARGIN, MARGIN),
+		Size = UDim2.new(1, -MARGIN * 2, 1, -MARGIN * 2),
 		BackgroundColor3 = T.SIDEBAR_BG,
 		BorderSizePixel = 0,
-		ZIndex = 3,
+		ZIndex = 6,
 	}, notice)
 	corner(glass, 12)
 	new("UIGradient", {
 		Rotation = 0,
 		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0.1),
-			NumberSequenceKeypoint.new(0.55, 0.38),
-			NumberSequenceKeypoint.new(1, 0.62),
+			NumberSequenceKeypoint.new(0, 0.02),
+			NumberSequenceKeypoint.new(0.6, 0.1),
+			NumberSequenceKeypoint.new(1, 0.2),
 		}),
 	}, glass)
-	stroke(glass, T.ICON_HOVER, 1, 0.88)
+	stroke(glass, T.ICON_HOVER, 1, 0.8)
 
-	-- round chip with an exclamation mark
-	local chip = new("Frame", {
-		Name = "Chip",
-		Position = UDim2.fromOffset(14, 14),
-		Size = UDim2.fromOffset(26, 26),
-		BackgroundColor3 = T.CLUSTER_BG,
-		BackgroundTransparency = 0.2,
-		BorderSizePixel = 0,
-		ZIndex = 4,
-	}, glass)
-	corner(chip, 100)
-	local chipText = label(chip, "!", UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1),
-		Enum.Font.GothamBold, 14, T.ICON_HOVER, Enum.TextXAlignment.Center)
-	chipText.ZIndex = 5
+	-- text starts close to the left edge now that the icon chip is gone
+	local TEXT_X = 18
+	local RIGHT_PAD = 40   -- room for the X button at the top right
 
 	local noticeText = label(glass, "Hey? are you on zee hood perchance, if you are turn this on before you get kicked..",
-		UDim2.fromOffset(52, 12), UDim2.new(1, -92, 0, 38), Enum.Font.Gotham, 13, T.TEXT_COLOR)
+		UDim2.fromOffset(TEXT_X, 14), UDim2.new(1, -(TEXT_X + RIGHT_PAD), 0, 38), Enum.Font.Gotham, 13, T.TEXT_COLOR)
 	noticeText.TextWrapped = true
 	noticeText.TextTruncate = Enum.TextTruncate.None
 	noticeText.TextYAlignment = Enum.TextYAlignment.Top
-	noticeText.ZIndex = 4
+	noticeText.ZIndex = 7
 
 	-- X (top right): closes the notification
 	local closeBtn = new("TextButton", {
@@ -240,7 +245,7 @@ function HomePage.build(parent, T, H, opts)
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Text = "",
-		ZIndex = 5,
+		ZIndex = 8,
 	}, glass)
 	corner(closeBtn, 6)
 	local closeBars = {}
@@ -252,7 +257,7 @@ function HomePage.build(parent, T, H, opts)
 			Rotation = rot,
 			BackgroundColor3 = T.ICON,
 			BorderSizePixel = 0,
-			ZIndex = 6,
+			ZIndex = 9,
 		}, closeBtn)
 		corner(f, 1)
 		closeBars[#closeBars + 1] = f
@@ -263,7 +268,7 @@ function HomePage.build(parent, T, H, opts)
 	local enableBtn = new("TextButton", {
 		Name = "EnableButton",
 		AutoButtonColor = false,
-		Position = UDim2.fromOffset(52, 60),
+		Position = UDim2.fromOffset(TEXT_X, 60),
 		Size = UDim2.fromOffset(104, 28),
 		BackgroundColor3 = T.JOIN_BG,
 		BorderSizePixel = 0,
@@ -271,27 +276,29 @@ function HomePage.build(parent, T, H, opts)
 		Text = "Enable",
 		TextSize = 13,
 		TextColor3 = T.BLACK,
-		ZIndex = 5,
+		ZIndex = 8,
 	}, glass)
 	corner(enableBtn, 8)
 
 	-- short status next to the button ("Running...", "Done", "Failed")
-	local enableNote = label(glass, "", UDim2.fromOffset(168, 60), UDim2.new(1, -184, 0, 28),
+	local enableNote = label(glass, "", UDim2.fromOffset(TEXT_X + 104 + 14, 60), UDim2.new(1, -(TEXT_X + 104 + 14 + 16), 0, 28),
 		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	enableNote.ZIndex = 4
+	enableNote.ZIndex = 7
 
 	-- the full error text, under the button (only visible after a failure)
-	local errorText = label(glass, "", UDim2.fromOffset(52, 98), UDim2.new(1, -68, 0, 40),
+	local errorText = label(glass, "", UDim2.fromOffset(TEXT_X, 98), UDim2.new(1, -(TEXT_X + 16), 0, 40),
 		Enum.Font.Gotham, 11, T.HOVER_RED)
 	errorText.Name = "EnableError"
 	errorText.TextWrapped = true
 	errorText.TextTruncate = Enum.TextTruncate.None
 	errorText.TextYAlignment = Enum.TextYAlignment.Top
 	errorText.Visible = false
-	errorText.ZIndex = 4
+	errorText.ZIndex = 7
 
+	-- entrance: rises into place and fades in. Exit: drifts further up while fading out, slowly,
+	-- like a toast leaving rather than a panel collapsing
 	local noticeInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-	local noticeOut = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+	local noticeOut = TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 	local noticeGone = false
 
 	local function setNoticeHeight(h)
@@ -299,21 +306,21 @@ function HomePage.build(parent, T, H, opts)
 			return
 		end
 		TweenService:Create(notice, noticeInfo, {
-			Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, h + 4),
+			Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, h + MARGIN * 2),
 		}):Play()
 	end
 
-	-- slides down a little and fades out, then removes itself for good
+	-- drifts upward and fades out, then removes itself for good
 	local function closeNotice()
 		if noticeGone then
 			return
 		end
 		noticeGone = true
 		TweenService:Create(notice, noticeOut, {
-			Position = noticeBase + UDim2.fromOffset(0, 10),
+			Position = noticeBase + UDim2.fromOffset(0, -18),
 			GroupTransparency = 1,
 		}):Play()
-		task.delay(0.3, function()
+		task.delay(noticeOut.Time + 0.05, function()
 			notice:Destroy()
 		end)
 	end
