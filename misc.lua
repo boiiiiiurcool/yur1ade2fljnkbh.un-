@@ -1,16 +1,17 @@
--- misc.lua  (Y1 Misc tab: a Movement / Extra switch at the bottom, as its own module)
+-- misc.lua  (Y1 Misc tab: a Movement / Extra / Auto Buy switch at the bottom, as its own module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Builds the Misc tab INTO win.MiscPage (ui.lua loads it through opts.MiscModule).
--- Same idea as aimbot.lua: a small switch at the bottom, [ Movement | Extra ], swaps the page above it.
+-- Same idea as aimbot.lua: a small switch at the bottom, [ Movement | Extra | Auto Buy ], swaps the page above it.
 --
 --   MovementModule = movement.lua   (empty for now)
---   ExtraModule    = extra.lua      (BulletTracer)
+--   ExtraModule    = extra.lua      (BulletTracer + HitSounds)
+--   Extra1Module   = extra1.lua     (Auto Buy: armor / stim / food)
 --
--- main.lua loads both and hands them over through opts.MovementModule / opts.ExtraModule
--- (ui.lua passes opts.Misc to this file). Each one is called as <module>.build(container, T, H, ctx)
--- inside a pcall, so a broken module cannot break the tab. If it returns a table with an Unload
--- function, that is called when the window is unloaded.
+-- main.lua loads them and hands them over through opts.MovementModule / opts.ExtraModule /
+-- opts.Extra1Module (ui.lua passes opts.Misc to this file). Each one is called as
+-- <module>.build(container, T, H, ctx) inside a pcall, so a broken module cannot break the tab.
+-- If it returns a table with an Unload function, that is called when the window is unloaded.
 --
 -- The pages here are plain frames on purpose (not CanvasGroups): the Misc page of the window is
 -- already a CanvasGroup, and nesting more of them breaks pop-ups (they come out solid white).
@@ -48,12 +49,22 @@ function MiscPage.build(parent, T, H, opts)
 		}, root)
 	end
 
-	local order = { "Movement", "Extra" }
+	local order = { "Movement", "Extra", "Auto Buy" }
 	local boxes = {
 		Movement = makeBox("MovementModule", true),
 		Extra = makeBox("ExtraModule", false),
+		["Auto Buy"] = makeBox("AutoBuyModule", false),
 	}
-	local mods = { Movement = opts.MovementModule, Extra = opts.ExtraModule }
+	local mods = {
+		Movement = opts.MovementModule,
+		Extra = opts.ExtraModule,
+		["Auto Buy"] = opts.Extra1Module,
+	}
+	local fileNames = {
+		Movement = "movement.lua",
+		Extra = "extra.lua",
+		["Auto Buy"] = "extra1.lua",
+	}
 
 	local ctx = { Settings = opts.Settings or {} }
 
@@ -63,7 +74,7 @@ function MiscPage.build(parent, T, H, opts)
 		if type(mod) == "table" and type(mod.build) == "function" then
 			local ok, res = pcall(mod.build, boxes[name], T, H, ctx)
 			if not ok then
-				warn("[misc] " .. string.lower(name) .. ".lua failed: " .. tostring(res))
+				warn("[misc] " .. fileNames[name] .. " failed: " .. tostring(res))
 			elseif type(res) == "table" then
 				handles[#handles + 1] = res
 			end
@@ -78,7 +89,7 @@ function MiscPage.build(parent, T, H, opts)
 		Name = "ModeSwitch",
 		AnchorPoint = Vector2.new(0.5, 1),
 		Position = UDim2.new(0.5, 0, 1, -6),
-		Size = UDim2.fromOffset(220, 32),
+		Size = UDim2.fromOffset(300, 32),
 		BackgroundColor3 = T.SIDEBAR_BG,
 		BorderSizePixel = 0,
 	}, root)
