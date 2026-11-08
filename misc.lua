@@ -66,7 +66,7 @@ function MiscPage.build(parent, T, H, opts)
 		["Auto Buy"] = "extra1.lua",
 	}
 
-	local ctx = { Settings = opts.Settings or {} }
+	local ctx = { Settings = opts.Settings or {}, AnimationModule = opts.AnimationModule }
 
 	for i = 1, #order do
 		local name = order[i]
