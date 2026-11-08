@@ -15,13 +15,25 @@
 --                              The dots open one small settings panel (Key, Mode).
 --                              Click the dots again, or anywhere else, to close it.
 --                 Hit Part     a drop-down: Any / Head / Body = which part of a player the crosshair has to be on
---                 Timing       Delay   = ms the crosshair has to stay on a target before it fires
---                              Release = ms the fire button is held before it lets go (0 = hold until
---                                        the crosshair leaves the target)
---                 FILTERS      Team Check    ON = never fires at players on your team
---                              Health Check  ON = never fires at players whose health is below the Min slider
---                                            (in percent of their max health). Off every time the script starts.
+--                 Fire Method  a drop-down: how a shot is fired
+--                                Tool Activate = calls Activate() / Deactivate() on the Tool you hold (default)
+--                                Mouse Click   = mouse1press / mouse1release (many games ignore Tool Activate
+--                                                from a script). Needs an executor that has those two functions.
+--                 FILTERS      Team Check     ON = never fires at players on your team
+--                              Health Check   ON = never fires at players whose health is below the Min slider
+--                                             (in percent of their max health).
+--                              Knocked Check  ON = skips players who are knocked out. ZEE HOOD ONLY: it reads
+--                                             the K.O bool at workspace.Players.<name>.BodyEffects["K.O"]
+--                                             (true = knocked out). In other games it never finds that value,
+--                                             so it does nothing.
+--                              Health Check and Knocked Check are off every time the script starts.
 --   Right column  Distance     Min / Max studs (from your character) the target has to be between
+--                 TIMING       Timing   Delay   = ms the crosshair has to stay on a target before it fires
+--                                       Release = ms the fire button is held before it lets go (0 = hold
+--                                                 until the crosshair leaves the target)
+--                              Random Delay   a switch (OFF every time the script starts). While it is on,
+--                                             the fixed Delay is not used: every shot waits a random time
+--                                             between the Min and Max slider (ms) instead.
 --                 Moving Targets   Hitbox = extra pixels around the crosshair (9 rays instead of 1)
 --                                  Lead   = ms ahead it predicts where a moving player will be
 --                                  Grace  = ms it keeps the lock when the target flickers off for a moment
@@ -35,7 +47,7 @@
 -- non-collidable parts, so thin triggers or invisible walls do not block it, but real walls do.
 -- It only fires when the first real thing the ray hits belongs to a living player.
 --
--- HOW IT FIRES: it calls Activate() / Deactivate() on the Tool you are holding. If your game
+-- HOW IT FIRES: the Fire Method drop-down (Tool Activate or Mouse Click, see above). If your game
 -- has its own fire function, change pressFire() and releaseFire() below.
 --
 -- It runs one step after the aimbot (so it uses the camera after the aimbot has moved it) and
@@ -78,6 +90,11 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		teamCheck = true,
 		healthCheck = false,  -- off every time the script runs
 		minHealth = 20,       -- percent; used while Health Check is on
+		knockedCheck = false, -- off every time the script runs (Zee Hood only)
+		fireMethod = "Tool Activate",   -- "Tool Activate" (default) or "Mouse Click"
+		randDelay = false,    -- off every time the script runs
+		randMin = 10,         -- ms; used while Random Delay is on
+		randMax = 60,         -- ms; used while Random Delay is on
 		tolPx = 6,            -- hitbox grow in pixels (extra rays + extra on-screen size)
 		leadMs = 40,          -- how far ahead to predict moving targets
 		graceMs = 50,         -- keep the lock this long after the target flickers off
@@ -86,6 +103,10 @@ function TriggerbotPage.build(parent, T, H, ctx)
 	local active = false      -- armed (the key is held / toggled on)
 	local firing = false      -- fire button is down right now
 	local firingTool = nil
+	local firingMethod = "Tool"   -- how the shot that is down right now was fired: "Tool" or "Mouse"
+	local curDelay = 0            -- the delay (ms) the current wait uses (a random one while Random Delay is on)
+	local warnedMouse = false
+	local mouseIgnoreUntil = 0    -- our own mouse click must not count as the trigger key (when it is Mouse 1)
 	local waitStart = nil     -- when the crosshair first landed on a target
 	local fireStart = 0
 	local lastHit = 0         -- last time the crosshair was on a target
@@ -97,7 +118,42 @@ function TriggerbotPage.build(parent, T, H, ctx)
 	---------------------------------------------------------------------
 	-- FIRE HOOKS (change these if your game fires some other way)
 	---------------------------------------------------------------------
+	-- the executor functions for a real mouse click (nil when it does not have them)
+	local mousePress = nil
+	local mouseRelease = nil
+	do
+		local okP, fnP = pcall(function()
+			return mouse1press
+		end)
+		local okR, fnR = pcall(function()
+			return mouse1release
+		end)
+		if okP and type(fnP) == "function" then
+			mousePress = fnP
+		end
+		if okR and type(fnR) == "function" then
+			mouseRelease = fnR
+		end
+	end
+
 	local function pressFire()
+		-- Mouse Click: hold the left mouse button down
+		if S.fireMethod == "Mouse Click" then
+			if mousePress == nil or mouseRelease == nil then
+				if not warnedMouse then
+					warnedMouse = true
+					warn("[triggerbot] this executor has no mouse1press / mouse1release, so Mouse Click cannot fire. Use Fire Method: Tool Activate.")
+				end
+				return false
+			end
+			firingMethod = "Mouse"
+			firingTool = nil
+			mouseIgnoreUntil = os.clock() + 0.3
+			pcall(mousePress)
+			return true
+		end
+
+		-- Tool Activate: activate the Tool you are holding
 		local char = player.Character
 		if not char then
 			return false
@@ -106,12 +162,20 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		if not tool then
 			return false
 		end
+		firingMethod = "Tool"
 		firingTool = tool
 		tool:Activate()
 		return true
 	end
 
 	local function releaseFire()
+		if firingMethod == "Mouse" then
+			mouseIgnoreUntil = os.clock() + 0.3
+			if mouseRelease then
+				pcall(mouseRelease)
+			end
+			return
+		end
 		local tool = firingTool
 		firingTool = nil
 		if tool and tool.Parent then
@@ -627,9 +691,11 @@ function TriggerbotPage.build(parent, T, H, ctx)
 
 	-- a drop-down card: the title on the left, a button with the current value on the right.
 	-- Clicking the button opens a small vertical list (a pop-up). Pick one, or click anywhere else to close it.
+	local dropZ = 29   -- each drop-down card sits one step under the one above it, so its list is never covered
 	local function dropdownCard(col, title, options, startValue, onChange)
 		local c = place(col, 46)
-		c.ZIndex = 25   -- the list opens over the cards below, so this card must draw above them
+		c.ZIndex = dropZ   -- the list opens over the cards below, so this card must draw above them
+		dropZ = dropZ - 1
 
 		label(c, title, UDim2.fromOffset(14, 0), UDim2.new(1, -150, 1, 0),
 			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
@@ -858,22 +924,10 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		S.part = v
 	end)
 
-	-- Timing: delay before firing, how long the button is held
-	do
-		local c = place(1, 106)
-		label(c, "Timing (ms)", UDim2.fromOffset(14, 6), UDim2.new(1, -28, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		label(c, "Release 0 = hold until the crosshair leaves", UDim2.fromOffset(14, 23), UDim2.new(1, -28, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-		local delayApi = makeSlider(c, 44, "Delay", 50, 0, 500, 1, S.delayMs, "%d", function(v)
-			S.delayMs = v
-		end)
-		local releaseApi = makeSlider(c, 74, "Release", 50, 0, 500, 1, S.releaseMs, "%d", function(v)
-			S.releaseMs = v
-		end)
-		delayApi.dim(true)
-		releaseApi.dim(true)
-	end
+	-- Fire Method: Tool Activate (default) or a real mouse click
+	dropdownCard(1, "Fire Method", { "Tool Activate", "Mouse Click" }, S.fireMethod, function(v)
+		S.fireMethod = v
+	end)
 
 	section(1, "FILTERS")
 
@@ -898,9 +952,75 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		end, 23)
 	end
 
+	-- Knocked Check: Zee Hood only (the line under the title says so)
+	do
+		local kc = place(1, 46)
+		label(kc, "Knocked Check", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		local kSub = label(kc, '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - skips K.O players',
+			UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14), Enum.Font.Gotham, 11, T.DIM_TEXT)
+		kSub.RichText = true
+		makeSwitch(kc, S.knockedCheck, function(on)
+			S.knockedCheck = on
+		end, 23)
+	end
+
 	-- right column
 	section(2, "RANGE")
 	rangeCard(2)
+
+	section(2, "TIMING")
+
+	-- Timing: delay before firing, how long the button is held
+	local fixedDelayApi = nil
+	do
+		local c = place(2, 106)
+		label(c, "Timing (ms)", UDim2.fromOffset(14, 6), UDim2.new(1, -28, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(c, "Release 0 = hold until the crosshair leaves", UDim2.fromOffset(14, 23), UDim2.new(1, -28, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		fixedDelayApi = makeSlider(c, 44, "Delay", 50, 0, 500, 1, S.delayMs, "%d", function(v)
+			S.delayMs = v
+		end)
+		local releaseApi = makeSlider(c, 74, "Release", 50, 0, 500, 1, S.releaseMs, "%d", function(v)
+			S.releaseMs = v
+		end)
+		fixedDelayApi.dim(not S.randDelay)
+		releaseApi.dim(true)
+	end
+
+	-- Random Delay: a new random delay (between Min and Max) before every shot, instead of the fixed Delay
+	do
+		local c = place(2, 106)
+		label(c, "Random Delay", UDim2.fromOffset(14, 6), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(c, "Replaces Delay with this range", UDim2.fromOffset(14, 23), UDim2.new(1, -70, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		local minApi = nil
+		local maxApi = nil
+		minApi = makeSlider(c, 44, "Min", 50, 0, 500, 1, S.randMin, "%d", function(v)
+			S.randMin = v
+			if S.randMax < v then
+				S.randMax = v
+				maxApi.set(v)
+			end
+		end)
+		maxApi = makeSlider(c, 74, "Max", 50, 0, 500, 1, S.randMax, "%d", function(v)
+			S.randMax = v
+			if S.randMin > v then
+				S.randMin = v
+				minApi.set(v)
+			end
+		end)
+		minApi.dim(S.randDelay)
+		maxApi.dim(S.randDelay)
+		makeSwitch(c, S.randDelay, function(on)
+			S.randDelay = on
+			minApi.dim(on)
+			maxApi.dim(on)
+			fixedDelayApi.dim(not on)
+		end, 19)
+	end
 
 	section(2, "ASSIST")
 
@@ -1086,6 +1206,29 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		return false
 	end
 
+	-- Knocked Check (ZEE HOOD ONLY): true when this character is knocked out.
+	-- The game keeps a bool at <character>.BodyEffects["K.O"] (the characters live in workspace.Players).
+	local function isKnocked(char)
+		local be = char:FindFirstChild("BodyEffects")
+		if be == nil then
+			local folder = workspace:FindFirstChild("Players")
+			local model = nil
+			if folder then
+				model = folder:FindFirstChild(char.Name)
+			end
+			if model then
+				be = model:FindFirstChild("BodyEffects")
+			end
+		end
+		if be then
+			local ko = be:FindFirstChild("K.O")
+			if ko and ko:IsA("BoolValue") then
+				return ko.Value
+			end
+		end
+		return false
+	end
+
 	-- Health Check: true when this player may be shot (always true while the check is off)
 	local function healthOk(hum)
 		if not S.healthCheck then
@@ -1126,8 +1269,8 @@ function TriggerbotPage.build(parent, T, H, ctx)
 				if plr == nil or plr == player then
 					return false
 				end
-				if hum.Health <= 0 then
-					-- dead body: look through it
+				if hum.Health <= 0 or (S.knockedCheck and isKnocked(model)) then
+					-- dead (or knocked out) body: look through it
 					exclude[#exclude + 1] = model
 				else
 					if S.teamCheck and plr.Team ~= nil and plr.Team == player.Team then
@@ -1185,7 +1328,7 @@ function TriggerbotPage.build(parent, T, H, ctx)
 			if model then
 				hum = model:FindFirstChildOfClass("Humanoid")
 			end
-			if hum and hum.Health <= 0 then
+			if hum and (hum.Health <= 0 or (S.knockedCheck and isKnocked(model))) then
 				exclude[#exclude + 1] = model
 			elseif seeThrough(inst) then
 				exclude[#exclude + 1] = inst
@@ -1232,7 +1375,11 @@ function TriggerbotPage.build(parent, T, H, ctx)
 					rootPart = char:FindFirstChild("HumanoidRootPart")
 				end
 				local teamBlocked = S.teamCheck and plr.Team ~= nil and plr.Team == player.Team
-				if hum and rootPart and hum.Health > 0 and not teamBlocked and healthOk(hum) then
+				local downed = false
+				if S.knockedCheck and char then
+					downed = isKnocked(char)
+				end
+				if hum and rootPart and hum.Health > 0 and not teamBlocked and healthOk(hum) and not downed then
 					local d = (rootPart.Position - origin).Magnitude
 					if d >= S.minDist and d <= S.maxDist then
 						local vel = rootPart.AssemblyLinearVelocity
@@ -1284,6 +1431,16 @@ function TriggerbotPage.build(parent, T, H, ctx)
 	---------------------------------------------------------------------
 	-- MAIN STEP
 	---------------------------------------------------------------------
+	-- the delay (ms) for the next shot: the fixed Delay, or a random one between Min and Max
+	local function rollDelay()
+		if S.randDelay then
+			local lo = math.min(S.randMin, S.randMax)
+			local hi = math.max(S.randMin, S.randMax)
+			return lo + math.random() * (hi - lo)
+		end
+		return S.delayMs
+	end
+
 	local function step(dt)
 		if not running or not active then
 			return
@@ -1313,15 +1470,22 @@ function TriggerbotPage.build(parent, T, H, ctx)
 					done = true
 				end
 			end
-			-- the tool was unequipped or removed
-			if firingTool == nil or firingTool.Parent ~= player.Character then
+			-- the tool was unequipped or removed (only matters for Tool Activate)
+			if firingMethod == "Tool" and (firingTool == nil or firingTool.Parent ~= player.Character) then
 				done = true
 			end
 			if done then
 				stopFiring()
-				-- still on the target: the next shot needs no new delay
+				-- still on the target: with the fixed Delay the next shot needs no new wait,
+				-- with Random Delay every shot gets a new random wait
 				if hit then
-					waitStart = now - S.delayMs / 1000
+					if S.randDelay then
+						curDelay = rollDelay()
+						waitStart = now
+					else
+						curDelay = S.delayMs
+						waitStart = now - curDelay / 1000
+					end
 				end
 			end
 			return
@@ -1338,8 +1502,13 @@ function TriggerbotPage.build(parent, T, H, ctx)
 
 		if waitStart == nil then
 			waitStart = now
+			curDelay = rollDelay()
 		end
-		if (now - waitStart) * 1000 >= S.delayMs then
+		local need = S.delayMs
+		if S.randDelay then
+			need = curDelay
+		end
+		if (now - waitStart) * 1000 >= need then
 			if pressFire() then
 				firing = true
 				fireStart = now
@@ -1413,6 +1582,11 @@ function TriggerbotPage.build(parent, T, H, ctx)
 			return
 		end
 
+		-- the click we sent ourselves (Fire Method: Mouse Click) is not the trigger key
+		if S.keybind == Enum.UserInputType.MouseButton1 and os.clock() < mouseIgnoreUntil then
+			return
+		end
+
 		-- keys respect "processed" (typing in chat); mouse buttons ignore it
 		local isMouseBind = S.keybind.EnumType ~= Enum.KeyCode
 		if processed and not isMouseBind then
@@ -1428,6 +1602,9 @@ function TriggerbotPage.build(parent, T, H, ctx)
 
 	conns[#conns + 1] = UserInputService.InputEnded:Connect(function(input)
 		if running and S.mode == "Hold" and matches(input, S.keybind) then
+			if S.keybind == Enum.UserInputType.MouseButton1 and os.clock() < mouseIgnoreUntil then
+				return
+			end
 			setActive(false)
 		end
 	end)
