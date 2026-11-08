@@ -12,6 +12,9 @@
 -- movement animation that is still playing (old default or old package) is stopped, the new ids are
 -- written, then the script is switched on again. Changes are queued so two of them never overlap.
 --
+-- DROP-DOWNS: built in this file (hand-drawn rounded chevron that turns when open), so no patch to
+-- extra.lua's dropdownRow is needed any more.
+--
 -- RESET ALL: puts every drop-down back on Default, restores your default ids, stops every movement
 -- animation and restarts the Animate script so the character animates from a clean start.
 -- Set RESPAWN_ON_RESET = true to also respawn your character (off by default: it kills you in game).
@@ -32,6 +35,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
 	local RADIUS = T.RADIUS
 	local FAST = T.FAST
+	local SMOOTH = T.SMOOTH
 
 	local RESPAWN_ON_RESET = false
 
@@ -201,9 +205,190 @@ function AnimationPage.build(parent, T, H, ctx)
 		Enum.Font.Gotham, 11, T.DIM_TEXT)
 
 	local dropdowns = {}
+
+	-- the drop-down used by every row here. It is built in this file (not in extra.lua) so it can
+	-- be set back to "Default" by Reset All, and it has a hand-drawn rounded chevron that turns
+	-- smoothly when the list opens.
+	local function animDropdown(c, y, title, names, startIndex, onPick, beside)
+		label(c, title, UDim2.fromOffset(16, y), UDim2.fromOffset(120, 28),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+
+		local btn = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -16, 0, y),
+			Size = UDim2.fromOffset(128, 28),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, c)
+		corner(btn, RADIUS + 2)
+
+		local current = startIndex
+		local nameLabel = label(btn, names[current], UDim2.fromOffset(10, 0), UDim2.new(1, -34, 1, 0),
+			Enum.Font.GothamMedium, 12, T.ICON_HOVER)
+
+		-- chevron: two short rounded bars that meet in a V (turns upside down while the list is open)
+		local arrow = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(1, -15, 0.5, 0),
+			Size = UDim2.fromOffset(12, 12),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, btn)
+		local arms = {}
+		local function addArm(x, rot)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, x, 0.5, 0),
+				Size = UDim2.fromOffset(7, 2),
+				Rotation = rot,
+				BackgroundColor3 = T.DIM_TEXT,
+				BorderSizePixel = 0,
+			}, arrow)
+			corner(f, 1)
+			arms[#arms + 1] = f
+		end
+		addArm(-2.5, 45)
+		addArm(2.5, -45)
+
+		local over = false
+		local isOpen = false
+		local function paintArrow()
+			local col = T.DIM_TEXT
+			if over or isOpen then
+				col = T.ICON_HOVER
+			end
+			for i = 1, #arms do
+				TweenService:Create(arms[i], FAST, { BackgroundColor3 = col }):Play()
+			end
+			local rot = 0
+			if isOpen then
+				rot = 180
+			end
+			TweenService:Create(arrow, SMOOTH, { Rotation = rot }):Play()
+		end
+
+		btn.MouseEnter:Connect(function()
+			over = true
+			paintArrow()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			over = false
+			paintArrow()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+		end)
+
+		-- the list
+		local optH = 26
+		local listW = 140
+		local contentH = #names * optH + 8
+		local listH = math.min(contentH, 260)
+		local L = X.makeFloating("AnimDropdown" .. title, listW, listH)
+		L.frame.ZIndex = 70
+
+		local sc = new("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = T.DIM_TEXT,
+			CanvasSize = UDim2.fromOffset(0, contentH),
+		}, L.frame)
+
+		local optButtons = {}
+		local function paintOptions()
+			for i = 1, #optButtons do
+				if i == current then
+					optButtons[i].BackgroundTransparency = 0
+				else
+					optButtons[i].BackgroundTransparency = 1
+				end
+			end
+		end
+
+		local function closeList()
+			if L.isOpen() then
+				L.close()
+			end
+			isOpen = false
+			paintArrow()
+		end
+
+		for i = 1, #names do
+			local ob = new("TextButton", {
+				AutoButtonColor = false,
+				Text = "",
+				Position = UDim2.fromOffset(4, 4 + (i - 1) * optH),
+				Size = UDim2.new(1, -8, 0, optH - 2),
+				BackgroundColor3 = T.HOVER_GREY,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, sc)
+			corner(ob, RADIUS)
+			label(ob, names[i], UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0),
+				Enum.Font.GothamMedium, 12, T.TEXT_COLOR)
+			optButtons[i] = ob
+
+			ob.MouseEnter:Connect(function()
+				ob.BackgroundTransparency = 0
+			end)
+			ob.MouseLeave:Connect(function()
+				if i == current then
+					ob.BackgroundTransparency = 0
+				else
+					ob.BackgroundTransparency = 1
+				end
+			end)
+			ob.Activated:Connect(function()
+				current = i
+				nameLabel.Text = names[i]
+				paintOptions()
+				closeList()
+				onPick(i)
+			end)
+		end
+		paintOptions()
+
+		btn.Activated:Connect(function()
+			if L.isOpen() then
+				closeList()
+				return
+			end
+			-- only one list open at a time
+			for i = 1, #dropdowns do
+				if dropdowns[i].frame ~= L.frame then
+					dropdowns[i].close()
+				end
+			end
+			sc.CanvasPosition = Vector2.new(0, 0)
+			L.open(X.placeNear(btn, listW, listH, beside))
+			isOpen = true
+			paintArrow()
+		end)
+
+		X.addPopup({
+			isOpen = function()
+				return L.isOpen()
+			end,
+			close = closeList,
+			hit = { L.frame, btn },
+		})
+
+		-- used by Reset All: shows another choice without calling onPick
+		local function setIndex(i)
+			current = i
+			nameLabel.Text = names[i]
+			paintOptions()
+		end
+
+		return { frame = L.frame, close = closeList, set = setIndex }
+	end
+
 	for i = 1, #ROWS do
 		local row = ROWS[i]
-		dropdowns[#dropdowns + 1] = X.dropdownRow(pop, 66 + (i - 1) * 34, row.title, 120, 128, NAMES, 1,
+		dropdowns[#dropdowns + 1] = animDropdown(pop, 66 + (i - 1) * 34, row.title, NAMES, 1,
 			function(idx)
 				sel[row.key] = idx
 				schedule()
@@ -443,7 +628,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		for i = 1, #ROWS do
 			sel[ROWS[i].key] = 1
 			local dd = dropdowns[i]
-			if dd and type(dd.set) == "function" then
+			if dd then
+				dd.close()
 				dd.set(1)
 			end
 		end
