@@ -353,25 +353,22 @@ function AimbotPage.build(parent, T, H, opts)
 	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page: triggerbot.lua only
 
 	-- a full size, transparent container on each of those two pages: the module is built into it.
-	-- the Silent one is a CanvasGroup, starts hidden and faded out (the warning sits on top of it
-	-- until Confirm is pressed); the Triggerbot one is a plain frame, since it has no warning to hide behind.
-	local function makeContainer(holder, name)
+	-- Both are plain frames, not CanvasGroups: silP.holder is already a CanvasGroup, and a CanvasGroup
+	-- nested inside another CanvasGroup does not render right in Roblox (pop-ups and dropdowns built
+	-- inside it come out solid white), so nothing else in this chain may be one. The Silent one starts
+	-- hidden (the warning sits on top of it until Confirm is pressed); the Triggerbot one has no
+	-- warning to hide behind, so it starts visible.
+	local function makeContainer(holder, name, startVisible)
 		return new("Frame", {
 			Name = name,
 			Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
+			Visible = startVisible,
 		}, holder)
 	end
-	silP.box = new("CanvasGroup", {
-		Name = "SilentModule",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = 1,
-		Visible = false,
-	}, silP.holder)
-	trigP.box = makeContainer(trigP.holder, "TriggerbotModule")
+	silP.box = makeContainer(silP.holder, "SilentModule", false)
+	trigP.box = makeContainer(trigP.holder, "TriggerbotModule", true)
 
 	---------------------------------------------------------------------
 	-- FLOATING POP-UPS (they sit on the whole Combat tab, so they are never cut off by a scrolling page)
@@ -2465,6 +2462,9 @@ function AimbotPage.build(parent, T, H, opts)
 		local GATE_W = 380
 		local GATE_H = 236
 
+		-- this is the one CanvasGroup under silP.holder (so it can fade as a whole) - its own
+		-- children are plain shapes and labels, never another CanvasGroup, for the same reason
+		-- silP.box above is not one
 		local gate = new("CanvasGroup", {
 			Name = "SilentWarning",
 			AnchorPoint = Vector2.new(0.5, 0.5),
@@ -2666,14 +2666,13 @@ function AimbotPage.build(parent, T, H, opts)
 			if not accepted then
 				return
 			end
-			-- the warning fades out and is hidden; the silent.lua module (built into silP.box
-			-- further down) fades in behind it
+			-- the warning fades out and is hidden; the silent.lua module (built into silP.box,
+			-- a plain frame, further down) is simply revealed behind it
 			TweenService:Create(gate, FAST, { GroupTransparency = 1 }):Play()
 			task.delay(FAST.Time + 0.02, function()
 				gate.Visible = false
+				silP.box.Visible = true
 			end)
-			silP.box.Visible = true
-			TweenService:Create(silP.box, SMOOTH, { GroupTransparency = 0 }):Play()
 		end)
 	end
 
