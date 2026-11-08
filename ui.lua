@@ -4,28 +4,33 @@
 -- Black window with tiny rounded corners, slim sidebar, title card, window controls,
 -- Home tab (separate module), Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
--- Sidebar layout: logo, then Home, Info and Combat icons right under it (top group),
--- and the server icon, gear and profile card at the bottom (bottom group).
+-- Sidebar layout: logo, then Home, Info, Combat, Visuals, World and Movement icons right under it
+-- (top group), and the server icon, gear and profile card at the bottom (bottom group).
 --
 --   local UI = <this file>
 --   local HomePage = <homepage.lua>
 --   local win = UI.new({
 --       Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater",
 --       Position = positionFromWelcome,
---       StartPage = "Home",            -- "Home" (default), "Info", "Combat", "Main" or "Settings"
+--       StartPage = "Home",            -- "Home" (default), "Info", "Combat", "Visuals", "World",
+--                                      -- "Movement", "Main" or "Settings"
 --       HomeModule = HomePage,         -- the homepage.lua module
 --       InfoModule = InfoPage,         -- the infopage.lua module
 --       CombatModule = CombatPage,     -- optional: a module with .build(page, T, H, opts) for the Combat tab
+--       VisualsModule = VisualsPage,   -- optional: same idea for the Visuals tab (opts.Visuals is passed in)
+--       WorldModule = WorldPage,       -- optional: same idea for the World tab (opts.World is passed in)
+--       MovementModule = MovementPage, -- optional: same idea for the Movement tab (opts.Movement is passed in)
 --       Home = { Product = "yur1", Subtitle = "...", Access = "Lifetime access",
 --                Build = "Beta 0.6", Component = "Rock and Roll by reruinz" },
 --   })
 --
 -- What you get back:
---   win.HomePage / win.InfoPage / win.CombatPage / win.MainPage / win.SettingsPage   frames you put your controls in
+--   win.HomePage / win.InfoPage / win.CombatPage / win.VisualsPage / win.WorldPage / win.MovementPage /
+--   win.MainPage / win.SettingsPage   frames you put your controls in
 --   win.T                             theme colours, radii and tween infos
 --   win.H                             helpers: new, corner, stroke, pad, label, hoverable
 --   win.Touch                         true while Touch Mode is on
---   win:ShowPage("Home" | "Info" | "Combat" | "Main" | "Settings")
+--   win:ShowPage("Home" | "Info" | "Combat" | "Visuals" | "World" | "Movement" | "Main" | "Settings")
 --   win:Toast(text)                   small pop-up at the bottom
 --   win:SetStats(text)                small text in the top bar (left of the window controls)
 --   win:OnTouchChange(fn)             fn(isTouch) runs whenever Touch Mode changes
@@ -71,7 +76,11 @@ function UI.new(opts)
 	local uiHidden = false
 	local confirmOpen = false   -- true while the unload dialog is showing (the window is locked)
 	local currentPage = "Home"
-	if opts.StartPage == "Main" or opts.StartPage == "Settings" or opts.StartPage == "Info" or opts.StartPage == "Combat" then
+	local START_PAGES = {
+		Main = true, Settings = true, Info = true, Combat = true,
+		Visuals = true, World = true, Movement = true,
+	}
+	if START_PAGES[opts.StartPage] then
 		currentPage = opts.StartPage
 	end
 	local returnPage = "Home"  -- where the back arrow on Settings goes
@@ -318,6 +327,9 @@ function UI.new(opts)
 	local mainPage = makePage("Main")
 	local infoPage = makePage("Info")
 	local combatPage = makePage("Combat")
+	local visualsPage = makePage("Visuals")
+	local worldPage = makePage("World")
+	local movementPage = makePage("Movement")
 	local settingsPage = makePage("Settings")
 
 	table.insert(bodyParts, sidebar)
@@ -329,6 +341,9 @@ function UI.new(opts)
 	W.HomePage = homePage
 	W.InfoPage = infoPage
 	W.CombatPage = combatPage
+	W.VisualsPage = visualsPage
+	W.WorldPage = worldPage
+	W.MovementPage = movementPage
 	W.MainPage = mainPage
 	W.SettingsPage = settingsPage
 
@@ -380,23 +395,30 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- COMBAT TAB CONTENT (optional separate module, otherwise an empty page with a title)
+	-- COMBAT / VISUALS / WORLD / MOVEMENT TAB CONTENT
+	-- (each is an optional separate module with .build(page, T, H, opts),
+	--  otherwise the page is empty with just its title)
 	---------------------------------------------------------------------
 	do
-		local mod = opts.CombatModule
-		local okBuild = false
-		if type(mod) == "table" and type(mod.build) == "function" then
-			local ok, err = pcall(mod.build, combatPage, W.T, W.H, opts.Combat or {})
-			if ok then
-				okBuild = true
-			else
-				warn("[ui] combat page error: " .. tostring(err))
+		local function buildTab(page, mod, tabOpts, title, tag)
+			local okBuild = false
+			if type(mod) == "table" and type(mod.build) == "function" then
+				local ok, err = pcall(mod.build, page, W.T, W.H, tabOpts or {})
+				if ok then
+					okBuild = true
+				else
+					warn("[ui] " .. tag .. " page error: " .. tostring(err))
+				end
+			end
+			if not okBuild then
+				label(page, title, UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+					Enum.Font.GothamBold, 18, TEXT_COLOR)
 			end
 		end
-		if not okBuild then
-			label(combatPage, "Combat", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
-				Enum.Font.GothamBold, 18, TEXT_COLOR)
-		end
+		buildTab(combatPage, opts.CombatModule, opts.Combat, "Combat", "combat")
+		buildTab(visualsPage, opts.VisualsModule, opts.Visuals, "Visuals", "visuals")
+		buildTab(worldPage, opts.WorldModule, opts.World, "World", "world")
+		buildTab(movementPage, opts.MovementModule, opts.Movement, "Movement", "movement")
 	end
 
 	---------------------------------------------------------------------
@@ -437,8 +459,8 @@ function UI.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- SIDEBAR ICONS (house, ID card and crosshair at the top, server + gear at the bottom;
-	-- one marker slides between them)
+	-- SIDEBAR ICONS (house, ID card, crosshair, eye, globe and person at the top,
+	-- server + gear at the bottom; one marker slides between them)
 	---------------------------------------------------------------------
 	do
 		local TIP_X = 14 + TILE + 10
@@ -742,6 +764,101 @@ function UI.new(opts)
 			return inks
 		end
 
+		-- small helper for the three outline-style icons below: a block centred in the glyph
+		-- (y = offset from the middle), optionally rounded (r = corner radius)
+		local function block(glyph, w, h, y, color, z, r)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, y),
+				Size = UDim2.fromOffset(w, h),
+				BackgroundColor3 = color,
+				BorderSizePixel = 0,
+				ZIndex = z,
+			}, glyph)
+			if r then
+				corner(f, r)
+			end
+			return f
+		end
+
+		-- visuals icon (eye): an almond outline, a ring pupil and a dot, like the reference.
+		--   lids  = two curves y = +-8 * (1 - (x / 12)^2), each drawn as 12 short 2px segments
+		--           (overlapping a little so the joints stay smooth), 24px wide and 16px tall
+		--   pupil = 10px disc with a 6px hole (ring is 2px thick)
+		--   dot   = 2px circle in the middle of the pupil
+		local function buildVisuals(glyph)
+			local inks = {}
+			local A = 12   -- half width of the eye
+			local B = 8    -- half height of the eye
+			local N = 12   -- segments per eyelid
+
+			local function seg(x1, y1, x2, y2)
+				local dx = x2 - x1
+				local dy = y2 - y1
+				local len = math.sqrt(dx * dx + dy * dy)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, (x1 + x2) / 2, 0.5, (y1 + y2) / 2),
+					Size = UDim2.fromOffset(len + 1.5, 2),
+					Rotation = math.deg(math.atan2(dy, dx)),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 3,
+				}, glyph)
+				corner(f, 1)
+				table.insert(inks, f)
+			end
+
+			for side = -1, 1, 2 do
+				local px = -A
+				local py = 0
+				for i = 1, N do
+					local x = -A + (2 * A) * i / N
+					local t = x / A
+					local y = side * B * (1 - t * t)
+					seg(px, py, x, y)
+					px = x
+					py = y
+				end
+			end
+
+			table.insert(inks, block(glyph, 10, 10, 0, ICON, 4, 100))
+			block(glyph, 6, 6, 0, SIDEBAR_BG, 5, 100)
+			table.insert(inks, block(glyph, 2, 2, 0, ICON, 6, 100))
+
+			return inks
+		end
+
+		-- world icon (globe): outer ring, a tall oval, one line across the middle and one down it.
+		--   ring  = 22px disc with an 18px hole (2px thick)
+		--   oval  = 12x22 disc with an 8x18 hole (2px thick), touches the ring at the top and bottom
+		--   lines = 2px wide, 18px long, they reach the inside of the ring
+		local function buildWorld(glyph)
+			local inks = {}
+			table.insert(inks, block(glyph, 22, 22, 0, ICON, 3, 100))
+			block(glyph, 18, 18, 0, SIDEBAR_BG, 4, 100)
+			table.insert(inks, block(glyph, 12, 22, 0, ICON, 5, 100))
+			block(glyph, 8, 18, 0, SIDEBAR_BG, 6, 100)
+			table.insert(inks, block(glyph, 18, 2, 0, ICON, 7, 1))   -- across the middle
+			table.insert(inks, block(glyph, 2, 18, 0, ICON, 7, 1))   -- down the middle
+			return inks
+		end
+
+		-- movement icon (person, like a normal profile picture): a ring for the head and an arch for
+		-- the shoulders.
+		--   head      = 10px disc with a 6px hole (2px thick)
+		--   shoulders = 20px disc with a 16px hole, and a sidebar-coloured strip over its lower half,
+		--               so only the top arch is left (open at the bottom)
+		local function buildMovement(glyph)
+			local inks = {}
+			table.insert(inks, block(glyph, 10, 10, -6, ICON, 3, 100))
+			block(glyph, 6, 6, -6, SIDEBAR_BG, 4, 100)
+			table.insert(inks, block(glyph, 20, 20, 11, ICON, 3, 100))
+			block(glyph, 16, 16, 11, SIDEBAR_BG, 4, 100)
+			block(glyph, 28, 12, 17, SIDEBAR_BG, 5, nil)   -- hides the lower half of the shoulders
+			return inks
+		end
+
 		-- server icon: two stacked rounded units, each with a status dot and a dash
 		local function buildServer(glyph)
 			local inks = {}
@@ -803,10 +920,16 @@ function UI.new(opts)
 
 		local tipW = math.max(66, #mainTip * 7 + 20)
 
-		-- TOP group: hangs from the top, right under the Y1 logo (the logo ends at y = 46)
-		local HOME_TOP = 58                      -- top edge of the house tile
-		local INFO_TOP = HOME_TOP + TILE + 6     -- ID card tile sits a tiny bit under the house
-		local COMBAT_TOP = INFO_TOP + TILE + 6   -- crosshair tile sits a tiny bit under the ID card
+		-- TOP group: hangs from the top, right under the Y1 logo (the logo ends at y = 46).
+		-- Six tiles, 4px apart, so the last one ends at y = 316 and the server icon (y = 332 and
+		-- below at the normal window height) still has some room above it.
+		local STEP = TILE + 4
+		local HOME_TOP = 56                      -- top edge of the house tile
+		local INFO_TOP = HOME_TOP + STEP
+		local COMBAT_TOP = INFO_TOP + STEP
+		local VISUALS_TOP = COMBAT_TOP + STEP    -- eye
+		local WORLD_TOP = VISUALS_TOP + STEP     -- globe
+		local MOVEMENT_TOP = WORLD_TOP + STEP    -- person
 
 		-- BOTTOM group: stands on the bottom, above the profile card
 		local GEAR_Y = -(14 + TILE + 8)        -- bottom edge of the gear tile
@@ -815,6 +938,9 @@ function UI.new(opts)
 		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 0, yScale = 0, yOffset = HOME_TOP, build = buildHome })
 		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 0, yScale = 0, yOffset = INFO_TOP, build = buildInfo })
 		makeNavIcon({ page = "Combat", tip = "Combat", tipW = 70, anchorY = 0, yScale = 0, yOffset = COMBAT_TOP, build = buildCombat })
+		makeNavIcon({ page = "Visuals", tip = "Visuals", tipW = 70, anchorY = 0, yScale = 0, yOffset = VISUALS_TOP, build = buildVisuals })
+		makeNavIcon({ page = "World", tip = "World", tipW = 62, anchorY = 0, yScale = 0, yOffset = WORLD_TOP, build = buildWorld })
+		makeNavIcon({ page = "Movement", tip = "Movement", tipW = 82, anchorY = 0, yScale = 0, yOffset = MOVEMENT_TOP, build = buildMovement })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
@@ -1119,7 +1245,10 @@ function UI.new(opts)
 	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
 	---------------------------------------------------------------------
 	do
-		local PAGE_TITLES = { Home = "Home", Info = "Info", Combat = "Combat", Main = mainTitle, Settings = "Settings" }
+		local PAGE_TITLES = {
+			Home = "Home", Info = "Info", Combat = "Combat", Visuals = "Visuals", World = "World",
+			Movement = "Movement", Main = mainTitle, Settings = "Settings",
+		}
 
 		local titleChip = new("Frame", {
 			Name = "TitleCard",
@@ -1201,7 +1330,10 @@ function UI.new(opts)
 
 		local titleToken = 0
 		local pageToken = 0
-		local pages = { Home = homePage, Info = infoPage, Combat = combatPage, Main = mainPage, Settings = settingsPage }
+		local pages = {
+			Home = homePage, Info = infoPage, Combat = combatPage, Visuals = visualsPage,
+			World = worldPage, Movement = movementPage, Main = mainPage, Settings = settingsPage,
+		}
 
 		showPage = function(name)
 			if name == currentPage or not pages[name] then
