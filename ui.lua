@@ -781,6 +781,25 @@ function UI.new(opts)
 			return f
 		end
 
+		-- one short 2px line from (x1, y1) to (x2, y2), measured from the middle of the glyph.
+		-- It is a little longer than the gap so neighbouring segments overlap and stay smooth.
+		local function segment(glyph, inks, x1, y1, x2, y2, z)
+			local dx = x2 - x1
+			local dy = y2 - y1
+			local len = math.sqrt(dx * dx + dy * dy)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, (x1 + x2) / 2, 0.5, (y1 + y2) / 2),
+				Size = UDim2.fromOffset(len + 1.5, 2),
+				Rotation = math.deg(math.atan2(dy, dx)),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = z,
+			}, glyph)
+			corner(f, 1)
+			table.insert(inks, f)
+		end
+
 		-- visuals icon (eye): an almond outline, a ring pupil and a dot, like the reference.
 		--   lids  = two curves y = +-8 * (1 - (x / 12)^2), each drawn as 12 short 2px segments
 		--           (overlapping a little so the joints stay smooth), 24px wide and 16px tall
@@ -793,20 +812,7 @@ function UI.new(opts)
 			local N = 12   -- segments per eyelid
 
 			local function seg(x1, y1, x2, y2)
-				local dx = x2 - x1
-				local dy = y2 - y1
-				local len = math.sqrt(dx * dx + dy * dy)
-				local f = new("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.new(0.5, (x1 + x2) / 2, 0.5, (y1 + y2) / 2),
-					Size = UDim2.fromOffset(len + 1.5, 2),
-					Rotation = math.deg(math.atan2(dy, dx)),
-					BackgroundColor3 = ICON,
-					BorderSizePixel = 0,
-					ZIndex = 3,
-				}, glyph)
-				corner(f, 1)
-				table.insert(inks, f)
+				segment(glyph, inks, x1, y1, x2, y2, 3)
 			end
 
 			for side = -1, 1, 2 do
@@ -830,17 +836,31 @@ function UI.new(opts)
 		end
 
 		-- world icon (globe): outer ring, a tall oval, one line across the middle and one down it.
-		--   ring  = 22px disc with an 18px hole (2px thick)
-		--   oval  = 12x22 disc with an 8x18 hole (2px thick), touches the ring at the top and bottom
-		--   lines = 2px wide, 18px long, they reach the inside of the ring
+		--   ring  = 24px disc with a 20px hole (2px thick)
+		--   oval  = an ellipse outline (11px wide, 20px tall, 2px thick) drawn from 28 short segments,
+		--           it touches the ring at the top and bottom
+		--   lines = 2px wide, 20px long, they reach the inside of the ring
 		local function buildWorld(glyph)
 			local inks = {}
-			table.insert(inks, block(glyph, 22, 22, 0, ICON, 3, 100))
-			block(glyph, 18, 18, 0, SIDEBAR_BG, 4, 100)
-			table.insert(inks, block(glyph, 12, 22, 0, ICON, 5, 100))
-			block(glyph, 8, 18, 0, SIDEBAR_BG, 6, 100)
-			table.insert(inks, block(glyph, 18, 2, 0, ICON, 7, 1))   -- across the middle
-			table.insert(inks, block(glyph, 2, 18, 0, ICON, 7, 1))   -- down the middle
+			table.insert(inks, block(glyph, 24, 24, 0, ICON, 3, 100))
+			block(glyph, 20, 20, 0, SIDEBAR_BG, 4, 100)
+
+			local N = 28
+			local RX = 5.5
+			local RY = 10
+			local px = 0
+			local py = -RY
+			for i = 1, N do
+				local t = -math.pi / 2 + (2 * math.pi) * i / N
+				local x = RX * math.cos(t)
+				local y = RY * math.sin(t)
+				segment(glyph, inks, px, py, x, y, 5)
+				px = x
+				py = y
+			end
+
+			table.insert(inks, block(glyph, 20, 2, 0, ICON, 7, 1))   -- across the middle
+			table.insert(inks, block(glyph, 2, 20, 0, ICON, 7, 1))   -- down the middle
 			return inks
 		end
 
