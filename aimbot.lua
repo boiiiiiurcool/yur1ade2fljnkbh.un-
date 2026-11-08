@@ -1,4 +1,4 @@
--- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page + an empty Triggerbot page, as its own module)
+-- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page + the Triggerbot page, as its own module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Builds the Combat tab INTO win.CombatPage. It makes no window of its own (the only other thing it
@@ -68,8 +68,32 @@
 --   and a Confirm button). Confirm looks disabled until the box is ticked, and then it does nothing yet.
 --   The page content itself is its own module, silent.lua, which this file builds into the page.
 --
--- TRIGGERBOT page
---   Empty, no warning. Its content is its own module, triggerbot.lua, which this file builds into the page.
+-- TRIGGERBOT page (built right here, laid out like the Aimbot page)
+--   Left column   Enable row   a switch (OFF every time the script starts) and three dots. The line under
+--                              "Enable" says Off / Ready (on, key not held) / Armed (key held or toggled
+--                              on) / Firing. The dots open a small panel with Key (click the button, then
+--                              press a key or mouse button, default T) and Mode (Hold / Toggle).
+--                 Hit Part     drop-down: Any / Head / Body = which part of a player the crosshair has to be on
+--                 FILTERS      Team Check   ON = never fires at players on your team
+--   Right column  Distance     Min / Max studs (from your character) the target has to be between (on top)
+--                 Timing       Delay   = ms the crosshair has to stay on a target before it fires
+--                              Release = ms the fire button is held before it lets go (0 = hold until the
+--                                        crosshair leaves the target)
+--                 Moving Targets   Hitbox = extra pixels around the crosshair (9 rays instead of 1)
+--                                  Lead   = ms ahead it predicts where a moving player will be
+--                                  Grace  = ms it keeps the lock when the target flickers off for a moment
+--
+--   HOW IT DECIDES: it casts a ray from the cursor (or from the screen middle in shift lock / first person,
+--   or while the aimbot is active with Aim Type Camera). The ray ignores your own character and skips
+--   invisible, non-collidable parts, so thin triggers or invisible walls do not block it, but real walls
+--   do. It only fires when the first real thing the ray hits belongs to a living player.
+--
+--   HOW IT FIRES: it calls Activate() / Deactivate() on the Tool you are holding. If your game has its
+--   own fire function, change pressFire() and releaseFire() in the TRIGGERBOT section below.
+--
+--   It runs one step after the aimbot (so it sees the camera after the aimbot has moved it) and once more
+--   every Heartbeat. triggerbot.lua is still loaded and built into the same page (on top of these
+--   controls) if you want to add anything extra, but it is no longer needed for the triggerbot itself.
 --
 -- SILENT / TRIGGERBOT MODULES
 --   main.lua loads silent.lua and triggerbot.lua next to this file and hands them over through
@@ -79,7 +103,8 @@
 --   bestPart, aimPosition, isVisible, originPos } }. If the module returns a table with an Unload function,
 --   it is called when the window is unloaded. Both modules are empty for now.
 --
--- The aimbot switches itself off and cleans up (including the FOV overlay) when the Y1 window is unloaded.
+-- The aimbot and the triggerbot switch themselves off and clean up (including the FOV overlay) when the Y1
+-- window is unloaded.
 
 local AimbotPage = {}
 
@@ -348,7 +373,7 @@ function AimbotPage.build(parent, T, H, opts)
 
 	local aimP = makePage("Aimbot", true)
 	local silP = { holder = makeHolder("Silent", false) }       -- the Silent page: the warning screen (here) + silent.lua
-	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page: triggerbot.lua only
+	local trigP = makePage("Triggerbot", false)                 -- the Triggerbot page: cards (here) + triggerbot.lua on top
 
 	-- a full size, transparent container on each of those two pages: the module is built into it
 	local function makeContainer(holder, name)
@@ -2658,8 +2683,601 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- TRIGGERBOT PAGE: no warning and nothing on it here. Its content is triggerbot.lua (see below).
+	-- TRIGGERBOT PAGE (same layout as the Aimbot page)
+	--   left : Enable (switch + three dots: Key, Mode), Hit Part, FILTERS (Team Check)
+	--   right: Distance (on top), Timing (Delay / Release), Moving Targets (Hitbox / Lead / Grace)
+	--
+	-- It fires by calling Activate() / Deactivate() on the Tool you are holding. If your game has its
+	-- own fire function, change pressFire() and releaseFire() below.
 	---------------------------------------------------------------------
+	-- the input handler, the unload function and the main loop at the bottom use these three
+	local trigPress = function(_input, _processed) end
+	local trigRelease = function(_input) end
+	local trigShutdown = function() end
+
+	do
+		local TS = {
+			enabled = false,      -- the triggerbot starts OFF every time the script runs
+			keybind = Enum.KeyCode.T,
+			mode = "Hold",
+			part = "Any",         -- Any / Head / Body
+			delayMs = 0,
+			releaseMs = 15,
+			minDist = 0,
+			maxDist = 1000,
+			teamCheck = true,
+			tolPx = 6,            -- hitbox grow in pixels (extra rays + extra on-screen size)
+			leadMs = 40,          -- how far ahead to predict moving targets
+			graceMs = 50,         -- keep the lock this long after the target flickers off
+		}
+
+		local trigActive = false  -- armed (key held, or toggled on)
+		local trigFiring = false  -- the fire button is down right now
+		local trigTool = nil
+		local waitStart = nil     -- when the crosshair first landed on a target
+		local fireStart = 0
+		local lastHit = 0         -- last time the crosshair was on a target
+		local trigSub = nil       -- the line under "Enable" on the card
+		local setTrigActive = function(_v) end
+
+		-- Off / Ready (on, key not held) / Armed (key held or toggled) / Firing
+		local function refreshTrigStatus()
+			if not trigSub then
+				return
+			end
+			local txt = "Off"
+			local col = T.DIM_TEXT
+			if TS.enabled then
+				if trigFiring then
+					txt = "Firing"
+					col = T.GREEN
+				elseif trigActive then
+					txt = "Armed"
+					col = T.GREEN
+				else
+					txt = "Ready"
+					col = T.ICON
+				end
+			end
+			if trigSub.Text ~= txt then
+				trigSub.Text = txt
+				trigSub.TextColor3 = col
+			end
+		end
+
+		-- ----- fire hooks (change these if your game fires some other way) -----
+		local function pressFire()
+			local char = player.Character
+			if not char then
+				return false
+			end
+			local tool = char:FindFirstChildOfClass("Tool")
+			if not tool then
+				return false
+			end
+			trigTool = tool
+			tool:Activate()
+			return true
+		end
+
+		local function releaseFire()
+			local tool = trigTool
+			trigTool = nil
+			if tool and tool.Parent then
+				tool:Deactivate()
+			end
+		end
+
+		local function stopFiring()
+			if trigFiring then
+				trigFiring = false
+				releaseFire()
+			end
+			waitStart = nil
+		end
+
+		setTrigActive = function(v)
+			if not TS.enabled then
+				v = false
+			end
+			trigActive = v
+			if not v then
+				stopFiring()
+			end
+			refreshTrigStatus()
+		end
+
+		-- ----- detection (raycast) -----
+		local tRay = RaycastParams.new()
+		tRay.FilterType = Enum.RaycastFilterType.Exclude
+		tRay.IgnoreWater = true
+
+		-- a part we should look through: invisible and not solid (trigger zones, invisible markers)
+		local function seeThrough(inst)
+			return inst.Transparency >= 0.95 and not inst.CanCollide
+		end
+
+		local function isHeadPart(inst)
+			if inst.Name == "Head" then
+				return true
+			end
+			-- hats / hair: the accessory weld is attached to the head
+			if inst:FindFirstAncestorOfClass("Accessory") then
+				local weld = inst:FindFirstChildWhichIsA("Weld")
+				if weld and weld.Part1 and weld.Part1.Name == "Head" then
+					return true
+				end
+			end
+			return false
+		end
+
+		-- returns true when the ray hits a valid, living, in-range enemy player
+		local function castHit(rayOrigin, rayDir, origin)
+			local dir = rayDir.Unit * (TS.maxDist + 100)
+
+			local exclude = {}
+			if player.Character then
+				exclude[1] = player.Character
+			end
+
+			for i = 1, 16 do
+				tRay.FilterDescendantsInstances = exclude
+				local res = workspace:Raycast(rayOrigin, dir, tRay)
+				if res == nil then
+					return false
+				end
+				local inst = res.Instance
+				local model = inst:FindFirstAncestorOfClass("Model")
+				local hum = nil
+				if model then
+					hum = model:FindFirstChildOfClass("Humanoid")
+				end
+
+				if hum then
+					-- a character: is it a living player we are allowed to shoot?
+					local plr = Players:GetPlayerFromCharacter(model)
+					if plr == nil or plr == player then
+						return false
+					end
+					if hum.Health <= 0 then
+						-- dead body: look through it
+						exclude[#exclude + 1] = model
+					else
+						if TS.teamCheck and plr.Team ~= nil and plr.Team == player.Team then
+							return false
+						end
+						local d = (res.Position - origin).Magnitude
+						if d < TS.minDist or d > TS.maxDist then
+							return false
+						end
+						if TS.part == "Head" then
+							return isHeadPart(inst)
+						elseif TS.part == "Body" then
+							return not isHeadPart(inst)
+						end
+						return true
+					end
+				elseif seeThrough(inst) then
+					exclude[#exclude + 1] = inst
+				else
+					-- a real wall, floor or object is in the way
+					return false
+				end
+			end
+			return false
+		end
+
+		-- extra rays in a ring around the crosshair (grows the hitbox, catches moving targets)
+		local TRIG_OFFSETS = {
+			{ 0, 0 }, { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+			{ 0.7, 0.7 }, { -0.7, 0.7 }, { 0.7, -0.7 }, { -0.7, -0.7 },
+		}
+
+		-- is there a clear line (walls only) from the camera to a point on this character?
+		local function lineClear(camPos, point, char)
+			local exclude = {}
+			if player.Character then
+				exclude[1] = player.Character
+			end
+			local dir = point - camPos
+			for i = 1, 12 do
+				tRay.FilterDescendantsInstances = exclude
+				local res = workspace:Raycast(camPos, dir, tRay)
+				if res == nil then
+					return true
+				end
+				local inst = res.Instance
+				if inst:IsDescendantOf(char) then
+					return true
+				end
+				local model = inst:FindFirstAncestorOfClass("Model")
+				local hum = nil
+				if model then
+					hum = model:FindFirstChildOfClass("Humanoid")
+				end
+				if hum and hum.Health <= 0 then
+					exclude[#exclude + 1] = model
+				elseif seeThrough(inst) then
+					exclude[#exclude + 1] = inst
+				else
+					return false
+				end
+			end
+			return false
+		end
+
+		-- screen-space check, works at any distance: project the target (a few ms ahead if it is
+		-- moving) onto the screen and see if the crosshair is inside its on-screen size plus the
+		-- Hitbox pixels. Ray hits get tiny and unreliable far away; this does not. A wall-only ray
+		-- to the target makes sure nothing solid is in the way.
+		local function candidateParts(char)
+			local list = {}
+			local head = char:FindFirstChild("Head")
+			local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+				or char:FindFirstChild("HumanoidRootPart")
+			-- only real parts go in the list (a missing head or torso would leave a nil hole)
+			if TS.part ~= "Body" and head and head:IsA("BasePart") then
+				list[#list + 1] = head
+			end
+			if TS.part ~= "Head" and torso and torso:IsA("BasePart") then
+				list[#list + 1] = torso
+			end
+			return list
+		end
+
+		local function predictedHit(cam, ref, origin)
+			local lead = TS.leadMs / 1000
+			local vs = cam.ViewportSize
+			local tanHalf = math.tan(math.rad(cam.FieldOfView) / 2)
+			local camPos = cam.CFrame.Position
+			local all = Players:GetPlayers()
+			for i = 1, #all do
+				local plr = all[i]
+				if plr ~= player then
+					local char = plr.Character
+					local hum = nil
+					local rootPart = nil
+					if char then
+						hum = char:FindFirstChildOfClass("Humanoid")
+						rootPart = char:FindFirstChild("HumanoidRootPart")
+					end
+					local teamBlocked = TS.teamCheck and plr.Team ~= nil and plr.Team == player.Team
+					if hum and rootPart and hum.Health > 0 and not teamBlocked then
+						local d = (rootPart.Position - origin).Magnitude
+						if d >= TS.minDist and d <= TS.maxDist then
+							local vel = rootPart.AssemblyLinearVelocity
+							local ahead = Vector3.new(0, 0, 0)
+							if vel.Magnitude > 1 then
+								ahead = vel * lead
+							end
+							local parts = candidateParts(char)
+							for k = 1, #parts do
+								local part = parts[k]
+								local pp = part.Position + ahead
+								local v, onScreen = cam:WorldToViewportPoint(pp)
+								if onScreen and v.Z > 0 then
+									local pxPerStud = vs.Y / (2 * v.Z * tanHalf)
+									local r = (part.Size.X + part.Size.Y) * 0.25
+									local rpx = r * pxPerStud + TS.tolPx
+									local off = (Vector2.new(v.X, v.Y) - ref).Magnitude
+									if off <= rpx and lineClear(camPos, pp, char) then
+										return true
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+			return false
+		end
+
+		-- true when the crosshair is on a valid target right now (or about to be, for movers).
+		-- The crosshair is the cursor, or the screen middle in shift lock / first person, or while the
+		-- aimbot is active with Aim Type Camera (the aimbot puts the target on the screen middle).
+		local function onTarget(cam)
+			local ref = refPoint(cam, active and S.aim == "Camera")
+			local origin = originPos(cam)
+			local tol = TS.tolPx
+			local n = 1
+			if tol > 0 then
+				n = #TRIG_OFFSETS
+			end
+			for i = 1, n do
+				local o = TRIG_OFFSETS[i]
+				local ray = cam:ViewportPointToRay(ref.X + o[1] * tol, ref.Y + o[2] * tol)
+				if castHit(ray.Origin, ray.Direction, origin) then
+					return true
+				end
+			end
+			return predictedHit(cam, ref, origin)
+		end
+
+		-- ----- the main step -----
+		local function trigStep(dt)
+			if not running or not trigActive then
+				return
+			end
+			local cam = workspace.CurrentCamera
+			if not cam then
+				return
+			end
+
+			local now = os.clock()
+			local hit = onTarget(cam)
+			if hit then
+				lastHit = now
+			end
+			-- "near" = on target now, or was a moment ago (jitter, strafing, lag spikes)
+			local near = hit or (now - lastHit) * 1000 <= TS.graceMs
+
+			if trigFiring then
+				local done = false
+				local held = (now - fireStart) * 1000
+				if TS.releaseMs > 0 then
+					if held >= TS.releaseMs then
+						done = true
+					end
+				else
+					if not near then
+						done = true
+					end
+				end
+				-- the tool was unequipped or removed
+				if trigTool == nil or trigTool.Parent ~= player.Character then
+					done = true
+				end
+				if done then
+					stopFiring()
+					-- still on the target: the next shot needs no new delay
+					if hit then
+						waitStart = now - TS.delayMs / 1000
+					end
+				end
+				refreshTrigStatus()
+				return
+			end
+
+			if not near then
+				waitStart = nil
+				return
+			end
+			-- the grace time only keeps an existing lock alive, it never starts a new one
+			if not hit and waitStart == nil then
+				return
+			end
+
+			if waitStart == nil then
+				waitStart = now
+			end
+			if (now - waitStart) * 1000 >= TS.delayMs then
+				if pressFire() then
+					trigFiring = true
+					fireStart = now
+					waitStart = nil
+					refreshTrigStatus()
+				end
+			end
+		end
+
+		-- one step after the aimbot (Camera + 1) so it uses the camera after it has been moved
+		local TRIG_STEP_NAME = string.format("Y1TriggerStep_%d_%d", math.floor(os.clock() * 1000), math.random(1, 1000000))
+		pcall(function()
+			RunService:UnbindFromRenderStep(TRIG_STEP_NAME)
+		end)
+		RunService:BindToRenderStep(TRIG_STEP_NAME, Enum.RenderPriority.Camera.Value + 2, trigStep)
+
+		-- also check again right after physics every frame: twice as many checks per frame,
+		-- so it reacts sooner and the release timing is more exact
+		conns[#conns + 1] = RunService.Heartbeat:Connect(trigStep)
+
+		-- ----- the page -----
+		trigP.section(1, "TRIGGERBOT")
+
+		local tEnable = trigP.place(1, 46)
+		tEnable.ZIndex = 30   -- the settings panel opens from this card, so it must draw above the other cards
+
+		label(tEnable, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		trigSub = label(tEnable, "", UDim2.fromOffset(14, 25), UDim2.new(1, -140, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		refreshTrigStatus()
+
+		makeSwitch(tEnable, TS.enabled, function(on)
+			TS.enabled = on
+			setTrigActive(false)
+			refreshTrigStatus()
+		end, 23)
+
+		-- three horizontal dots, left of the switch
+		local tDots = makeDots(tEnable, UDim2.new(1, -58, 0, 23))
+
+		dropdownCard(trigP, 1, "Hit Part", { "Any", "Head", "Body" }, TS.part, function(v)
+			TS.part = v
+		end)
+
+		trigP.section(1, "FILTERS")
+
+		filterCard(trigP, 1, "Team Check", "Never fire at your teammates", TS.teamCheck, function(on)
+			TS.teamCheck = on
+		end)
+
+		-- right column, top: Distance
+		trigP.section(2, "RANGE")
+		rangeCard(trigP, 2, TS)
+
+		-- a card with a title and a dim line under it, sliders go under that
+		local function titledCard(col, h, title, subText)
+			local c = trigP.place(col, h)
+			label(c, title, UDim2.fromOffset(14, 6), UDim2.new(1, -28, 0, 16),
+				Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+			label(c, subText, UDim2.fromOffset(14, 23), UDim2.new(1, -28, 0, 14),
+				Enum.Font.Gotham, 11, T.DIM_TEXT)
+			return c
+		end
+
+		trigP.section(2, "TIMING")
+
+		do
+			local c = titledCard(2, 106, "Timing (ms)", "Release 0 = hold until the crosshair leaves")
+			makeSlider(c, 44, "Delay", 50, 0, 500, 1, TS.delayMs, "%d", function(v)
+				TS.delayMs = v
+			end).dim(true)
+			makeSlider(c, 74, "Release", 50, 0, 500, 1, TS.releaseMs, "%d", function(v)
+				TS.releaseMs = v
+			end).dim(true)
+		end
+
+		trigP.section(2, "MOVING TARGETS")
+
+		do
+			local c = titledCard(2, 136, "Moving Targets", "Hitbox px, Lead ms (predict), Grace ms (keep lock)")
+			makeSlider(c, 44, "Hitbox", 50, 0, 30, 1, TS.tolPx, "%d", function(v)
+				TS.tolPx = v
+			end).dim(true)
+			makeSlider(c, 74, "Lead", 50, 0, 150, 1, TS.leadMs, "%d", function(v)
+				TS.leadMs = v
+			end).dim(true)
+			makeSlider(c, 104, "Grace", 50, 0, 150, 1, TS.graceMs, "%d", function(v)
+				TS.graceMs = v
+			end).dim(true)
+		end
+
+		trigP.finish()
+
+		-- ----- the settings panel behind the three dots: Key and Mode -----
+		do
+			local TP_W = 264
+			local TP_H = 152
+			local TP_SHOWN = UDim2.new(1, -50, 0, -8)
+			local TP_HIDDEN = UDim2.new(1, -60, 0, -8)
+
+			local tPop = new("CanvasGroup", {
+				Name = "TriggerbotSettings",
+				Position = TP_HIDDEN,
+				Size = UDim2.fromOffset(TP_W, TP_H),
+				BackgroundColor3 = T.POPUP_BG,
+				BorderSizePixel = 0,
+				GroupTransparency = 1,
+				Visible = false,
+				ZIndex = 50,
+			}, tEnable)
+			corner(tPop, RADIUS + 4)
+			stroke(tPop, T.BORDER, 1, 0)
+
+			label(tPop, "Triggerbot", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+				Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+			new("Frame", {
+				Position = UDim2.fromOffset(16, 40),
+				Size = UDim2.new(1, -32, 0, 1),
+				BackgroundColor3 = T.BORDER,
+				BorderSizePixel = 0,
+			}, tPop)
+
+			-- Key
+			label(tPop, "Key", UDim2.fromOffset(16, 50), UDim2.new(1, -150, 0, 28),
+				Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+			bindButton(tPop, UDim2.new(1, -16, 0, 50), UDim2.fromOffset(110, 28),
+				function() return TS.keybind end,
+				function(b)
+					TS.keybind = b
+					setTrigActive(false)
+				end,
+				true)
+
+			-- Mode
+			segmented(tPop, 90, 16, "Mode", { "Hold", "Toggle" }, TS.mode, function(v)
+				TS.mode = v
+				setTrigActive(false)
+			end)
+
+			local tOpen = false
+			local tToken = 0
+
+			local function openPanel()
+				if tOpen then
+					return
+				end
+				tOpen = true
+				tToken = tToken + 1
+				tPop.Position = TP_HIDDEN
+				tPop.GroupTransparency = 1
+				tPop.Visible = true
+				TweenService:Create(tPop, FL_OPEN, { Position = TP_SHOWN, GroupTransparency = 0 }):Play()
+				tDots.open = true
+				tDots.paint()
+			end
+
+			local function closePanel()
+				if not tOpen then
+					return
+				end
+				tOpen = false
+				tToken = tToken + 1
+				local tk = tToken
+				-- stop recording a key if the panel goes away in the middle of it
+				if listening then
+					listening.btn.Text = listening.restore()
+					listening = nil
+				end
+				TweenService:Create(tPop, FL_CLOSE, { Position = TP_HIDDEN, GroupTransparency = 1 }):Play()
+				task.delay(FL_CLOSE.Time + 0.02, function()
+					if tk == tToken then
+						tPop.Visible = false
+					end
+				end)
+				tDots.open = false
+				tDots.paint()
+			end
+
+			tDots.btn.Activated:Connect(function()
+				if tOpen then
+					closePanel()
+				else
+					openPanel()
+				end
+			end)
+
+			popupList[#popupList + 1] = {
+				isOpen = function()
+					return tOpen
+				end,
+				close = closePanel,
+				hit = { tPop, tDots.btn },
+			}
+		end
+
+		-- ----- hooks used by the input handler and the unload function below -----
+		trigPress = function(input, processed)
+			if not TS.enabled or not matches(input, TS.keybind) then
+				return
+			end
+			-- mouse buttons are often "processed"; keys respect the flag (typing in chat)
+			local isMouseBind = TS.keybind.EnumType ~= Enum.KeyCode
+			if processed and not isMouseBind then
+				return
+			end
+			if TS.mode == "Hold" then
+				setTrigActive(true)
+			else
+				setTrigActive(not trigActive)
+			end
+		end
+
+		trigRelease = function(input)
+			if TS.mode == "Hold" and matches(input, TS.keybind) then
+				setTrigActive(false)
+			end
+		end
+
+		trigShutdown = function()
+			trigActive = false
+			stopFiring()
+			pcall(function()
+				RunService:UnbindFromRenderStep(TRIG_STEP_NAME)
+			end)
+		end
+	end
 
 	---------------------------------------------------------------------
 	-- THE AIMBOT ITSELF
@@ -3039,6 +3657,9 @@ function AimbotPage.build(parent, T, H, opts)
 			end
 		end
 
+		-- the triggerbot key (it does its own checks: enabled, key, mode)
+		trigPress(input, processed)
+
 		if not S.enabled or not matches(input, S.keybind) then
 			return
 		end
@@ -3059,7 +3680,11 @@ function AimbotPage.build(parent, T, H, opts)
 	end)
 
 	conns[#conns + 1] = UserInputService.InputEnded:Connect(function(input)
-		if running and S.mode == "Hold" and matches(input, S.keybind) then
+		if not running then
+			return
+		end
+		trigRelease(input)
+		if S.mode == "Hold" and matches(input, S.keybind) then
 			setActive(false)
 		end
 	end)
@@ -3084,6 +3709,7 @@ function AimbotPage.build(parent, T, H, opts)
 		active = false
 		locked = nil
 		listening = nil
+		trigShutdown()
 		for i = 1, #subHandles do
 			local h = subHandles[i]
 			if type(h.Unload) == "function" then
@@ -3119,4 +3745,4 @@ function AimbotPage.build(parent, T, H, opts)
 	return { Root = root, Unload = unload }
 end
 
-return AimbotPage
+return AimbotPage 
