@@ -418,7 +418,7 @@ function UI.new(opts)
 		buildTab(combatPage, opts.CombatModule, opts.Combat, "Combat", "combat")
 		buildTab(visualsPage, opts.VisualsModule, opts.Visuals, "Visuals", "visuals")
 		buildTab(worldPage, opts.WorldModule, opts.World, "World", "world")
-		buildTab(miscPage, opts.MiscModule, opts.Misc, "Misc", "misc")
+		buildTab(movementPage, opts.MovementModule, opts.Movement, "Movement", "movement")
 	end
 
 	---------------------------------------------------------------------
@@ -960,7 +960,7 @@ function UI.new(opts)
 		makeNavIcon({ page = "Combat", tip = "Combat", tipW = 70, anchorY = 0, yScale = 0, yOffset = COMBAT_TOP, build = buildCombat })
 		makeNavIcon({ page = "Visuals", tip = "Visuals", tipW = 70, anchorY = 0, yScale = 0, yOffset = VISUALS_TOP, build = buildVisuals })
 		makeNavIcon({ page = "World", tip = "World", tipW = 62, anchorY = 0, yScale = 0, yOffset = WORLD_TOP, build = buildWorld })
-		makeNavIcon({ page = "Misc", tip = "Misc", tipW = 62, anchorY = 0, yScale = 0, yOffset = MOVEMENT_TOP, build = buildMovement })
+		makeNavIcon({ page = "Movement", tip = "Movement", tipW = 82, anchorY = 0, yScale = 0, yOffset = MOVEMENT_TOP, build = buildMovement })
 		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
 		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
 
