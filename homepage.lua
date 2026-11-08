@@ -10,11 +10,18 @@
 --       Access = "Lifetime access",
 --       Build = "Beta 0.6",
 --       Component = "Rock and Roll by reruinz",
+--       OnNext = function() end,      -- the Next button (ui.lua opens the Info tab)
+--       OnEnable = function() end,    -- the Enable button (main.lua runs disable.lua here)
 --   })
 --
 -- Inside: the game name, a green "Ready" pill, "yur1 is ready", a small line of text and
 -- Access / Build / Component at the bottom left. On the right a card with the game image.
 -- The game image also shows very dim behind the page. Layout follows the window size.
+--
+-- In the empty space on the left there is a small notice for Zee Hood players with an
+-- Enable button. The button works ONCE: it calls opts.OnEnable, and when that finishes the
+-- button turns into a greyed-out "Enabled" and cannot be pressed again. If OnEnable fails
+-- (for example the download failed) the button becomes "Try again" so you can retry.
 
 local HomePage = {}
 
@@ -27,6 +34,7 @@ function HomePage.build(parent, T, H, opts)
 	local componentText = tostring(opts.Component or "Rock and Roll by reruinz")
 
 	local MarketplaceService = game:GetService("MarketplaceService")
+	local TweenService = game:GetService("TweenService")
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
 
 	local CARD_S = 200
@@ -150,6 +158,119 @@ function HomePage.build(parent, T, H, opts)
 	sub.TextYAlignment = Enum.TextYAlignment.Top
 	sub.ZIndex = 3
 
+	-- ZEE HOOD NOTICE: in the empty space on the left, under the subtitle.
+	-- The Enable button works once (see the header of this file).
+	local notice = new("Frame", {
+		Name = "ZeeHoodNotice",
+		Position = UDim2.fromOffset(24, 176),
+		Size = UDim2.new(1, -(CARD_S + 24 + 28 + 10), 0, 104),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, root)
+	corner(notice, 10)
+	stroke(notice, T.BORDER, 1, 0)
+
+	local noticeText = label(notice, "Hey? are you on zee hood perchance, if you are turn this on before you get kicked..",
+		UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 38), Enum.Font.Gotham, 13, T.TEXT_COLOR)
+	noticeText.TextWrapped = true
+	noticeText.TextTruncate = Enum.TextTruncate.None
+	noticeText.TextYAlignment = Enum.TextYAlignment.Top
+	noticeText.ZIndex = 4
+
+	local enableBtn = new("TextButton", {
+		Name = "EnableButton",
+		AutoButtonColor = false,
+		Position = UDim2.fromOffset(16, 62),
+		Size = UDim2.fromOffset(120, 30),
+		BackgroundColor3 = T.JOIN_BG,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		Text = "Enable",
+		TextSize = 13,
+		TextColor3 = T.BLACK,
+		ZIndex = 4,
+	}, notice)
+	corner(enableBtn, 8)
+
+	-- small line next to the button: what is happening / what went wrong
+	local enableNote = label(notice, "", UDim2.fromOffset(148, 62), UDim2.new(1, -164, 0, 30),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	enableNote.ZIndex = 4
+
+	-- states: "idle" (can press), "busy" (running), "done" (used up, never again), "failed" (can retry)
+	local enableState = "idle"
+	local enableHover = false
+	local enableInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	local function paintEnable()
+		local bg = T.JOIN_BG
+		local tc = T.BLACK
+		local txt = "Enable"
+		if enableState == "busy" then
+			bg = T.CLUSTER_BG
+			tc = T.DIM_TEXT
+			txt = "Enabling..."
+		elseif enableState == "done" then
+			bg = T.CLUSTER_BG
+			tc = T.DIM_TEXT
+			txt = "Enabled"
+		elseif enableState == "failed" then
+			txt = "Try again"
+		end
+		if enableHover and (enableState == "idle" or enableState == "failed") then
+			bg = Color3.fromRGB(255, 255, 255)
+		end
+		enableBtn.Text = txt
+		TweenService:Create(enableBtn, enableInfo, { BackgroundColor3 = bg, TextColor3 = tc }):Play()
+	end
+
+	enableBtn.MouseEnter:Connect(function()
+		enableHover = true
+		paintEnable()
+	end)
+	enableBtn.MouseLeave:Connect(function()
+		enableHover = false
+		paintEnable()
+	end)
+
+	enableBtn.Activated:Connect(function()
+		-- once it ran, or while it is running, the button does nothing
+		if enableState == "busy" or enableState == "done" then
+			return
+		end
+		if type(opts.OnEnable) ~= "function" then
+			enableNote.Text = "Not connected"
+			enableNote.TextColor3 = T.HOVER_RED
+			return
+		end
+		enableState = "busy"
+		enableNote.Text = "Running..."
+		enableNote.TextColor3 = T.DIM_TEXT
+		paintEnable()
+		task.spawn(function()
+			local ok, err = pcall(opts.OnEnable)
+			if not enableBtn.Parent then
+				return
+			end
+			if ok then
+				enableState = "done"
+				enableNote.Text = "Done"
+				enableNote.TextColor3 = T.GREEN
+			else
+				enableState = "failed"
+				local msg = tostring(err)
+				if #msg > 60 then
+					msg = string.sub(msg, 1, 57) .. "..."
+				end
+				enableNote.Text = msg
+				enableNote.TextColor3 = T.HOVER_RED
+				warn("[Y1] Enable failed: " .. tostring(err))
+			end
+			paintEnable()
+		end)
+	end)
+
 	-- BOTTOM LEFT: Access / Build / Component
 	local stats = new("Frame", {
 		Name = "Stats",
@@ -197,7 +318,6 @@ function HomePage.build(parent, T, H, opts)
 	corner(cardImage, 16)
 
 	-- NEXT button under the game card, same width as the card (opens the Info tab via opts.OnNext)
-	local TweenService = game:GetService("TweenService")
 	local nextBtn = new("TextButton", {
 		Name = "NextButton",
 		AutoButtonColor = false,
@@ -234,7 +354,7 @@ function HomePage.build(parent, T, H, opts)
 		TweenService:Create(nextScale, nextInfo, { Scale = 1 }):Play()
 	end)
 
-	return { Root = root, NextButton = nextBtn }
+	return { Root = root, NextButton = nextBtn, EnableButton = enableBtn }
 end
 
 return HomePage
