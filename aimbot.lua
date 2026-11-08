@@ -35,6 +35,10 @@
 --                                Dynamic FOV   on / off: the FOV grows when players are close and
 --                                              shrinks when they are far (0.5x - 2x), so it always covers
 --                                              about the same part of a player
+--                                Spin          on / off, with a Speed slider (degrees per second). The shape
+--                                              turns around its middle, and the target check turns with it,
+--                                              so only what is inside the turning shape can be picked.
+--                                              (A circle looks the same while it spins.)
 --                              While the FOV is enabled the aimbot only picks targets whose hit part is
 --                              inside the shape (around the cursor, or the screen middle for Camera aim).
 --                              The fill of a polygon (anything except a circle) is drawn with many thin
@@ -60,11 +64,20 @@
 --   display scaling) and corrects for it.
 --
 -- SILENT page
---   For now it only shows a warning screen: "yur1 warning", a shield, a note, an "I accept any risk" box
---   and a Confirm button. Confirm looks disabled until the box is ticked, and then it does nothing yet.
+--   The warning screen lives in this file ("yur1 warning", a shield, a note, an "I accept any risk" box
+--   and a Confirm button). Confirm looks disabled until the box is ticked, and then it does nothing yet.
+--   The page content itself is its own module, silent.lua, which this file builds into the page.
 --
 -- TRIGGERBOT page
---   Empty for now (no warning, no controls). Build it into trigP.holder further down.
+--   Empty, no warning. Its content is its own module, triggerbot.lua, which this file builds into the page.
+--
+-- SILENT / TRIGGERBOT MODULES
+--   main.lua loads silent.lua and triggerbot.lua next to this file and hands them over through
+--   opts.SilentModule and opts.TriggerbotModule (ui.lua passes opts.Combat to this file). This file calls
+--   <module>.build(container, T, H, ctx) for each one, inside a pcall, so a broken module cannot break the
+--   aimbot. ctx = { Settings = the aimbot settings table, Targeting = { refPoint, validTarget, acquire,
+--   bestPart, aimPosition, isVisible, originPos } }. If the module returns a table with an Unload function,
+--   it is called when the window is unloaded. Both modules are empty for now.
 --
 -- The aimbot switches itself off and cleans up (including the FOV overlay) when the Y1 window is unloaded.
 
@@ -144,6 +157,8 @@ function AimbotPage.build(parent, T, H, opts)
 		fovSize = 120,          -- radius in pixels
 		fovSides = FOV_CIRCLE,
 		fovDynamic = false,
+		fovSpin = false,        -- turn the shape around its middle
+		fovSpinSpeed = 90,      -- degrees per second
 		fovColor = Color3.fromRGB(255, 255, 255),
 		fovAlpha = 1,
 		fillColor = Color3.fromRGB(255, 255, 255),
@@ -164,6 +179,7 @@ function AimbotPage.build(parent, T, H, opts)
 	local accY = 0
 	local warnedMove = false
 	local fovScale = 1        -- Dynamic FOV: the current size multiplier
+	local fovAngle = 0        -- Spin: the current turn of the shape in degrees
 	-- bookkeeping for the cursor mover: what was sent last, and how far the cursor really went for it
 	local cur = { waiting = false, waitFrames = 0, lastX = 0, lastY = 0, cmdX = 0, cmdY = 0, gain = 1 }
 
@@ -331,8 +347,20 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	local aimP = makePage("Aimbot", true)
-	local silP = { holder = makeHolder("Silent", false) }       -- the Silent page has no cards, only the warning screen
-	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page is empty for now
+	local silP = { holder = makeHolder("Silent", false) }       -- the Silent page: the warning screen (here) + silent.lua
+	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page: triggerbot.lua only
+
+	-- a full size, transparent container on each of those two pages: the module is built into it
+	local function makeContainer(holder, name)
+		return new("Frame", {
+			Name = name,
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, holder)
+	end
+	silP.box = makeContainer(silP.holder, "SilentModule")
+	trigP.box = makeContainer(trigP.holder, "TriggerbotModule")
 
 	---------------------------------------------------------------------
 	-- FLOATING POP-UPS (they sit on the whole Combat tab, so they are never cut off by a scrolling page)
@@ -1077,11 +1105,18 @@ function AimbotPage.build(parent, T, H, opts)
 
 	-- is the screen point (px, py) inside the FOV shape that is centred on (cx, cy)?
 	-- a regular polygon with its first corner pointing up, or a circle at the maximum angle count
-	local function insideFov(px, py, cx, cy, radius, sides)
+	local function insideFov(px, py, cx, cy, radius, sides, rot)
 		local dx = px - cx
 		local dy = py - cy
 		if sides >= FOV_CIRCLE then
 			return dx * dx + dy * dy <= radius * radius
+		end
+		-- the shape may be turned (Spin): turn the point back by the same angle instead
+		if rot and rot ~= 0 then
+			local r = math.rad(rot)
+			local cr = math.cos(r)
+			local sr = math.sin(r)
+			dx, dy = dx * cr + dy * sr, -dx * sr + dy * cr
 		end
 		local apothem = radius * math.cos(math.pi / sides)
 		for k = 0, sides - 1 do
@@ -1231,7 +1266,7 @@ function AimbotPage.build(parent, T, H, opts)
 				local part, d = bestPart(plr.Character, cam, ref, true, cfg.part)
 				if part and cfg.fovOn then
 					local v = cam:WorldToViewportPoint(part.Position)
-					if not insideFov(v.X, v.Y, ref.X, ref.Y, radius, cfg.fovSides) then
+					if not insideFov(v.X, v.Y, ref.X, ref.Y, radius, cfg.fovSides, fovAngle) then
 						part = nil
 					end
 				end
@@ -1492,6 +1527,14 @@ function AimbotPage.build(parent, T, H, opts)
 		else
 			fovScale = 1
 		end
+
+		-- Spin: turn the shape; when it is off the shape stands upright again
+		if S.fovSpin then
+			fovAngle = (fovAngle + S.fovSpinSpeed * dt) % 360
+		else
+			fovAngle = 0
+		end
+		fovBox.Rotation = fovAngle
 
 		local r = fovRadius()
 		fovBox.Size = UDim2.fromOffset(r * 2, r * 2)
@@ -2013,7 +2056,7 @@ function AimbotPage.build(parent, T, H, opts)
 
 	do
 		local FW = 264
-		local FH = 256
+		local FH = 312
 		fovSettings = makeFloating("FovSettings", FW, FH)
 		local pop = fovSettings.frame
 
@@ -2078,6 +2121,21 @@ function AimbotPage.build(parent, T, H, opts)
 		makeSwitch(pop, S.fovDynamic, function(on)
 			S.fovDynamic = on
 		end, 228, 16)
+
+		-- Spin (turns the shape) with its own Speed slider (degrees per second)
+		local spinApi = nil
+		label(pop, "Spin", UDim2.fromOffset(16, 244), UDim2.new(1, -90, 0, 32),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		makeSwitch(pop, S.fovSpin, function(on)
+			S.fovSpin = on
+			if spinApi then
+				spinApi.dim(on)
+			end
+		end, 260, 16)
+		spinApi = makeSlider(pop, 280, "Speed", 44, 10, 720, 10, S.fovSpinSpeed, "%d", function(v)
+			S.fovSpinSpeed = v
+		end)
+		spinApi.dim(S.fovSpin)
 
 		local function openFov(anchor)
 			if fovSettings.isOpen() then
@@ -2600,8 +2658,7 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- TRIGGERBOT PAGE: empty for now (no warning, nothing on it).
-	-- Put its controls into trigP.holder when it is time to build it.
+	-- TRIGGERBOT PAGE: no warning and nothing on it here. Its content is triggerbot.lua (see below).
 	---------------------------------------------------------------------
 
 	---------------------------------------------------------------------
@@ -2784,6 +2841,42 @@ function AimbotPage.build(parent, T, H, opts)
 		RunService:UnbindFromRenderStep(STEP_NAME)
 	end)
 	RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Camera.Value + 1, step)
+
+	---------------------------------------------------------------------
+	-- SILENT + TRIGGERBOT MODULES (silent.lua and triggerbot.lua)
+	-- They are loaded by main.lua and built from here, each into the container of its own page.
+	-- A module that is missing or breaks is skipped (a warning is printed), the aimbot is not affected.
+	---------------------------------------------------------------------
+	local subHandles = {}
+	do
+		local ctx = {
+			Settings = S,
+			Targeting = {
+				refPoint = refPoint,
+				validTarget = validTarget,
+				acquire = acquire,
+				bestPart = bestPart,
+				aimPosition = aimPosition,
+				isVisible = isVisible,
+				originPos = originPos,
+			},
+		}
+
+		local function loadSub(mod, box, name)
+			if type(mod) ~= "table" or type(mod.build) ~= "function" then
+				return
+			end
+			local ok, res = pcall(mod.build, box, T, H, ctx)
+			if not ok then
+				warn("[aimbot] " .. name .. " failed: " .. tostring(res))
+			elseif type(res) == "table" then
+				subHandles[#subHandles + 1] = res
+			end
+		end
+
+		loadSub(opts.SilentModule, silP.box, "silent.lua")
+		loadSub(opts.TriggerbotModule, trigP.box, "triggerbot.lua")
+	end
 
 	---------------------------------------------------------------------
 	-- THE AIMBOT / SILENT / TRIGGERBOT SWITCH AT THE BOTTOM
@@ -2991,6 +3084,12 @@ function AimbotPage.build(parent, T, H, opts)
 		active = false
 		locked = nil
 		listening = nil
+		for i = 1, #subHandles do
+			local h = subHandles[i]
+			if type(h.Unload) == "function" then
+				pcall(h.Unload)
+			end
+		end
 		pcall(function()
 			RunService:UnbindFromRenderStep(STEP_NAME)
 		end)
