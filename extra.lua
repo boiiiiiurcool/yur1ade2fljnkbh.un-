@@ -1814,6 +1814,36 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 	end)
 
+		---------------------------------------------------------------------
+	-- ANIMATIONS (built by animation.lua into this page)
+	---------------------------------------------------------------------
+	local animHandle = nil
+	do
+		local animMod = nil
+		if type(ctx) == "table" then
+			animMod = ctx.AnimationModule
+		end
+		if type(animMod) == "table" and type(animMod.build) == "function" then
+			local ok, res = pcall(animMod.build, root, T, H, {
+				Helpers = {
+					makeSwitch = makeSwitch,
+					makeDots = makeDots,
+					makeFloating = makeFloating,
+					dropdownRow = dropdownRow,
+					placeNear = placeNear,
+					addPopup = function(entry)
+						popupList[#popupList + 1] = entry
+					end,
+				},
+			})
+			if not ok then
+				warn("[extra] animation.lua failed: " .. tostring(res))
+			elseif type(res) == "table" then
+				animHandle = res
+			end
+		end
+	end
+
 	---------------------------------------------------------------------
 	-- INPUT: a click or tap anywhere except inside an open pop-up (or its button) closes it
 	---------------------------------------------------------------------
@@ -1866,6 +1896,9 @@ function ExtraPage.build(parent, T, H, ctx)
 		S.enabled = false
 		HS.enabled = false
 		HM.enabled = false
+		if animHandle and type(animHandle.Unload) == "function" then
+			pcall(animHandle.Unload)
+		end
 		-- put GunHandler.Shoot back the way it was (only if nobody wrapped it after us)
 		if hookGH and hookFn and hookGH.Shoot == hookFn then
 			pcall(function()
