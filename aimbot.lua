@@ -1,7 +1,8 @@
 -- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page, as its own module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Builds the Combat tab INTO win.CombatPage. It makes no window of its own.
+-- Builds the Combat tab INTO win.CombatPage. It makes no window of its own (the only other thing it
+-- adds is one transparent overlay gui, "Y1AimbotFov", that draws the FOV shape on the screen).
 -- ui.lua already loads it through opts.CombatModule, so nothing in ui.lua has to change.
 --
 --   local Aimbot = <this file>
@@ -10,13 +11,30 @@
 -- At the BOTTOM of the tab there is a small switch: [ Aimbot | Silent ]. It swaps the page above it.
 --
 -- AIMBOT page
---   Enable row   a switch and a "..." (three dots) button. The line under "Enable" says Active while the
---                aimbot is on (Off when it is off). The dots open one small settings panel
---                (Key, Mode, Aim Type, Target Lock). Click the dots again, or anywhere else, to close it.
---   Hit Part     a drop-down (click it, pick from the vertical list, click anywhere else to close it)
---                Head (default) / Body / Left Leg / Right Leg / Left Arm / Right Arm / Closest Part
---   Distance     Min / Max
---   Prediction / Smoothness   X / Y  0-20
+--   Left column   Enable row   a switch (it is OFF every time the script starts) and a "..." (three dots)
+--                              button. The line under "Enable" says Active while the aimbot is on (Off when
+--                              it is off). The dots open one small settings panel (Key, Mode, Aim Type,
+--                              Target Lock). Click the dots again, or anywhere else, to close it.
+--                 Hit Part     a drop-down (click it, pick from the vertical list, click anywhere else to close it)
+--                              Head (default) / Body / Left Leg / Right Leg / Left Arm / Right Arm / Closest Part
+--   Right column  Distance     Min / Max (on top)
+--                 Prediction / Smoothness   X / Y  0-20
+--                 FOV          a small row: a colour square (the outline colour, click it for the colour
+--                              picker) and three dots. The dots open the FOV settings:
+--                                Enabled   off every time the script starts
+--                                Filled    on / off, with its own colour square left of the switch
+--                                Glow      on / off
+--                                Size      radius of the FOV in pixels
+--                                Angles    3 = triangle, 4 = square, ... up to Circle (the maximum)
+--                                Dynamic FOV   on / off: the FOV grows when players are close and
+--                                              shrinks when they are far (0.5x - 2x), so it always covers
+--                                              about the same part of a player
+--                              While the FOV is enabled the aimbot only picks targets whose hit part is
+--                              inside the shape (around the cursor, or the screen middle for Camera aim).
+--
+--   Colour picker  Click a colour square: saturation / brightness square, hue bar, opacity bar and a text row
+--                  (format button HEX / RGB / HSV, the value, and the opacity in %). Click the square again,
+--                  or anywhere else, to close it.
 --
 --   Aim Type   Mouse  = MOVES THE CURSOR (mousemoverel) toward the target. The camera is not touched.
 --                       Only while the mouse is locked (shift lock, first person, or holding the right
@@ -35,7 +53,7 @@
 --   For now it only shows a warning screen: "yur1 warning", a shield, a note, an "I accept any risk" box
 --   and a Confirm button. Confirm looks disabled until the box is ticked, and then it does nothing yet.
 --
--- The aimbot switches itself off and cleans up when the Y1 window is unloaded.
+-- The aimbot switches itself off and cleans up (including the FOV overlay) when the Y1 window is unloaded.
 
 local AimbotPage = {}
 
@@ -81,9 +99,13 @@ function AimbotPage.build(parent, T, H, opts)
 		"Left Arm", "Right Arm", "Left Leg", "Right Leg",
 	}
 
+	local FOV_MIN_SIDES = 3     -- a triangle
+	local FOV_CIRCLE = 24       -- the Angles slider's maximum is a true circle
+	local DYN_REF = 80          -- Dynamic FOV: at this distance (studs) the FOV has its normal size
+
 	-- aimbot settings
 	local S = {
-		enabled = true,
+		enabled = false,        -- the aimbot starts OFF every time the script runs
 		keybind = Enum.UserInputType.MouseButton2,
 		mode = "Hold",
 		aim = "Mouse",
@@ -97,6 +119,17 @@ function AimbotPage.build(parent, T, H, opts)
 		smoothOn = false,
 		smoothX = 0,
 		smoothY = 0,
+		-- FOV
+		fovOn = false,          -- off every time the script runs
+		fovFilled = false,
+		fovGlow = false,
+		fovSize = 120,          -- radius in pixels
+		fovSides = FOV_CIRCLE,
+		fovDynamic = false,
+		fovColor = Color3.fromRGB(255, 255, 255),
+		fovAlpha = 1,
+		fillColor = Color3.fromRGB(255, 255, 255),
+		fillAlpha = 0.25,
 	}
 
 	local MAX_VALUE = 20
@@ -112,6 +145,7 @@ function AimbotPage.build(parent, T, H, opts)
 	local accX = 0            -- leftover (sub-pixel) cursor movement
 	local accY = 0
 	local warnedMove = false
+	local fovScale = 1        -- Dynamic FOV: the current size multiplier
 	-- bookkeeping for the cursor mover: what was sent last, and how far the cursor really went for it
 	local cur = { waiting = false, waitFrames = 0, lastX = 0, lastY = 0, cmdX = 0, cmdY = 0, gain = 1 }
 
@@ -178,6 +212,15 @@ function AimbotPage.build(parent, T, H, opts)
 		end
 		local m = UserInputService:GetMouseLocation()
 		return inRect(obj, m.X, m.Y)
+	end
+
+	-- where the pointer of this input is, in the same screen space as AbsolutePosition
+	local function pointerPos(input)
+		if input.UserInputType == Enum.UserInputType.Touch then
+			local inset = GuiService:GetGuiInset()
+			return Vector2.new(input.Position.X + inset.X, input.Position.Y + inset.Y)
+		end
+		return UserInputService:GetMouseLocation()
 	end
 
 	---------------------------------------------------------------------
@@ -273,6 +316,115 @@ function AimbotPage.build(parent, T, H, opts)
 	local silP = { holder = makeHolder("Silent", false) }   -- the Silent page has no cards, only the warning screen
 
 	---------------------------------------------------------------------
+	-- FLOATING POP-UPS (they sit on the whole Combat tab, so they are never cut off by a scrolling page)
+	---------------------------------------------------------------------
+	-- invisible 100x100 box: its on-screen size tells us the scale of the window
+	local probe = new("Frame", {
+		Position = UDim2.fromOffset(-300, -300),
+		Size = UDim2.fromOffset(100, 100),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, root)
+
+	local function uiScale()
+		local s = probe.AbsoluteSize.X / 100
+		if s <= 0 then
+			s = 1
+		end
+		return s
+	end
+
+	-- position and size of a gui object in the local units of root
+	local function rectIn(obj)
+		local s = uiScale()
+		local rp = root.AbsolutePosition
+		local p = obj.AbsolutePosition
+		local z = obj.AbsoluteSize
+		return (p.X - rp.X) / s, (p.Y - rp.Y) / s, z.X / s, z.Y / s
+	end
+
+	-- where a w x h pop-up goes: under the anchor (above it when there is no room), right edges lined up.
+	-- With "beside" it goes to the left (or right) of that frame instead. Always kept inside the tab.
+	local function placeNear(anchor, w, h, beside)
+		local s = uiScale()
+		local rw = root.AbsoluteSize.X / s
+		local rh = root.AbsoluteSize.Y / s
+		local ax, ay, aw, ah = rectIn(anchor)
+		local x = ax + aw - w
+		local y = ay + ah + 6
+		if beside then
+			local bx, by, bw = rectIn(beside)
+			if bx - 8 - w >= 4 then
+				x = bx - 8 - w
+			else
+				x = bx + bw + 8
+			end
+			y = by
+		elseif y + h > rh - 4 then
+			y = ay - h - 6
+		end
+		x = math.clamp(x, 4, math.max(4, rw - w - 4))
+		y = math.clamp(y, 4, math.max(4, rh - h - 4))
+		return UDim2.fromOffset(math.floor(x), math.floor(y))
+	end
+
+	local FL_OPEN = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local FL_CLOSE = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+	-- a pop-up frame (canvas group) with open / close animations
+	local function makeFloating(name, w, h)
+		local F = { flag = false, token = 0 }
+		F.frame = new("CanvasGroup", {
+			Name = name,
+			Size = UDim2.fromOffset(w, h),
+			BackgroundColor3 = T.POPUP_BG,
+			BorderSizePixel = 0,
+			GroupTransparency = 1,
+			Visible = false,
+			ZIndex = 60,
+		}, root)
+		corner(F.frame, RADIUS + 4)
+		stroke(F.frame, T.BORDER, 1, 0)
+
+		function F.isOpen()
+			return F.flag
+		end
+
+		function F.open(pos)
+			F.token = F.token + 1
+			F.flag = true
+			F.frame.Position = pos + UDim2.fromOffset(0, 6)
+			F.frame.GroupTransparency = 1
+			F.frame.Visible = true
+			TweenService:Create(F.frame, FL_OPEN, { Position = pos, GroupTransparency = 0 }):Play()
+		end
+
+		function F.move(pos)
+			TweenService:Create(F.frame, SMOOTH, { Position = pos }):Play()
+		end
+
+		function F.close()
+			if not F.flag then
+				return
+			end
+			F.flag = false
+			F.token = F.token + 1
+			local tk = F.token
+			TweenService:Create(F.frame, FL_CLOSE, {
+				Position = F.frame.Position + UDim2.fromOffset(0, 6),
+				GroupTransparency = 1,
+			}):Play()
+			task.delay(FL_CLOSE.Time + 0.02, function()
+				if tk == F.token then
+					F.frame.Visible = false
+				end
+			end)
+		end
+
+		return F
+	end
+
+	---------------------------------------------------------------------
 	-- CONTROLS
 	---------------------------------------------------------------------
 	-- returns { set = fn(value, animate) } so the code can flip the switch itself
@@ -330,6 +482,79 @@ function AimbotPage.build(parent, T, H, opts)
 			paint(animate)
 		end
 		return api
+	end
+
+	-- a small rounded square that shows a colour. pos = where its right-centre edge goes. Click = onClick().
+	-- returns { btn = the button, paint = fn(color3) }
+	local function makeSwatch(c, pos, startColor, onClick)
+		local btn = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = pos,
+			Size = UDim2.fromOffset(22, 22),
+			BackgroundColor3 = startColor,
+			BorderSizePixel = 0,
+		}, c)
+		corner(btn, 6)
+		local st = stroke(btn, T.BORDER, 1, 0)
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(st, FAST, { Color = T.ICON }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(st, FAST, { Color = T.BORDER }):Play()
+		end)
+		btn.Activated:Connect(onClick)
+		local api = { btn = btn }
+		function api.paint(col)
+			btn.BackgroundColor3 = col
+		end
+		return api
+	end
+
+	-- three horizontal dots (no background, only the dots change colour: lit while hovered or while open)
+	-- set D.open = true / false and call D.paint() from the code that opens the panel
+	local function makeDots(c, pos)
+		local D = { over = false, open = false, parts = {} }
+		D.btn = new("TextButton", {
+			Name = "MoreButton",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = pos,
+			Size = UDim2.fromOffset(32, 26),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, c)
+		for i = 1, 3 do
+			local d = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, (i - 2) * 7, 0.5, 0),
+				Size = UDim2.fromOffset(4, 4),
+				BackgroundColor3 = T.ICON,
+				BorderSizePixel = 0,
+			}, D.btn)
+			corner(d, 100)
+			D.parts[i] = d
+		end
+		function D.paint()
+			local colr = T.ICON
+			if D.open or D.over then
+				colr = T.ICON_HOVER
+			end
+			for i = 1, #D.parts do
+				TweenService:Create(D.parts[i], FAST, { BackgroundColor3 = colr }):Play()
+			end
+		end
+		D.btn.MouseEnter:Connect(function()
+			D.over = true
+			D.paint()
+		end)
+		D.btn.MouseLeave:Connect(function()
+			D.over = false
+			D.paint()
+		end)
+		return D
 	end
 
 	-- a button that records the next key / mouse button (shows the current one on it)
@@ -470,18 +695,19 @@ function AimbotPage.build(parent, T, H, opts)
 		choose(current, false)
 	end
 
-	-- a slider row inside a card; returns { dim = fn(enabled), set = fn(value) }
-	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue)
+	-- a slider row inside a card or pop-up; returns { dim = fn(enabled), set = fn(value) }
+	-- fmt is a string.format pattern; fmtFn (optional) is a function(value) -> text that replaces it
+	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue, fmtFn)
 		label(c, name, UDim2.fromOffset(14, y), UDim2.fromOffset(labelW, 20),
 			Enum.Font.GothamMedium, 12, T.ICON)
-		local valueLabel = label(c, "", UDim2.new(1, -52, 0, y), UDim2.fromOffset(40, 20),
+		local valueLabel = label(c, "", UDim2.new(1, -58, 0, y), UDim2.fromOffset(46, 20),
 			Enum.Font.GothamMedium, 12, T.TEXT_COLOR, Enum.TextXAlignment.Right)
 
 		local x0 = 14 + labelW + 6
 
 		local track = new("Frame", {
 			Position = UDim2.fromOffset(x0, y + 7),
-			Size = UDim2.new(1, -(x0 + 60), 0, 6),
+			Size = UDim2.new(1, -(x0 + 66), 0, 6),
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
 		}, c)
@@ -507,7 +733,7 @@ function AimbotPage.build(parent, T, H, opts)
 			AutoButtonColor = false,
 			Text = "",
 			Position = UDim2.fromOffset(x0, y),
-			Size = UDim2.new(1, -(x0 + 60), 0, 20),
+			Size = UDim2.new(1, -(x0 + 66), 0, 20),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, c)
@@ -519,7 +745,11 @@ function AimbotPage.build(parent, T, H, opts)
 			local f = (value - minV) / (maxV - minV)
 			fill.Size = UDim2.new(f, 0, 1, 0)
 			knob.Position = UDim2.new(f, 0, 0.5, 0)
-			valueLabel.Text = string.format(fmt, value)
+			if fmtFn then
+				valueLabel.Text = fmtFn(value)
+			else
+				valueLabel.Text = string.format(fmt, value)
+			end
 		end
 		refresh()
 
@@ -588,7 +818,7 @@ function AimbotPage.build(parent, T, H, opts)
 		end, 19)
 	end
 
-	-- the Distance card (Min / Max), used on both pages. cfg = S or SIL
+	-- the Distance card (Min / Max). cfg = S
 	local function rangeCard(P, col, cfg)
 		local c = P.place(col, 104)
 		label(c, "Distance", UDim2.fromOffset(14, 0), UDim2.new(1, -28, 0, 36),
@@ -808,6 +1038,32 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
+	-- FOV: helpers shared by the targeting and the drawing
+	---------------------------------------------------------------------
+	-- the current radius in pixels (Dynamic FOV changes fovScale, otherwise it stays 1)
+	local function fovRadius()
+		return S.fovSize * fovScale
+	end
+
+	-- is the screen point (px, py) inside the FOV shape that is centred on (cx, cy)?
+	-- a regular polygon with its first corner pointing up, or a circle at the maximum angle count
+	local function insideFov(px, py, cx, cy, radius, sides)
+		local dx = px - cx
+		local dy = py - cy
+		if sides >= FOV_CIRCLE then
+			return dx * dx + dy * dy <= radius * radius
+		end
+		local apothem = radius * math.cos(math.pi / sides)
+		for k = 0, sides - 1 do
+			local ang = math.rad(-90 + 360 / sides * (k + 0.5))
+			if dx * math.cos(ang) + dy * math.sin(ang) > apothem then
+				return false
+			end
+		end
+		return true
+	end
+
+	---------------------------------------------------------------------
 	-- TARGETING (shared by the aimbot and silent aim)
 	---------------------------------------------------------------------
 	-- the screen point we measure "near" from: the cursor, or the middle of the screen
@@ -893,15 +1149,23 @@ function AimbotPage.build(parent, T, H, opts)
 		return best, bestD
 	end
 
-	-- the player whose hit part is nearest to ref. maxScreenDist (optional) = only players inside that many pixels
+	-- the player whose hit part is nearest to ref. While the FOV is enabled only players whose
+	-- hit part is inside the FOV shape count.
 	local function acquire(cam, ref, origin, cfg, maxScreenDist)
 		local bestPlr = nil
 		local bestD = nil
+		local radius = fovRadius()
 		local all = Players:GetPlayers()
 		for i = 1, #all do
 			local plr = all[i]
 			if plr ~= player and validTarget(plr, origin, cfg) then
 				local part, d = bestPart(plr.Character, cam, ref, true, cfg.part)
+				if part and cfg.fovOn then
+					local v = cam:WorldToViewportPoint(part.Position)
+					if not insideFov(v.X, v.Y, ref.X, ref.Y, radius, cfg.fovSides) then
+						part = nil
+					end
+				end
 				if part and (maxScreenDist == nil or d <= maxScreenDist) then
 					if bestD == nil or d < bestD then
 						bestPlr = plr
@@ -924,9 +1188,848 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
+	-- FOV: the shape on the screen (a transparent overlay gui)
+	---------------------------------------------------------------------
+	local outlineSwatch = nil   -- the colour square on the FOV card (made when the card is built)
+	local fillSwatch = nil      -- the colour square next to "Filled" in the FOV settings
+
+	local fovGui = new("ScreenGui", {
+		Name = "Y1AimbotFov",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 998,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, player:WaitForChild("PlayerGui"))
+
+	-- the box is centred on the cursor / screen middle. Everything inside is sized with scale,
+	-- so resizing the box (Size slider, Dynamic FOV) resizes the shape without rebuilding it.
+	local fovBox = new("Frame", {
+		Name = "FovBox",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(240, 240),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, fovGui)
+
+	-- the fill lives in a canvas group so the overlapping pieces of a filled polygon never show seams
+	local fovFill = new("CanvasGroup", {
+		Name = "Fill",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 0.75,
+		ZIndex = 1,
+	}, fovBox)
+
+	local fovLine = new("Frame", {
+		Name = "Line",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, fovBox)
+
+	local lineParts = {}   -- { inst, isStroke, mult } for every outline / glow piece
+	local fillParts = {}   -- every frame of the fill
+
+	-- the colours / opacity of everything already built
+	local function recolor()
+		for i = 1, #lineParts do
+			local p = lineParts[i]
+			local t = 1 - S.fovAlpha * p.mult
+			if p.isStroke then
+				p.inst.Color = S.fovColor
+				p.inst.Transparency = t
+			else
+				p.inst.BackgroundColor3 = S.fovColor
+				p.inst.BackgroundTransparency = t
+			end
+		end
+		for i = 1, #fillParts do
+			fillParts[i].BackgroundColor3 = S.fillColor
+		end
+		fovFill.GroupTransparency = 1 - S.fillAlpha
+	end
+
+	-- the x range of a regular polygon (first corner up, size 1x1) at height y; nil when y is outside it
+	local function polyRange(n, y)
+		local xmin = nil
+		local xmax = nil
+		for k = 0, n - 1 do
+			local a1 = math.rad(-90 + 360 / n * k)
+			local a2 = math.rad(-90 + 360 / n * (k + 1))
+			local x1 = 0.5 + 0.5 * math.cos(a1)
+			local y1 = 0.5 + 0.5 * math.sin(a1)
+			local x2 = 0.5 + 0.5 * math.cos(a2)
+			local y2 = 0.5 + 0.5 * math.sin(a2)
+			if (y1 <= y and y2 >= y) or (y2 <= y and y1 >= y) then
+				if math.abs(y2 - y1) < 1e-9 then
+					xmin = math.min(xmin or x1, x1, x2)
+					xmax = math.max(xmax or x1, x1, x2)
+				else
+					local x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+					xmin = math.min(xmin or x, x)
+					xmax = math.max(xmax or x, x)
+				end
+			end
+		end
+		return xmin, xmax
+	end
+
+	-- one outline (or glow) layer of a polygon: a thin rounded bar for every side
+	local function addPolygonLayer(n, thickness, mult)
+		for k = 0, n - 1 do
+			local a1 = math.rad(-90 + 360 / n * k)
+			local a2 = math.rad(-90 + 360 / n * (k + 1))
+			local x1 = 0.5 + 0.5 * math.cos(a1)
+			local y1 = 0.5 + 0.5 * math.sin(a1)
+			local x2 = 0.5 + 0.5 * math.cos(a2)
+			local y2 = 0.5 + 0.5 * math.sin(a2)
+			local dx = x2 - x1
+			local dy = y2 - y1
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale((x1 + x2) / 2, (y1 + y2) / 2),
+				Size = UDim2.new(math.sqrt(dx * dx + dy * dy), thickness, 0, thickness),
+				Rotation = math.deg(math.atan2(dy, dx)),
+				BorderSizePixel = 0,
+			}, fovLine)
+			corner(f, 100)
+			lineParts[#lineParts + 1] = { inst = f, isStroke = false, mult = mult }
+		end
+	end
+
+	-- builds the shape for the current angle count / filled / glow settings
+	local function rebuildShape()
+		fovFill:ClearAllChildren()
+		fovLine:ClearAllChildren()
+		lineParts = {}
+		fillParts = {}
+		local n = S.fovSides
+		local circle = (n >= FOV_CIRCLE)
+
+		-- the glow layers go first so the sharp line ends up on top
+		local layers = { { t = 2, mult = 1 } }
+		if S.fovGlow then
+			layers = { { t = 11, mult = 0.12 }, { t = 6, mult = 0.28 }, { t = 2, mult = 1 } }
+		end
+		for li = 1, #layers do
+			local L = layers[li]
+			if circle then
+				local ring = new("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+				}, fovLine)
+				corner(ring, 1000)
+				local st = Instance.new("UIStroke")
+				st.Thickness = L.t
+				st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+				st.Parent = ring
+				lineParts[#lineParts + 1] = { inst = st, isStroke = true, mult = L.mult }
+			else
+				addPolygonLayer(n, L.t, L.mult)
+			end
+		end
+
+		if S.fovFilled then
+			if circle then
+				local f = new("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BorderSizePixel = 0,
+				}, fovFill)
+				corner(f, 1000)
+				fillParts[#fillParts + 1] = f
+			else
+				-- a polygon is filled with thin horizontal strips
+				local M = 40
+				for i = 1, M do
+					local xmin, xmax = polyRange(n, (i - 0.5) / M)
+					if xmin and xmax then
+						local f = new("Frame", {
+							Position = UDim2.fromScale(xmin, (i - 1) / M),
+							Size = UDim2.new(xmax - xmin, 0, 1 / M, 1),
+							BorderSizePixel = 0,
+						}, fovFill)
+						fillParts[#fillParts + 1] = f
+					end
+				end
+			end
+		end
+		recolor()
+	end
+
+	rebuildShape()
+
+	-- follows the cursor (or the screen middle), keeps the size, runs Dynamic FOV
+	local function fovStep(dt)
+		if not running then
+			return
+		end
+		if not S.fovOn then
+			fovBox.Visible = false
+			return
+		end
+		local cam = workspace.CurrentCamera
+		if not cam then
+			return
+		end
+		local ref = refPoint(cam, S.aim == "Camera")
+
+		if S.fovDynamic then
+			local origin = originPos(cam)
+			local nearest = nil
+			local all = Players:GetPlayers()
+			for i = 1, #all do
+				local plr = all[i]
+				if plr ~= player and validTarget(plr, origin, S) then
+					local rp = plr.Character:FindFirstChild("HumanoidRootPart")
+					if rp then
+						local d = (rp.Position - origin).Magnitude
+						if nearest == nil or d < nearest then
+							nearest = d
+						end
+					end
+				end
+			end
+			local goal = 1
+			if nearest then
+				goal = math.clamp(DYN_REF / math.max(nearest, 1), 0.5, 2)
+			end
+			fovScale = fovScale + (goal - fovScale) * math.min(1, dt * 8)
+		else
+			fovScale = 1
+		end
+
+		local r = fovRadius()
+		fovBox.Size = UDim2.fromOffset(r * 2, r * 2)
+		fovBox.Position = UDim2.fromOffset(ref.X, ref.Y)
+		fovBox.Visible = true
+	end
+
+	conns[#conns + 1] = RunService.RenderStepped:Connect(fovStep)
+
+	---------------------------------------------------------------------
+	-- COLOUR PICKER (one pop-up, shared by the outline colour and the fill colour)
+	---------------------------------------------------------------------
+	local picker = {}
+	local pickerEntry = nil
+
+	do
+		local PW = 244
+		local PH = 262
+		local F = makeFloating("FovColorPicker", PW, PH)
+		local pop = F.frame
+
+		local h = 0
+		local s = 0
+		local v = 1
+		local a = 1
+		local onChange = nil
+		local fmt = "HEX"
+		local dragging = nil   -- "sv" / "hue" / "alpha" while the pointer is held down
+		local WHITE = Color3.new(1, 1, 1)
+
+		-- ----- saturation / brightness square -----
+		local svBox = new("Frame", {
+			Position = UDim2.fromOffset(12, 12),
+			Size = UDim2.fromOffset(220, 150),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, pop)
+		local svClip = new("CanvasGroup", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.fromHSV(0, 1, 1),
+			BorderSizePixel = 0,
+		}, svBox)
+		corner(svClip, 8)
+		local whiteOv = new("Frame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+		}, svClip)
+		new("UIGradient", {
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+		}, whiteOv)
+		local blackOv = new("Frame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BorderSizePixel = 0,
+		}, svClip)
+		new("UIGradient", {
+			Rotation = 90,
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) }),
+		}, blackOv)
+		local svKnob = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, svBox)
+		corner(svKnob, 100)
+		stroke(svKnob, WHITE, 2, 0)
+		local svHit = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, svBox)
+
+		-- ----- hue bar -----
+		local hueBox = new("Frame", {
+			Position = UDim2.fromOffset(12, 172),
+			Size = UDim2.fromOffset(220, 14),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, pop)
+		local hueClip = new("CanvasGroup", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+		}, hueBox)
+		corner(hueClip, 7)
+		new("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
+				ColorSequenceKeypoint.new(1 / 6, Color3.fromRGB(255, 255, 0)),
+				ColorSequenceKeypoint.new(2 / 6, Color3.fromRGB(0, 255, 0)),
+				ColorSequenceKeypoint.new(3 / 6, Color3.fromRGB(0, 255, 255)),
+				ColorSequenceKeypoint.new(4 / 6, Color3.fromRGB(0, 0, 255)),
+				ColorSequenceKeypoint.new(5 / 6, Color3.fromRGB(255, 0, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0)),
+			}),
+		}, hueClip)
+		local hueKnob = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.fromOffset(10, 22),
+			BackgroundColor3 = Color3.fromRGB(255, 0, 0),
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, hueBox)
+		corner(hueKnob, 5)
+		stroke(hueKnob, WHITE, 2, 0)
+		local hueHit = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			Position = UDim2.fromOffset(-4, -4),
+			Size = UDim2.new(1, 8, 1, 8),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, hueBox)
+
+		-- ----- opacity bar (checkerboard + colour fading in) -----
+		local alphaBox = new("Frame", {
+			Position = UDim2.fromOffset(12, 196),
+			Size = UDim2.fromOffset(220, 14),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, pop)
+		local alphaClip = new("CanvasGroup", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.fromRGB(58, 58, 62),
+			BorderSizePixel = 0,
+		}, alphaBox)
+		corner(alphaClip, 7)
+		for row = 0, 1 do
+			for col = 0, 31 do
+				if (row + col) % 2 == 0 then
+					new("Frame", {
+						Position = UDim2.fromOffset(col * 7, row * 7),
+						Size = UDim2.fromOffset(7, 7),
+						BackgroundColor3 = Color3.fromRGB(92, 92, 98),
+						BorderSizePixel = 0,
+					}, alphaClip)
+				end
+			end
+		end
+		local alphaOverlay = new("Frame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+		}, alphaClip)
+		new("UIGradient", {
+			Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) }),
+		}, alphaOverlay)
+		local alphaKnob = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(1, 0, 0.5, 0),
+			Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, alphaBox)
+		corner(alphaKnob, 100)
+		stroke(alphaKnob, Color3.fromRGB(40, 40, 44), 1, 0)
+		local alphaHit = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			Position = UDim2.fromOffset(-4, -4),
+			Size = UDim2.new(1, 8, 1, 8),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, alphaBox)
+
+		-- ----- bottom row: format button | colour + value | opacity -----
+		local fmtBtn = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			Position = UDim2.fromOffset(12, 222),
+			Size = UDim2.fromOffset(58, 28),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, pop)
+		corner(fmtBtn, 8)
+		local fmtLabel = label(fmtBtn, "HEX", UDim2.fromOffset(24, 0), UDim2.new(1, -28, 1, 0),
+			Enum.Font.GothamMedium, 12, T.ICON_HOVER)
+		local fmtChev = {}
+		local function fmtBar(x, rot)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0, x, 0.5, 0),
+				Size = UDim2.fromOffset(6, 2),
+				Rotation = rot,
+				BackgroundColor3 = T.ICON,
+				BorderSizePixel = 0,
+			}, fmtBtn)
+			corner(f, 1)
+			fmtChev[#fmtChev + 1] = f
+		end
+		fmtBar(11, 45)
+		fmtBar(15, -45)
+
+		local valBox = new("Frame", {
+			Position = UDim2.fromOffset(76, 222),
+			Size = UDim2.fromOffset(100, 28),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, pop)
+		corner(valBox, 8)
+		local miniSwatch = new("Frame", {
+			Position = UDim2.fromOffset(8, 6),
+			Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+		}, valBox)
+		corner(miniSwatch, 4)
+		stroke(miniSwatch, T.BORDER, 1, 0)
+		local valText = new("TextBox", {
+			Position = UDim2.fromOffset(30, 0),
+			Size = UDim2.new(1, -34, 1, 0),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Text = "",
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = T.TEXT_COLOR,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, valBox)
+
+		local alphaBoxIn = new("Frame", {
+			Position = UDim2.fromOffset(182, 222),
+			Size = UDim2.fromOffset(50, 28),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, pop)
+		corner(alphaBoxIn, 8)
+		local alphaText = new("TextBox", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Text = "100%",
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = T.TEXT_COLOR,
+			TextXAlignment = Enum.TextXAlignment.Center,
+		}, alphaBoxIn)
+
+		-- ----- logic -----
+		local function textFor()
+			local c = Color3.fromHSV(h, s, v)
+			local r = math.floor(c.R * 255 + 0.5)
+			local g = math.floor(c.G * 255 + 0.5)
+			local b = math.floor(c.B * 255 + 0.5)
+			if fmt == "HEX" then
+				return string.format("#%02X%02X%02X%02X", r, g, b, math.floor(a * 255 + 0.5))
+			elseif fmt == "RGB" then
+				return r .. ", " .. g .. ", " .. b
+			end
+			return math.floor(h * 360 + 0.5) .. ", " .. math.floor(s * 100 + 0.5) .. ", " .. math.floor(v * 100 + 0.5)
+		end
+
+		-- draws everything for the current h / s / v / a. fire = also tell the owner about the new colour
+		local function refresh(fire)
+			local c = Color3.fromHSV(h, s, v)
+			svClip.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+			svKnob.Position = UDim2.new(s, 0, 1 - v, 0)
+			svKnob.BackgroundColor3 = c
+			hueKnob.Position = UDim2.new(h, 0, 0.5, 0)
+			hueKnob.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+			alphaOverlay.BackgroundColor3 = c
+			alphaKnob.Position = UDim2.new(a, 0, 0.5, 0)
+			miniSwatch.BackgroundColor3 = c
+			if not valText:IsFocused() then
+				valText.Text = textFor()
+			end
+			if not alphaText:IsFocused() then
+				alphaText.Text = math.floor(a * 100 + 0.5) .. "%"
+			end
+			if fire and onChange then
+				onChange(c, a)
+			end
+		end
+
+		local function fromPointer(p)
+			if dragging == "sv" then
+				local pos = svBox.AbsolutePosition
+				local sz = svBox.AbsoluteSize
+				if sz.X > 0 and sz.Y > 0 then
+					s = math.clamp((p.X - pos.X) / sz.X, 0, 1)
+					v = 1 - math.clamp((p.Y - pos.Y) / sz.Y, 0, 1)
+				end
+			elseif dragging == "hue" then
+				local pos = hueBox.AbsolutePosition
+				local sz = hueBox.AbsoluteSize
+				if sz.X > 0 then
+					h = math.clamp((p.X - pos.X) / sz.X, 0, 1)
+				end
+			elseif dragging == "alpha" then
+				local pos = alphaBox.AbsolutePosition
+				local sz = alphaBox.AbsoluteSize
+				if sz.X > 0 then
+					a = math.clamp((p.X - pos.X) / sz.X, 0, 1)
+				end
+			end
+			refresh(true)
+		end
+
+		local function bindDrag(btn, name)
+			btn.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch then
+					dragging = name
+					fromPointer(pointerPos(input))
+				end
+			end)
+		end
+		bindDrag(svHit, "sv")
+		bindDrag(hueHit, "hue")
+		bindDrag(alphaHit, "alpha")
+
+		conns[#conns + 1] = UserInputService.InputChanged:Connect(function(input)
+			if not dragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				fromPointer(pointerPos(input))
+			end
+		end)
+		conns[#conns + 1] = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = nil
+			end
+		end)
+
+		-- typed value
+		valText.FocusLost:Connect(function()
+			local txt = valText.Text
+			if fmt == "HEX" then
+				local hex = string.match(txt, "^%s*#?(%x+)%s*$")
+				if hex and #hex == 3 then
+					hex = string.gsub(hex, ".", function(ch)
+						return ch .. ch
+					end)
+				end
+				if hex and (#hex == 6 or #hex == 8) then
+					local r = tonumber(string.sub(hex, 1, 2), 16)
+					local g = tonumber(string.sub(hex, 3, 4), 16)
+					local b = tonumber(string.sub(hex, 5, 6), 16)
+					if r and g and b then
+						h, s, v = Color3.fromRGB(r, g, b):ToHSV()
+						if #hex == 8 then
+							local al = tonumber(string.sub(hex, 7, 8), 16)
+							if al then
+								a = al / 255
+							end
+						end
+					end
+				end
+			elseif fmt == "RGB" then
+				local rs, gs, bs = string.match(txt, "^%s*(%d+)[%s,]+(%d+)[%s,]+(%d+)%s*$")
+				if rs then
+					h, s, v = Color3.fromRGB(math.clamp(tonumber(rs), 0, 255), math.clamp(tonumber(gs), 0, 255), math.clamp(tonumber(bs), 0, 255)):ToHSV()
+				end
+			else
+				local hs, ss, vs = string.match(txt, "^%s*(%d+)[%s,]+(%d+)[%s,]+(%d+)%s*$")
+				if hs then
+					h = math.clamp(tonumber(hs), 0, 360) / 360
+					s = math.clamp(tonumber(ss), 0, 100) / 100
+					v = math.clamp(tonumber(vs), 0, 100) / 100
+				end
+			end
+			refresh(true)
+		end)
+
+		alphaText.FocusLost:Connect(function()
+			local n = tonumber(string.match(alphaText.Text, "[%d%.]+"))
+			if n then
+				a = math.clamp(n / 100, 0, 1)
+			end
+			refresh(true)
+		end)
+
+		-- the format button cycles HEX -> RGB -> HSV
+		local fmtOver = false
+		local function paintFmt()
+			local bg = T.CLUSTER_BG
+			local colr = T.ICON
+			if fmtOver then
+				bg = T.HOVER_GREY
+				colr = T.ICON_HOVER
+			end
+			TweenService:Create(fmtBtn, FAST, { BackgroundColor3 = bg }):Play()
+			for i = 1, #fmtChev do
+				TweenService:Create(fmtChev[i], FAST, { BackgroundColor3 = colr }):Play()
+			end
+		end
+		fmtBtn.MouseEnter:Connect(function()
+			fmtOver = true
+			paintFmt()
+		end)
+		fmtBtn.MouseLeave:Connect(function()
+			fmtOver = false
+			paintFmt()
+		end)
+		fmtBtn.Activated:Connect(function()
+			if fmt == "HEX" then
+				fmt = "RGB"
+			elseif fmt == "RGB" then
+				fmt = "HSV"
+			else
+				fmt = "HEX"
+			end
+			fmtLabel.Text = fmt
+			refresh(false)
+		end)
+
+		-- ----- public -----
+		picker.frame = pop
+		picker.target = nil
+
+		function picker.isOpen()
+			return F.isOpen()
+		end
+
+		-- key = "outline" / "fill", anchor = the square that was clicked, color / alpha = what it shows now,
+		-- cb(color3, alpha) is called while the colour changes, beside = a frame to sit next to (optional)
+		function picker.open(key, anchor, color, alpha, cb, beside)
+			picker.target = key
+			onChange = nil
+			h, s, v = color:ToHSV()
+			a = alpha
+			refresh(false)
+			onChange = cb
+			local pos = placeNear(anchor, PW, PH, beside)
+			if F.isOpen() then
+				F.move(pos)
+			else
+				F.open(pos)
+			end
+		end
+
+		function picker.close()
+			F.close()
+			picker.target = nil
+			dragging = nil
+		end
+
+		pickerEntry = {
+			isOpen = function()
+				return F.isOpen()
+			end,
+			close = picker.close,
+			hit = { pop },
+		}
+		popupList[#popupList + 1] = pickerEntry
+	end
+
+	---------------------------------------------------------------------
+	-- FOV SETTINGS (the pop-up behind the three dots on the FOV card)
+	--   Enabled / Filled (+ colour square) / Glow / Size / Angles / Dynamic FOV
+	---------------------------------------------------------------------
+	local fovSettings = nil
+	local fovDots = nil        -- the three dots on the FOV card (made when the card is built)
+	local fovSub = nil         -- the line under "FOV" on the card
+	local fovEntry = nil
+
+	local function refreshFovStatus()
+		if not fovSub then
+			return
+		end
+		if S.fovOn then
+			fovSub.Text = "On"
+			fovSub.TextColor3 = T.GREEN
+		else
+			fovSub.Text = "Off"
+			fovSub.TextColor3 = T.DIM_TEXT
+		end
+	end
+
+	-- opens / closes the colour picker for "outline" or "fill"
+	local function togglePicker(key, anchor)
+		if picker.isOpen() and picker.target == key then
+			picker.close()
+			return
+		end
+		local color = S.fovColor
+		local alpha = S.fovAlpha
+		local cb = function(c, al)
+			S.fovColor = c
+			S.fovAlpha = al
+			if outlineSwatch then
+				outlineSwatch.paint(c)
+			end
+			recolor()
+		end
+		local beside = nil
+		if key == "fill" then
+			color = S.fillColor
+			alpha = S.fillAlpha
+			cb = function(c, al)
+				S.fillColor = c
+				S.fillAlpha = al
+				if fillSwatch then
+					fillSwatch.paint(c)
+				end
+				recolor()
+			end
+			if fovSettings.isOpen() then
+				beside = fovSettings.frame
+			end
+		end
+		picker.open(key, anchor, color, alpha, cb, beside)
+	end
+
+	do
+		local FW = 264
+		local FH = 256
+		fovSettings = makeFloating("FovSettings", FW, FH)
+		local pop = fovSettings.frame
+
+		label(pop, "FOV", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+			Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+		new("Frame", {
+			Position = UDim2.fromOffset(16, 40),
+			Size = UDim2.new(1, -32, 0, 1),
+			BackgroundColor3 = T.BORDER,
+			BorderSizePixel = 0,
+		}, pop)
+
+		-- Enabled (off every time the script starts)
+		label(pop, "Enabled", UDim2.fromOffset(16, 46), UDim2.new(1, -90, 0, 32),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		makeSwitch(pop, S.fovOn, function(on)
+			S.fovOn = on
+			refreshFovStatus()
+		end, 62, 16)
+
+		-- Filled: switch on the right, the fill colour square on its left
+		label(pop, "Filled", UDim2.fromOffset(16, 80), UDim2.new(1, -120, 0, 32),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		makeSwitch(pop, S.fovFilled, function(on)
+			S.fovFilled = on
+			rebuildShape()
+		end, 96, 16)
+		fillSwatch = makeSwatch(pop, UDim2.new(1, -(16 + 38 + 10), 0, 96), S.fillColor, function()
+			togglePicker("fill", fillSwatch.btn)
+		end)
+
+		-- Glow
+		label(pop, "Glow", UDim2.fromOffset(16, 114), UDim2.new(1, -90, 0, 32),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		makeSwitch(pop, S.fovGlow, function(on)
+			S.fovGlow = on
+			rebuildShape()
+		end, 130, 16)
+
+		-- Size (radius in pixels)
+		local sizeApi = makeSlider(pop, 152, "Size", 40, 20, 400, 5, S.fovSize, "%d", function(v)
+			S.fovSize = v
+		end)
+		sizeApi.dim(true)
+
+		-- Angles: 3 = triangle ... up to the maximum = circle
+		local anglesApi = makeSlider(pop, 184, "Angles", 48, FOV_MIN_SIDES, FOV_CIRCLE, 1, S.fovSides, "%d", function(v)
+			S.fovSides = v
+			rebuildShape()
+		end, function(v)
+			if v >= FOV_CIRCLE then
+				return "Circle"
+			end
+			return tostring(v)
+		end)
+		anglesApi.dim(true)
+
+		-- Dynamic FOV
+		label(pop, "Dynamic FOV", UDim2.fromOffset(16, 212), UDim2.new(1, -90, 0, 32),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		makeSwitch(pop, S.fovDynamic, function(on)
+			S.fovDynamic = on
+		end, 228, 16)
+
+		local function openFov(anchor)
+			if fovSettings.isOpen() then
+				return
+			end
+			fovSettings.open(placeNear(anchor, FW, FH, nil))
+			if fovDots then
+				fovDots.open = true
+				fovDots.paint()
+			end
+		end
+
+		local function closeFov()
+			fovSettings.close()
+			if picker.isOpen() and picker.target == "fill" then
+				picker.close()
+			end
+			if fovDots then
+				fovDots.open = false
+				fovDots.paint()
+			end
+		end
+
+		fovSettings.openAt = openFov
+		fovSettings.closeAll = closeFov
+
+		fovEntry = {
+			isOpen = function()
+				return fovSettings.isOpen()
+			end,
+			close = closeFov,
+			hit = { pop, picker.frame },
+		}
+		popupList[#popupList + 1] = fovEntry
+
+		-- the colour picker must not close when the fill square is clicked
+		table.insert(pickerEntry.hit, fillSwatch.btn)
+	end
+
+	---------------------------------------------------------------------
 	-- AIMBOT PAGE
-	--   left : Enable (switch + three dots), Hit Part, Distance
-	--   right: Prediction, Smoothness
+	--   left : Enable (switch + three dots), Hit Part
+	--   right: Distance (on top), Prediction, Smoothness, FOV
 	---------------------------------------------------------------------
 	aimP.section(1, "AIMBOT")
 
@@ -968,37 +2071,16 @@ function AimbotPage.build(parent, T, H, opts)
 	end, 23)
 
 	-- three horizontal dots, left of the switch
-	local dotsBtn = new("TextButton", {
-		Name = "MoreButton",
-		AutoButtonColor = false,
-		Text = "",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -58, 0, 23),
-		Size = UDim2.fromOffset(32, 26),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-	}, enableCard)
-
-	local dotParts = {}
-	for i = 1, 3 do
-		local d = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, (i - 2) * 7, 0.5, 0),
-			Size = UDim2.fromOffset(4, 4),
-			BackgroundColor3 = T.ICON,
-			BorderSizePixel = 0,
-		}, dotsBtn)
-		corner(d, 100)
-		dotParts[i] = d
-	end
+	local enableDots = makeDots(enableCard, UDim2.new(1, -58, 0, 23))
 
 	dropdownCard(aimP, 1, "Hit Part", PART_OPTIONS, S.part, function(v)
 		S.part = v
 		locked = nil
 	end)
 
-	aimP.section(1, "RANGE")
-	rangeCard(aimP, 1, S)
+	-- right column, top: Distance
+	aimP.section(2, "RANGE")
+	rangeCard(aimP, 2, S)
 
 	aimP.section(2, "ASSIST")
 
@@ -1012,7 +2094,44 @@ function AimbotPage.build(parent, T, H, opts)
 		function(v) S.smoothX = v end,
 		function(v) S.smoothY = v end)
 
+	-- FOV: colour square + three dots (the settings are in the pop-up behind the dots)
+	aimP.section(2, "FOV")
+
+	local fovCard = aimP.place(2, 46)
+	label(fovCard, "FOV", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	fovSub = label(fovCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -140, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	refreshFovStatus()
+
+	fovDots = makeDots(fovCard, UDim2.new(1, -12, 0.5, 0))
+	outlineSwatch = makeSwatch(fovCard, UDim2.new(1, -(12 + 32 + 6), 0.5, 0), S.fovColor, function()
+		togglePicker("outline", outlineSwatch.btn)
+	end)
+
+	fovDots.btn.Activated:Connect(function()
+		if fovSettings.isOpen() then
+			fovSettings.closeAll()
+		else
+			fovSettings.openAt(fovDots.btn)
+		end
+	end)
+
+	-- clicks on the dots / the outline square must not count as "outside" for these pop-ups
+	table.insert(fovEntry.hit, fovDots.btn)
+	table.insert(pickerEntry.hit, outlineSwatch.btn)
+
 	aimP.finish()
+
+	-- the floating pop-ups stay where they opened, so they close when the page is scrolled
+	conns[#conns + 1] = aimP.scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		if fovEntry.isOpen() then
+			fovEntry.close()
+		end
+		if pickerEntry.isOpen() then
+			pickerEntry.close()
+		end
+	end)
 
 	---------------------------------------------------------------------
 	-- AIMBOT SETTINGS PANEL (opens from the three dots; ONE background for everything inside)
@@ -1089,18 +2208,6 @@ function AimbotPage.build(parent, T, H, opts)
 	-- open / close the settings panel
 	local popupOpen = false
 	local popupToken = 0
-	local dotsOver = false
-
-	-- no background: only the dots change colour (lit while hovered or while the panel is open)
-	local function paintDots()
-		local colr = T.ICON
-		if popupOpen or dotsOver then
-			colr = T.ICON_HOVER
-		end
-		for i = 1, #dotParts do
-			TweenService:Create(dotParts[i], FAST, { BackgroundColor3 = colr }):Play()
-		end
-	end
 
 	local function openSettings()
 		if popupOpen then
@@ -1112,7 +2219,8 @@ function AimbotPage.build(parent, T, H, opts)
 		popup.GroupTransparency = 1
 		popup.Visible = true
 		TweenService:Create(popup, OPEN_INFO, { Position = POP_SHOWN, GroupTransparency = 0 }):Play()
-		paintDots()
+		enableDots.open = true
+		enableDots.paint()
 	end
 
 	local function closeSettings()
@@ -1133,18 +2241,11 @@ function AimbotPage.build(parent, T, H, opts)
 				popup.Visible = false
 			end
 		end)
-		paintDots()
+		enableDots.open = false
+		enableDots.paint()
 	end
 
-	dotsBtn.MouseEnter:Connect(function()
-		dotsOver = true
-		paintDots()
-	end)
-	dotsBtn.MouseLeave:Connect(function()
-		dotsOver = false
-		paintDots()
-	end)
-	dotsBtn.Activated:Connect(function()
+	enableDots.btn.Activated:Connect(function()
 		if popupOpen then
 			closeSettings()
 		else
@@ -1157,7 +2258,7 @@ function AimbotPage.build(parent, T, H, opts)
 			return popupOpen
 		end,
 		close = closeSettings,
-		hit = { popup, dotsBtn },
+		hit = { popup, enableDots.btn },
 	}
 
 	refreshStatus()
@@ -1761,6 +2862,9 @@ function AimbotPage.build(parent, T, H, opts)
 			end)
 		end
 		conns = {}
+		pcall(function()
+			fovGui:Destroy()
+		end)
 	end
 
 	-- the window destroys its gui when it unloads: that takes this page with it
