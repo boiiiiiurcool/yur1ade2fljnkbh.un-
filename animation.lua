@@ -1,7 +1,7 @@
 -- animation.lua  (Y1 Misc tab > Extra page: Animations card, built INTO extra.lua's page)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Detects the Walk / Run / Jump / Fall / Swim / Climb animations your character has right now
+-- Detects the Idle / Walk / Run / Jump / Fall / Swim / Climb animations your character has right now
 -- (from its Animate script) and remembers them as "Default". The three dots open a pop-up with
 -- one drop-down per animation: Default or any animation package.
 -- It changes the AnimationId values inside your Animate script and restarts that script, so the
@@ -30,26 +30,28 @@ function AnimationPage.build(parent, T, H, ctx)
 	end
 
 	-- asset ids from the official Roblox animation bundle table
+	-- (idle1 / idle2 = the two idle animations the Animate script switches between)
 	local PACKS = {
-		{ name = "Rthro", walk = "2510202577", run = "2510198475", jump = "2510197830", fall = "2510195892", climb = "2510192778", swim = "2510199791", swimidle = "2510201162" },
-		{ name = "Mage", walk = "707897309", run = "707861613", jump = "707853694", fall = "707829716", climb = "707826056", swim = "707876443", swimidle = "707894699" },
-		{ name = "Zombie", walk = "616168032", run = "616163682", jump = "616161997", fall = "616157476", climb = "616156119", swim = "616165109", swimidle = "616166655" },
-		{ name = "Elder", walk = "845403856", run = "845386501", jump = "845398858", fall = "845396048", climb = "845392038", swim = "845401742", swimidle = "845403127" },
-		{ name = "Ninja", walk = "656121766", run = "656118852", jump = "656117878", fall = "656115606", climb = "656114359", swim = "656119721", swimidle = "656121397" },
-		{ name = "Vampire", walk = "1083473930", run = "1083462077", jump = "1083455352", fall = "1083443587", climb = "1083439238", swim = "1083464683", swimidle = "1083467779" },
-		{ name = "Werewolf", walk = "1083178339", run = "1083216690", jump = "1083218792", fall = "1083189019", climb = "1083182000", swim = "1083222527", swimidle = "1083225406" },
-		{ name = "Levitation", walk = "616013216", run = "616010382", jump = "616008936", fall = "616005863", climb = "616003713", swim = "616011509", swimidle = "616012453" },
-		{ name = "Astronaut", walk = "891636393", run = "891636393", jump = "891627522", fall = "891617961", climb = "891609353", swim = "891639666", swimidle = "891663592" },
-		{ name = "Knight", walk = "657552124", run = "657564596", jump = "658409194", fall = "657600338", climb = "658360781", swim = "657560551", swimidle = "657557095" },
-		{ name = "Pirate", walk = "750785693", run = "750783738", jump = "750782230", fall = "750780242", climb = "750779899", swim = "750784579", swimidle = "750785176" },
+		{ name = "Rthro", idle1 = "2510197257", idle2 = "2510196951", walk = "2510202577", run = "2510198475", jump = "2510197830", fall = "2510195892", climb = "2510192778", swim = "2510199791", swimidle = "2510201162" },
+		{ name = "Mage", idle1 = "707742142", idle2 = "707855907", walk = "707897309", run = "707861613", jump = "707853694", fall = "707829716", climb = "707826056", swim = "707876443", swimidle = "707894699" },
+		{ name = "Zombie", idle1 = "616158929", idle2 = "616160636", walk = "616168032", run = "616163682", jump = "616161997", fall = "616157476", climb = "616156119", swim = "616165109", swimidle = "616166655" },
+		{ name = "Elder", idle1 = "845397899", idle2 = "845400520", walk = "845403856", run = "845386501", jump = "845398858", fall = "845396048", climb = "845392038", swim = "845401742", swimidle = "845403127" },
+		{ name = "Ninja", idle1 = "656117400", idle2 = "656118341", walk = "656121766", run = "656118852", jump = "656117878", fall = "656115606", climb = "656114359", swim = "656119721", swimidle = "656121397" },
+		{ name = "Vampire", idle1 = "1083445855", idle2 = "1083450166", walk = "1083473930", run = "1083462077", jump = "1083455352", fall = "1083443587", climb = "1083439238", swim = "1083464683", swimidle = "1083467779" },
+		{ name = "Werewolf", idle1 = "1083195517", idle2 = "1083214717", walk = "1083178339", run = "1083216690", jump = "1083218792", fall = "1083189019", climb = "1083182000", swim = "1083222527", swimidle = "1083225406" },
+		{ name = "Levitation", idle1 = "616006778", idle2 = "616008087", walk = "616013216", run = "616010382", jump = "616008936", fall = "616005863", climb = "616003713", swim = "616011509", swimidle = "616012453" },
+		{ name = "Astronaut", idle1 = "891621366", idle2 = "891633237", walk = "891636393", run = "891636393", jump = "891627522", fall = "891617961", climb = "891609353", swim = "891639666", swimidle = "891663592" },
+		{ name = "Knight", idle1 = "657595757", idle2 = "657568135", walk = "657552124", run = "657564596", jump = "658409194", fall = "657600338", climb = "658360781", swim = "657560551", swimidle = "657557095" },
+		{ name = "Pirate", idle1 = "750781874", idle2 = "750782770", walk = "750785693", run = "750783738", jump = "750782230", fall = "750780242", climb = "750779899", swim = "750784579", swimidle = "750785176" },
 	}
 	local NAMES = { "Default" }
 	for i = 1, #PACKS do
 		NAMES[i + 1] = PACKS[i].name
 	end
 
-	-- the six drop-downs (key = which pack field it controls)
+	-- the drop-downs, top to bottom (key = which selection it controls)
 	local ROWS = {
+		{ key = "idle", title = "Idle" },
 		{ key = "walk", title = "Walk" },
 		{ key = "run", title = "Run" },
 		{ key = "jump", title = "Jump" },
@@ -58,8 +60,14 @@ function AnimationPage.build(parent, T, H, ctx)
 		{ key = "climb", title = "Climb" },
 	}
 
-	-- every value inside the Animate script that gets changed (swim idle follows the Swim drop-down)
+	-- used to recognise which pack your default set is (idle is left out, it varies per game)
+	local DETECT = { "walk", "run", "jump", "fall", "swim", "climb" }
+
+	-- every value inside the Animate script that gets changed
+	-- (Idle changes both idle animations, Swim also changes the swim idle)
 	local TARGETS = {
+		{ field = "idle1", sel = "idle", folder = "idle", anim = "Animation1", exact = true },
+		{ field = "idle2", sel = "idle", folder = "idle", anim = "Animation2", exact = true },
 		{ field = "walk", sel = "walk", folder = "walk", anim = "WalkAnim" },
 		{ field = "run", sel = "run", folder = "run", anim = "RunAnim" },
 		{ field = "jump", sel = "jump", folder = "jump", anim = "JumpAnim" },
@@ -71,7 +79,7 @@ function AnimationPage.build(parent, T, H, ctx)
 
 	local running = true
 	local enabled = false
-	local sel = { walk = 1, run = 1, jump = 1, fall = 1, swim = 1, climb = 1 }   -- 1 = Default
+	local sel = { idle = 1, walk = 1, run = 1, jump = 1, fall = 1, swim = 1, climb = 1 }   -- 1 = Default
 	local defaults = {}
 	local hasDefaults = false
 	local detected = "Game default"
@@ -84,7 +92,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		return string.match(tostring(id or ""), "(%d+)%s*$")
 	end
 
-	local function findAnim(animate, folderName, animName)
+	local function findAnim(animate, folderName, animName, exact)
 		local f = animate:FindFirstChild(folderName)
 		if not f then
 			return nil
@@ -92,6 +100,9 @@ function AnimationPage.build(parent, T, H, ctx)
 		local a = f:FindFirstChild(animName)
 		if a and a:IsA("Animation") then
 			return a
+		end
+		if exact then
+			return nil
 		end
 		local kids = f:GetChildren()
 		for i = 1, #kids do
@@ -129,7 +140,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		if enabled then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		sub.Text = '<font color="rgb(230,230,234)"><b>Seen by everyone</b></font> - ' .. state
+		sub.Text = state
 	end
 	refreshSub()
 
@@ -142,7 +153,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	local dots = X.makeDots(card, UDim2.new(1, -58, 0, 23))
 
 	local PW = 300
-	local PH = 292
+	local PH = 328
 	local F = X.makeFloating("AnimationSettings", PW, PH)
 	local pop = F.frame
 
@@ -230,7 +241,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		defaults = {}
 		for i = 1, #TARGETS do
 			local t = TARGETS[i]
-			local a = findAnim(animate, t.folder, t.anim)
+			local a = findAnim(animate, t.folder, t.anim, t.exact)
 			if a then
 				defaults[t.field] = a.AnimationId
 			end
@@ -240,8 +251,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		detected = "Game default"
 		for p = 1, #PACKS do
 			local all = true
-			for r = 1, #ROWS do
-				local f = ROWS[r].key
+			for r = 1, #DETECT do
+				local f = DETECT[r]
 				if num(defaults[f]) ~= PACKS[p][f] then
 					all = false
 				end
@@ -303,7 +314,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		local changed = false
 		for i = 1, #TARGETS do
 			local t = TARGETS[i]
-			local a = findAnim(animate, t.folder, t.anim)
+			local a = findAnim(animate, t.folder, t.anim, t.exact)
 			local base = defaults[t.field]
 			if a and base then
 				local want = base
