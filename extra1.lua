@@ -30,7 +30,7 @@ function Extra1Page.build(parent, T, H, ctx)
 
 	local ARMOR_TAG = "[Full Armor]"
 	local STIM_TAG = "[Stim]"
-	local COOLDOWN = 0.15    -- seconds before the same model can be bought again (lower = faster)
+	local COOLDOWN = 0       -- 0 = click every frame (fastest). Raise it (like 0.1) if purchases get ignored.
 
 	local OPTIONS = {
 		{ key = "armor", title = "Auto Buy Armor" },
