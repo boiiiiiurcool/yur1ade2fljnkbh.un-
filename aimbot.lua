@@ -1,4 +1,4 @@
--- aimbot.lua  (Y1 Combat tab: Aimbot + Silent aim, as its own module)
+-- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page, as its own module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Builds the Combat tab INTO win.CombatPage. It makes no window of its own.
@@ -10,7 +10,8 @@
 -- At the BOTTOM of the tab there is a small switch: [ Aimbot | Silent ]. It swaps the page above it.
 --
 -- AIMBOT page
---   Enable row   a switch and a "..." (three dots) button. The dots open one small settings panel
+--   Enable row   a switch and a "..." (three dots) button. The line under "Enable" says Active while the
+--                aimbot is on (Off when it is off). The dots open one small settings panel
 --                (Key, Mode, Aim Type, Target Lock). Click the dots again, or anywhere else, to close it.
 --   Hit Part     a drop-down (click it, pick from the vertical list, click anywhere else to close it)
 --                Head (default) / Body / Left Leg / Right Leg / Left Arm / Right Arm / Closest Part
@@ -24,16 +25,17 @@
 --              Camera = the camera turns so the target moves to the SCREEN MIDDLE
 --   Mode       Hold = on while the key is held, Toggle = press to switch on / off
 --
--- SILENT page (no key, nothing moves: the game is told you aimed at the target)
---   Enable       on = always working. The small line shows the current target.
---   Hit Part     same drop-down as above
---   Distance     Min / Max
---   Prediction   X / Y
---   FOV          Show circle switch + Size (pixels around your cursor, only players inside it are picked)
---   Needs an executor with hookmetamethod, getnamecallmethod and checkcaller. If it is missing the
---   Enable row says "Executor not supported".
+--   How the cursor mover works (so it does not swing across the screen): the cursor shows its new
+--   position a frame or two after it was moved, so a move is only sent after the last one has shown up.
+--   It never asks for more than half of the remaining distance at once, never more than 200 pixels in
+--   one move, and it measures how far the cursor really went for what it asked (pointer acceleration or
+--   display scaling) and corrects for it.
 --
--- Everything switches itself off and cleans up when the Y1 window is unloaded.
+-- SILENT page
+--   For now it only shows a warning screen: "yur1 warning", a shield, a note, an "I accept any risk" box
+--   and a Confirm button. Confirm looks disabled until the box is ticked, and then it does nothing yet.
+--
+-- The aimbot switches itself off and cleans up when the Y1 window is unloaded.
 
 local AimbotPage = {}
 
@@ -46,7 +48,6 @@ function AimbotPage.build(parent, T, H, opts)
 	local UserInputService = game:GetService("UserInputService")
 	local GuiService = game:GetService("GuiService")
 	local player = Players.LocalPlayer
-	local playerGui = player:WaitForChild("PlayerGui")
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
 
@@ -98,19 +99,6 @@ function AimbotPage.build(parent, T, H, opts)
 		smoothY = 0,
 	}
 
-	-- silent aim settings
-	local SIL = {
-		enabled = false,
-		part = "Head",
-		minDist = 0,
-		maxDist = 1000,
-		predOn = false,
-		predX = 0,
-		predY = 0,
-		fov = 250,
-		showFov = true,
-	}
-
 	local MAX_VALUE = 20
 	local STEP = 0.5
 
@@ -124,6 +112,15 @@ function AimbotPage.build(parent, T, H, opts)
 	local accX = 0            -- leftover (sub-pixel) cursor movement
 	local accY = 0
 	local warnedMove = false
+	-- bookkeeping for the cursor mover: what was sent last, and how far the cursor really went for it
+	local cur = { waiting = false, waitFrames = 0, lastX = 0, lastY = 0, cmdX = 0, cmdY = 0, gain = 1 }
+
+	local function resetCursor()
+		accX = 0
+		accY = 0
+		cur.waiting = false
+		cur.waitFrames = 0
+	end
 
 	-- the executor function that moves the real cursor (nil when it does not have one)
 	local moveRel = nil
@@ -198,14 +195,13 @@ function AimbotPage.build(parent, T, H, opts)
 		BorderSizePixel = 0,
 	}, parent)
 
-	local function makePage(name, visible)
-		local P = {}
+	-- one page holder (a canvas group, so the page can fade in and out)
+	local function makeHolder(name, visible)
 		local gt = 1
 		if visible then
 			gt = 0
 		end
-
-		P.holder = new("CanvasGroup", {
+		return new("CanvasGroup", {
 			Name = name .. "Holder",
 			Size = UDim2.new(1, 0, 1, -BOTTOM_H),
 			BackgroundTransparency = 1,
@@ -213,6 +209,11 @@ function AimbotPage.build(parent, T, H, opts)
 			GroupTransparency = gt,
 			Visible = visible,
 		}, root)
+	end
+
+	local function makePage(name, visible)
+		local P = {}
+		P.holder = makeHolder(name, visible)
 
 		P.scroll = new("ScrollingFrame", {
 			Name = name .. "Root",
@@ -269,7 +270,7 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	local aimP = makePage("Aimbot", true)
-	local silP = makePage("Silent", false)
+	local silP = { holder = makeHolder("Silent", false) }   -- the Silent page has no cards, only the warning screen
 
 	---------------------------------------------------------------------
 	-- CONTROLS
@@ -937,18 +938,15 @@ function AimbotPage.build(parent, T, H, opts)
 	local enableSub = label(enableCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -140, 0, 14),
 		Enum.Font.Gotham, 11, T.DIM_TEXT)
 
-	-- what the small line under "Enable" says: Off / the key and mode / Active
+	-- the small line under "Enable": Active while the aimbot is on, Off while it is off
 	local function refreshStatus()
-		local text = S.mode .. " " .. bindName(S.keybind)
-		local colr = T.DIM_TEXT
-		if not S.enabled then
-			text = "Off"
-		elseif active then
-			text = "Active"
-			colr = T.GREEN
+		if S.enabled then
+			enableSub.Text = "Active"
+			enableSub.TextColor3 = T.GREEN
+		else
+			enableSub.Text = "Off"
+			enableSub.TextColor3 = T.DIM_TEXT
 		end
-		enableSub.Text = text
-		enableSub.TextColor3 = colr
 	end
 
 	setActive = function(v)
@@ -958,8 +956,7 @@ function AimbotPage.build(parent, T, H, opts)
 		active = v
 		if not v then
 			locked = nil
-			accX = 0
-			accY = 0
+			resetCursor()
 		end
 		refreshStatus()
 	end
@@ -1076,8 +1073,7 @@ function AimbotPage.build(parent, T, H, opts)
 	-- Aim Type
 	segmented(popup, 146, 16, "Aim Type", { "Mouse", "Camera" }, S.aim, function(v)
 		S.aim = v
-		accX = 0
-		accY = 0
+		resetCursor()
 	end)
 
 	line(204)
@@ -1167,273 +1163,218 @@ function AimbotPage.build(parent, T, H, opts)
 	refreshStatus()
 
 	---------------------------------------------------------------------
-	-- SILENT PAGE
-	--   left : Enable, Hit Part, Distance
-	--   right: Prediction, FOV
-	---------------------------------------------------------------------
-	silP.section(1, "SILENT AIM")
-
-	local silEnableCard = silP.place(1, 46)
-	silEnableCard.ZIndex = 30
-
-	label(silEnableCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local silentSub = label(silEnableCard, "Off", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-
-	local silentLastText = ""
-	local silentLastColor = nil
-	local function setSilentStatus(text, colr)
-		if text ~= silentLastText or colr ~= silentLastColor then
-			silentLastText = text
-			silentLastColor = colr
-			silentSub.Text = text
-			silentSub.TextColor3 = colr
-		end
-	end
-
-	-- silent aim state (filled every frame, read by the hooks below)
-	local silentPos = nil
-	local silentPart = nil
-	local shooterCam = nil
-	local shooterRoot = nil
-	local hooksReady = false
-	local hooksFailed = false
-
-	local RAY_METHODS = {
-		FindPartOnRay = true,
-		FindPartOnRayWithIgnoreList = true,
-		FindPartOnRayWithWhitelist = true,
-	}
-
-	-- only rays that start near the camera or near your character are changed
-	-- (those are the shots; random game raycasts far away are left alone)
-	local function nearShooter(origin)
-		if shooterCam and (origin - shooterCam).Magnitude < 25 then
-			return true
-		end
-		if shooterRoot and (origin - shooterRoot).Magnitude < 15 then
-			return true
-		end
-		return false
-	end
-
-	-- the two hooks are installed the first time silent aim is switched on.
-	-- When it is off (or the window is unloaded) they just pass everything through.
-	local function installHooks()
-		if hooksReady then
-			return true
-		end
-		if hooksFailed then
-			return false
-		end
-		local ok, err = pcall(function()
-			if type(hookmetamethod) ~= "function" then
-				error("hookmetamethod is missing", 0)
-			end
-			if type(getnamecallmethod) ~= "function" then
-				error("getnamecallmethod is missing", 0)
-			end
-			if type(checkcaller) ~= "function" then
-				error("checkcaller is missing", 0)
-			end
-			local getNC = getnamecallmethod
-			local checkC = checkcaller
-			local wrap = newcclosure
-			if type(wrap) ~= "function" then
-				wrap = function(f)
-					return f
-				end
-			end
-			local mouse = player:GetMouse()
-
-			-- 1) games that read Mouse.Hit / Mouse.Target to shoot
-			local oldIndex
-			oldIndex = hookmetamethod(game, "__index", wrap(function(self, key)
-				if self == mouse and running and SIL.enabled and silentPos ~= nil and not checkC() then
-					if key == "Hit" or key == "hit" then
-						return CFrame.new(silentPos)
-					elseif key == "Target" or key == "target" then
-						return silentPart
-					end
-				end
-				return oldIndex(self, key)
-			end))
-
-			-- 2) games that shoot with workspace:Raycast / FindPartOnRay...
-			local oldNamecall
-			oldNamecall = hookmetamethod(game, "__namecall", wrap(function(self, ...)
-				local method = getNC()
-				if running and SIL.enabled and silentPos ~= nil and self == workspace
-					and (method == "Raycast" or RAY_METHODS[method] == true) and not checkC() then
-					local n = select("#", ...)
-					local args = { ... }
-					if method == "Raycast" then
-						local origin = args[1]
-						local dir = args[2]
-						if typeof(origin) == "Vector3" and typeof(dir) == "Vector3" and nearShooter(origin) then
-							local toT = silentPos - origin
-							if toT.Magnitude > 0.01 then
-								args[2] = toT.Unit * dir.Magnitude
-								return oldNamecall(self, table.unpack(args, 1, n))
-							end
-						end
-					else
-						local ray = args[1]
-						if typeof(ray) == "Ray" and nearShooter(ray.Origin) then
-							local toT = silentPos - ray.Origin
-							if toT.Magnitude > 0.01 then
-								args[1] = Ray.new(ray.Origin, toT.Unit * ray.Direction.Magnitude)
-								return oldNamecall(self, table.unpack(args, 1, n))
-							end
-						end
-					end
-				end
-				return oldNamecall(self, ...)
-			end))
-		end)
-		if ok then
-			hooksReady = true
-			return true
-		end
-		hooksFailed = true
-		warn("[aimbot] silent aim is not supported by this executor: " .. tostring(err))
-		return false
-	end
-
-	local silentSwitch = nil
-	silentSwitch = makeSwitch(silEnableCard, SIL.enabled, function(on)
-		if on and not installHooks() then
-			SIL.enabled = false
-			silentSwitch.set(false, true)
-			return
-		end
-		SIL.enabled = on
-		silentPos = nil
-		silentPart = nil
-	end, 23)
-
-	dropdownCard(silP, 1, "Hit Part", PART_OPTIONS, SIL.part, function(v)
-		SIL.part = v
-	end)
-
-	silP.section(1, "RANGE")
-	rangeCard(silP, 1, SIL)
-
-	silP.section(2, "ASSIST")
-
-	switchSliders(silP, 2, "Prediction", SIL.predOn, SIL.predX, SIL.predY,
-		function(on) SIL.predOn = on end,
-		function(v) SIL.predX = v end,
-		function(v) SIL.predY = v end)
-
-	-- FOV card: a switch for the circle and one slider for its size
-	do
-		local c = silP.place(2, 76)
-		label(c, "FOV Circle", UDim2.fromOffset(14, 0), UDim2.new(1, -70, 0, 38),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		local fovApi = makeSlider(c, 40, "Size", 28, 20, 1000, 10, SIL.fov, "%d", function(v)
-			SIL.fov = v
-		end)
-		fovApi.dim(true)
-		makeSwitch(c, SIL.showFov, function(on)
-			SIL.showFov = on
-		end, 19)
-	end
-
-	silP.finish()
-
-	---------------------------------------------------------------------
-	-- FOV CIRCLE (its own tiny gui, follows the cursor while silent aim is on)
+	-- SILENT PAGE: only a warning screen for now
+	--   "yur1 warning" / shield / note / "I accept any risk" box / Confirm button
+	-- Confirm looks disabled until the box is ticked. Once it is ticked it looks normal,
+	-- but it does nothing yet (add the action in confirm.Activated below).
 	---------------------------------------------------------------------
 	do
-		local old = playerGui:FindFirstChild("Y1SilentFov")
-		if old then
-			old:Destroy()
+		local GATE_W = 380
+		local GATE_H = 236
+
+		local gate = new("Frame", {
+			Name = "SilentWarning",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(GATE_W, GATE_H),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, silP.holder)
+
+		-- title
+		label(gate, "yur1 warning", UDim2.fromOffset(0, 0), UDim2.fromOffset(GATE_W, 24),
+			Enum.Font.GothamBold, 17, T.TEXT_COLOR, Enum.TextXAlignment.Center)
+
+		-- security shield: a rounded block on top, a rounded square turned 45 degrees for the point,
+		-- and an exclamation mark cut out of it (cut-outs use the window colour)
+		local shield = new("Frame", {
+			Name = "Shield",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 34),
+			Size = UDim2.fromOffset(48, 50),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, gate)
+
+		local SHIELD_COLOR = T.ICON_HOVER
+		local blockTop = new("Frame", {
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(48, 26),
+			BackgroundColor3 = SHIELD_COLOR,
+			BorderSizePixel = 0,
+		}, shield)
+		corner(blockTop, 8)
+		-- square corners for the lower part of the block so it flows straight into the point
+		new("Frame", {
+			Position = UDim2.fromOffset(0, 14),
+			Size = UDim2.fromOffset(48, 12),
+			BackgroundColor3 = SHIELD_COLOR,
+			BorderSizePixel = 0,
+		}, shield)
+		local point = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(24, 26),
+			Size = UDim2.fromOffset(36, 36),
+			Rotation = 45,
+			BackgroundColor3 = SHIELD_COLOR,
+			BorderSizePixel = 0,
+		}, shield)
+		corner(point, 3)
+
+		local exBar = new("Frame", {
+			Position = UDim2.fromOffset(22, 11),
+			Size = UDim2.fromOffset(4, 16),
+			BackgroundColor3 = T.BLACK,
+			BorderSizePixel = 0,
+		}, shield)
+		corner(exBar, 2)
+		local exDot = new("Frame", {
+			Position = UDim2.fromOffset(22, 31),
+			Size = UDim2.fromOffset(4, 4),
+			BackgroundColor3 = T.BLACK,
+			BorderSizePixel = 0,
+		}, shield)
+		corner(exDot, 2)
+
+		-- the note
+		local note = label(gate,
+			"<b>Note:</b> this module can get you banned due to it being easily detected in many games please go back if you dont want to get banned off this game",
+			UDim2.fromOffset(0, 98), UDim2.fromOffset(GATE_W, 52), Enum.Font.Gotham, 12, T.ICON,
+			Enum.TextXAlignment.Center)
+		note.RichText = true
+		note.TextWrapped = true
+		note.TextTruncate = Enum.TextTruncate.None
+		note.TextYAlignment = Enum.TextYAlignment.Top
+
+		-- "I accept any risk" with a box you can tick
+		local accepted = false
+		local rowOver = false
+
+		local row = new("TextButton", {
+			Name = "AcceptRow",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 164),
+			Size = UDim2.fromOffset(150, 22),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, gate)
+
+		local box = new("Frame", {
+			Position = UDim2.fromOffset(0, 2),
+			Size = UDim2.fromOffset(18, 18),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, row)
+		corner(box, 5)
+		local boxStroke = stroke(box, T.BORDER, 1, 0)
+
+		-- tick mark: two bars
+		local tickParts = {}
+		local function tickBar(w, x, y, rot)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset(x, y),
+				Size = UDim2.fromOffset(w, 2),
+				Rotation = rot,
+				BackgroundColor3 = T.BLACK,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, box)
+			corner(f, 1)
+			tickParts[#tickParts + 1] = f
 		end
-	end
-	local fovGui = new("ScreenGui", {
-		Name = "Y1SilentFov",
-		ResetOnSpawn = false,
-		IgnoreGuiInset = true,
-		DisplayOrder = 997,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-	}, playerGui)
-	local fovCircle = new("Frame", {
-		Name = "Circle",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.fromOffset(100, 100),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Visible = false,
-	}, fovGui)
-	corner(fovCircle, 1000)
-	stroke(fovCircle, Color3.new(1, 1, 1), 1.5, 0.35)
+		tickBar(5, 6, 11, 45)
+		tickBar(9, 10, 9, -45)
 
-	-- runs every frame: picks the silent target and keeps the FOV circle under the cursor
-	local function silentUpdate()
-		silentPos = nil
-		silentPart = nil
+		local acceptLabel = label(row, "I accept any risk", UDim2.fromOffset(28, 0), UDim2.new(1, -28, 1, 0),
+			Enum.Font.GothamMedium, 13, T.ICON)
 
-		local cam = workspace.CurrentCamera
-		if not cam then
-			fovCircle.Visible = false
-			return
-		end
+		-- the Confirm button: looks disabled until the box is ticked
+		local confirm = new("TextButton", {
+			Name = "Confirm",
+			AutoButtonColor = false,
+			Text = "Confirm",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 200),
+			Size = UDim2.fromOffset(220, 34),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 14,
+			TextColor3 = T.DIM_TEXT,
+			TextTransparency = 0.35,
+		}, gate)
+		corner(confirm, 8)
+		local confirmStroke = stroke(confirm, T.BORDER, 1, 0)
+		local confirmOver = false
 
-		shooterCam = cam.CFrame.Position
-		shooterRoot = nil
-		local myChar = player.Character
-		if myChar then
-			local myRoot = myChar:FindFirstChild("HumanoidRootPart")
-			if myRoot then
-				shooterRoot = myRoot.Position
+		local function paintBox()
+			local fillColor = T.CLUSTER_BG
+			local strokeColor = T.BORDER
+			local tickT = 1
+			local textColor = T.ICON
+			if accepted then
+				fillColor = T.JOIN_BG
+				strokeColor = T.JOIN_BG
+				tickT = 0
+				textColor = T.TEXT_COLOR
+			elseif rowOver then
+				strokeColor = T.HOVER_GREY
+				textColor = T.ICON_HOVER
+			end
+			TweenService:Create(box, FAST, { BackgroundColor3 = fillColor }):Play()
+			TweenService:Create(boxStroke, FAST, { Color = strokeColor }):Play()
+			TweenService:Create(acceptLabel, FAST, { TextColor3 = textColor }):Play()
+			for i = 1, #tickParts do
+				TweenService:Create(tickParts[i], FAST, { BackgroundTransparency = tickT }):Play()
 			end
 		end
 
-		local ref = refPoint(cam, false)
-
-		if SIL.enabled and SIL.showFov then
-			fovCircle.Position = UDim2.fromOffset(ref.X, ref.Y)
-			local dia = SIL.fov * 2
-			fovCircle.Size = UDim2.fromOffset(dia, dia)
-			fovCircle.Visible = true
-		else
-			fovCircle.Visible = false
+		local function paintConfirm()
+			if accepted then
+				local bg = T.JOIN_BG
+				if confirmOver then
+					bg = Color3.fromRGB(255, 255, 255)
+				end
+				TweenService:Create(confirm, FAST, { BackgroundColor3 = bg, TextColor3 = T.BLACK, TextTransparency = 0 }):Play()
+				TweenService:Create(confirmStroke, FAST, { Color = T.JOIN_BG }):Play()
+			else
+				TweenService:Create(confirm, FAST, { BackgroundColor3 = T.CLUSTER_BG, TextColor3 = T.DIM_TEXT, TextTransparency = 0.35 }):Play()
+				TweenService:Create(confirmStroke, FAST, { Color = T.BORDER }):Play()
+			end
 		end
 
-		if hooksFailed then
-			setSilentStatus("Executor not supported", T.HOVER_RED)
-			return
-		end
-		if not SIL.enabled then
-			setSilentStatus("Off", T.DIM_TEXT)
-			return
-		end
+		row.MouseEnter:Connect(function()
+			rowOver = true
+			paintBox()
+		end)
+		row.MouseLeave:Connect(function()
+			rowOver = false
+			paintBox()
+		end)
+		row.Activated:Connect(function()
+			accepted = not accepted
+			paintBox()
+			paintConfirm()
+		end)
 
-		local origin = shooterRoot or shooterCam
-		local plr = acquire(cam, ref, origin, SIL, SIL.fov)
-		if plr == nil or plr.Character == nil then
-			setSilentStatus("No target", T.DIM_TEXT)
-			return
-		end
-		local part = bestPart(plr.Character, cam, ref, false, SIL.part)
-		if part == nil then
-			setSilentStatus("No target", T.DIM_TEXT)
-			return
-		end
-
-		silentPart = part
-		silentPos = aimPosition(part, SIL)
-		setSilentStatus("Target: " .. plr.DisplayName, T.GREEN)
+		confirm.MouseEnter:Connect(function()
+			confirmOver = true
+			paintConfirm()
+		end)
+		confirm.MouseLeave:Connect(function()
+			confirmOver = false
+			paintConfirm()
+		end)
+		confirm.Activated:Connect(function()
+			if not accepted then
+				return
+			end
+			-- nothing happens yet
+		end)
 	end
-
-	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
-		if running then
-			silentUpdate()
-		end
-	end)
 
 	---------------------------------------------------------------------
 	-- THE AIMBOT ITSELF
@@ -1498,7 +1439,11 @@ function AimbotPage.build(parent, T, H, opts)
 		local ax = alphaFor(S.smoothX, dt)
 		local ay = alphaFor(S.smoothY, dt)
 
-		-- MOUSE aim with a free cursor: move the real cursor, never touch the camera
+		-- MOUSE aim with a free cursor: move the real cursor, never touch the camera.
+		-- The cursor only shows its new position a frame or two after it was moved, so a move is only
+		-- sent once the last one has shown up. Never more than half of the remaining distance is asked
+		-- for at once, and how far the cursor really goes for what we ask is measured and corrected for
+		-- (pointer acceleration and display scaling would otherwise make it swing across the screen).
 		if S.aim == "Mouse" and not mouseIsLocked() then
 			if moveRel == nil then
 				if not warnedMove then
@@ -1507,24 +1452,60 @@ function AimbotPage.build(parent, T, H, opts)
 				end
 				return
 			end
-			local v = cam:WorldToViewportPoint(pos)
-			if v.Z <= 0 then
-				return   -- the target is behind the camera
+			local v, onScreen = cam:WorldToViewportPoint(pos)
+			if not onScreen then
+				return   -- off the screen or behind the camera
 			end
+
+			-- the last move has not shown up yet: wait (at most 3 frames), then learn from it
+			if cur.waiting then
+				local movedX = ref.X - cur.lastX
+				local movedY = ref.Y - cur.lastY
+				if movedX == 0 and movedY == 0 and cur.waitFrames < 3 then
+					cur.waitFrames = cur.waitFrames + 1
+					return
+				end
+				cur.waiting = false
+				local denom = cur.cmdX * cur.cmdX + cur.cmdY * cur.cmdY
+				if denom > 0 then
+					local g = (movedX * cur.cmdX + movedY * cur.cmdY) / denom
+					if g > 0.2 and g < 6 then
+						cur.gain = cur.gain * 0.5 + g * 0.5
+					end
+				end
+			end
+
 			local dx = v.X - ref.X
 			local dy = v.Y - ref.Y
-			if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then
+			if math.sqrt(dx * dx + dy * dy) < 2 then
 				accX = 0
 				accY = 0
 				return
 			end
-			accX = accX + dx * ax
-			accY = accY + dy * ay
+
+			-- cover part of the distance now (never more than half), and never more than 200 pixels
+			local wantX = dx * math.min(ax, 0.5)
+			local wantY = dy * math.min(ay, 0.5)
+			local wantLen = math.sqrt(wantX * wantX + wantY * wantY)
+			if wantLen > 200 then
+				wantX = wantX * 200 / wantLen
+				wantY = wantY * 200 / wantLen
+			end
+
+			-- ask for a bit more or less if the cursor has been going further or less far than asked
+			accX = accX + wantX / cur.gain
+			accY = accY + wantY / cur.gain
 			local mx = wholePart(accX)
 			local my = wholePart(accY)
 			if mx ~= 0 or my ~= 0 then
 				accX = accX - mx
 				accY = accY - my
+				cur.lastX = ref.X
+				cur.lastY = ref.Y
+				cur.cmdX = mx
+				cur.cmdY = my
+				cur.waitFrames = 0
+				cur.waiting = (math.abs(mx) + math.abs(my)) >= 4
 				pcall(moveRel, mx, my)
 			end
 			return
@@ -1771,8 +1752,6 @@ function AimbotPage.build(parent, T, H, opts)
 		active = false
 		locked = nil
 		listening = nil
-		silentPos = nil
-		silentPart = nil
 		pcall(function()
 			RunService:UnbindFromRenderStep(STEP_NAME)
 		end)
@@ -1782,9 +1761,6 @@ function AimbotPage.build(parent, T, H, opts)
 			end)
 		end
 		conns = {}
-		pcall(function()
-			fovGui:Destroy()
-		end)
 	end
 
 	-- the window destroys its gui when it unloads: that takes this page with it
