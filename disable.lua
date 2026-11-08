@@ -18,7 +18,7 @@ for i, v in getgc(true) do
             local Old; Old = hookfunction(Detected, function(Action, Info, NoCrash)
                 if Action ~= "_" then
                     if DEBUG then
-                        warn(uh oh it got flagged\nMethod: {Action}\nInfo: {Info})
+                        warn("oh no it failed (fallback): " .. tostring(Info))
                     end
                 end
 
@@ -32,7 +32,7 @@ for i, v in getgc(true) do
             Kill = KillFunc
             local Old; Old = hookfunction(Kill, function(Info)
                 if DEBUG then
-                    warn(oh no it failed (fallback): {Info})
+                    warn("oh no it failed: " .. tostring(Info))
                 end
             end)
 
