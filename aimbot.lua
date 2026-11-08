@@ -1,4 +1,4 @@
--- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page, as its own module)
+-- aimbot.lua  (Y1 Combat tab: the aimbot + a Silent page + an empty Triggerbot page, as its own module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Builds the Combat tab INTO win.CombatPage. It makes no window of its own (the only other thing it
@@ -8,7 +8,7 @@
 --   local Aimbot = <this file>
 --   Aimbot.build(parentFrame, themeTable, helperTable, opts)
 --
--- At the BOTTOM of the tab there is a small switch: [ Aimbot | Silent ]. It swaps the page above it.
+-- At the BOTTOM of the tab there is a small switch: [ Aimbot | Silent | Triggerbot ]. It swaps the page above it.
 --
 -- AIMBOT page
 --   Left column   Enable row   a switch (it is OFF every time the script starts) and a "..." (three dots)
@@ -17,6 +17,12 @@
 --                              Target Lock). Click the dots again, or anywhere else, to close it.
 --                 Hit Part     a drop-down (click it, pick from the vertical list, click anywhere else to close it)
 --                              Head (default) / Body / Left Leg / Right Leg / Left Arm / Right Arm / Closest Part
+--                 FILTERS      Team Check     skips players on your team
+--                              Visible Check  skips players you cannot see (a raycast from the camera to the
+--                                             hit part; a wall or any other model in the way = not visible)
+--                              Health Check   skips players whose health is below the Min slider (in percent).
+--                                             Dead players are always skipped.
+--                              All three are off every time the script starts.
 --   Right column  Distance     Min / Max (on top)
 --                 Prediction / Smoothness   X / Y  0-20
 --                 FOV          a small row: a colour square (the outline colour, click it for the colour
@@ -31,6 +37,10 @@
 --                                              about the same part of a player
 --                              While the FOV is enabled the aimbot only picks targets whose hit part is
 --                              inside the shape (around the cursor, or the screen middle for Camera aim).
+--                              The fill of a polygon (anything except a circle) is drawn with many thin
+--                              strips. The number of strips follows the size of the FOV (about one per two
+--                              pixels), so the edges stay smooth, and it is rebuilt a moment after you stop
+--                              dragging the Size slider.
 --
 --   Colour picker  Click a colour square: saturation / brightness square, hue bar, opacity bar and a text row
 --                  (format button HEX / RGB / HSV, the value, and the opacity in %). Click the square again,
@@ -52,6 +62,9 @@
 -- SILENT page
 --   For now it only shows a warning screen: "yur1 warning", a shield, a note, an "I accept any risk" box
 --   and a Confirm button. Confirm looks disabled until the box is ticked, and then it does nothing yet.
+--
+-- TRIGGERBOT page
+--   Empty for now (no warning, no controls). Build it into trigP.holder further down.
 --
 -- The aimbot switches itself off and cleans up (including the FOV overlay) when the Y1 window is unloaded.
 
@@ -119,6 +132,11 @@ function AimbotPage.build(parent, T, H, opts)
 		smoothOn = false,
 		smoothX = 0,
 		smoothY = 0,
+		-- filters (all off every time the script runs)
+		teamCheck = false,
+		visCheck = false,
+		healthCheck = false,
+		minHealth = 20,         -- percent; used while Health Check is on
 		-- FOV
 		fovOn = false,          -- off every time the script runs
 		fovFilled = false,
@@ -224,12 +242,12 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
-	-- PAGE LAYOUT: the root holds the two pages and the switch at the bottom.
+	-- PAGE LAYOUT: the root holds the pages and the switch at the bottom.
 	-- Each page is a scrolling page with two columns of cards.
 	---------------------------------------------------------------------
 	local BODY_Y = 2
 	local GAP = 8
-	local BOTTOM_H = 44   -- room at the bottom for the Aimbot / Silent switch
+	local BOTTOM_H = 44   -- room at the bottom for the Aimbot / Silent / Triggerbot switch
 
 	local root = new("Frame", {
 		Name = "CombatRoot",
@@ -313,7 +331,8 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	local aimP = makePage("Aimbot", true)
-	local silP = { holder = makeHolder("Silent", false) }   -- the Silent page has no cards, only the warning screen
+	local silP = { holder = makeHolder("Silent", false) }       -- the Silent page has no cards, only the warning screen
+	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page is empty for now
 
 	---------------------------------------------------------------------
 	-- FLOATING POP-UPS (they sit on the whole Combat tab, so they are never cut off by a scrolling page)
@@ -818,6 +837,17 @@ function AimbotPage.build(parent, T, H, opts)
 		end, 19)
 	end
 
+	-- a small filter card: title + a dim line under it on the left, a switch on the right
+	local function filterCard(P, col, title, subText, startOn, onChange)
+		local c = P.place(col, 46)
+		label(c, title, UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(c, subText, UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		makeSwitch(c, startOn, onChange, 23)
+		return c
+	end
+
 	-- the Distance card (Min / Max). cfg = S
 	local function rangeCard(P, col, cfg)
 		local c = P.place(col, 104)
@@ -1097,8 +1127,13 @@ function AimbotPage.build(parent, T, H, opts)
 		return cam.CFrame.Position
 	end
 
+	-- every check that does not need a raycast: alive, team, health, distance
 	local function validTarget(plr, origin, cfg)
 		if plr.Parent == nil then
+			return false
+		end
+		-- Team Check: skip players on your own team
+		if cfg.teamCheck and plr.Team ~= nil and plr.Team == player.Team then
 			return false
 		end
 		local char = plr.Character
@@ -1109,12 +1144,46 @@ function AimbotPage.build(parent, T, H, opts)
 		if hum == nil or hum.Health <= 0 then
 			return false
 		end
+		-- Health Check: skip players whose health is under the Min slider (percent)
+		if cfg.healthCheck then
+			local maxHp = hum.MaxHealth
+			if maxHp <= 0 then
+				maxHp = 100
+			end
+			if hum.Health / maxHp * 100 < cfg.minHealth then
+				return false
+			end
+		end
 		local rootPart = char:FindFirstChild("HumanoidRootPart")
 		if rootPart == nil then
 			return false
 		end
 		local d = (rootPart.Position - origin).Magnitude
 		return d >= cfg.minDist and d <= cfg.maxDist
+	end
+
+	-- Visible Check (raycast): a ray from the camera to the part. Nothing in the way, or only
+	-- pieces of the target's own character in the way, means the part is visible.
+	-- Your own character is ignored by the ray.
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.IgnoreWater = true
+
+	local function isVisible(cam, part, targetChar)
+		local ignore = {}
+		if player.Character then
+			ignore[1] = player.Character
+		end
+		rayParams.FilterDescendantsInstances = ignore
+		local from = cam.CFrame.Position
+		local hit = workspace:Raycast(from, part.Position - from, rayParams)
+		if hit == nil then
+			return true
+		end
+		if targetChar and hit.Instance:IsDescendantOf(targetChar) then
+			return true
+		end
+		return false
 	end
 
 	-- the body part to aim at for this Hit Part choice (partName)
@@ -1150,7 +1219,7 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	-- the player whose hit part is nearest to ref. While the FOV is enabled only players whose
-	-- hit part is inside the FOV shape count.
+	-- hit part is inside the FOV shape count. With Visible Check on, players behind walls are skipped.
 	local function acquire(cam, ref, origin, cfg, maxScreenDist)
 		local bestPlr = nil
 		local bestD = nil
@@ -1168,8 +1237,11 @@ function AimbotPage.build(parent, T, H, opts)
 				end
 				if part and (maxScreenDist == nil or d <= maxScreenDist) then
 					if bestD == nil or d < bestD then
-						bestPlr = plr
-						bestD = d
+						-- the raycast is only done for a player that would win anyway
+						if (not cfg.visCheck) or isVisible(cam, part, plr.Character) then
+							bestPlr = plr
+							bestD = d
+						end
 					end
 				end
 			end
@@ -1343,8 +1415,10 @@ function AimbotPage.build(parent, T, H, opts)
 				corner(f, 1000)
 				fillParts[#fillParts + 1] = f
 			else
-				-- a polygon is filled with thin horizontal strips
-				local M = 40
+				-- a polygon is filled with thin horizontal strips. The number of strips follows the
+				-- current size on the screen (about one strip per two pixels, at least 60, at most 240),
+				-- so the slanted edges only have tiny steps that the outline covers.
+				local M = math.clamp(math.ceil(fovRadius()), 60, 240)
 				for i = 1, M do
 					local xmin, xmax = polyRange(n, (i - 0.5) / M)
 					if xmin and xmax then
@@ -1362,6 +1436,22 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	rebuildShape()
+
+	-- the strips of a filled polygon depend on the size, so after the Size slider moves the shape is
+	-- rebuilt once, a moment after the last change (not on every step of the drag)
+	local rebuildToken = 0
+	local function rebuildSoon()
+		if not (S.fovFilled and S.fovSides < FOV_CIRCLE) then
+			return
+		end
+		rebuildToken = rebuildToken + 1
+		local tk = rebuildToken
+		task.delay(0.2, function()
+			if running and tk == rebuildToken then
+				rebuildShape()
+			end
+		end)
+	end
 
 	-- follows the cursor (or the screen middle), keeps the size, runs Dynamic FOV
 	local function fovStep(dt)
@@ -1963,9 +2053,10 @@ function AimbotPage.build(parent, T, H, opts)
 			rebuildShape()
 		end, 130, 16)
 
-		-- Size (radius in pixels)
+		-- Size (radius in pixels). A filled polygon is rebuilt a moment after the slider stops.
 		local sizeApi = makeSlider(pop, 152, "Size", 40, 20, 400, 5, S.fovSize, "%d", function(v)
 			S.fovSize = v
+			rebuildSoon()
 		end)
 		sizeApi.dim(true)
 
@@ -2028,7 +2119,7 @@ function AimbotPage.build(parent, T, H, opts)
 
 	---------------------------------------------------------------------
 	-- AIMBOT PAGE
-	--   left : Enable (switch + three dots), Hit Part
+	--   left : Enable (switch + three dots), Hit Part, FILTERS (Team / Visible / Health)
 	--   right: Distance (on top), Prediction, Smoothness, FOV
 	---------------------------------------------------------------------
 	aimP.section(1, "AIMBOT")
@@ -2077,6 +2168,37 @@ function AimbotPage.build(parent, T, H, opts)
 		S.part = v
 		locked = nil
 	end)
+
+	-- left column: the filters
+	aimP.section(1, "FILTERS")
+
+	filterCard(aimP, 1, "Team Check", "Skip your teammates", S.teamCheck, function(on)
+		S.teamCheck = on
+		locked = nil
+	end)
+
+	filterCard(aimP, 1, "Visible Check", "Skip targets behind walls", S.visCheck, function(on)
+		S.visCheck = on
+		locked = nil
+	end)
+
+	-- Health Check has a slider under it: players below that health (in percent) are skipped
+	do
+		local hc = aimP.place(1, 82)
+		label(hc, "Health Check", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(hc, "Skip low health targets", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		local hpApi = makeSlider(hc, 50, "Min", 28, 0, 100, 5, S.minHealth, "%d%%", function(v)
+			S.minHealth = v
+		end)
+		hpApi.dim(S.healthCheck)
+		makeSwitch(hc, S.healthCheck, function(on)
+			S.healthCheck = on
+			hpApi.dim(on)
+			locked = nil
+		end, 23)
+	end
 
 	-- right column, top: Distance
 	aimP.section(2, "RANGE")
@@ -2478,6 +2600,11 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	---------------------------------------------------------------------
+	-- TRIGGERBOT PAGE: empty for now (no warning, nothing on it).
+	-- Put its controls into trigP.holder when it is time to build it.
+	---------------------------------------------------------------------
+
+	---------------------------------------------------------------------
 	-- THE AIMBOT ITSELF
 	---------------------------------------------------------------------
 	local function alphaFor(s, dt)
@@ -2533,6 +2660,12 @@ function AimbotPage.build(parent, T, H, opts)
 
 		local part = bestPart(locked.Character, cam, ref, false, S.part)
 		if part == nil then
+			return
+		end
+
+		-- a locked target that walked behind a wall is let go (Visible Check)
+		if S.lockOn and S.visCheck and not isVisible(cam, part, locked.Character) then
+			locked = nil
 			return
 		end
 
@@ -2653,13 +2786,15 @@ function AimbotPage.build(parent, T, H, opts)
 	RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Camera.Value + 1, step)
 
 	---------------------------------------------------------------------
-	-- THE AIMBOT / SILENT SWITCH AT THE BOTTOM
+	-- THE AIMBOT / SILENT / TRIGGERBOT SWITCH AT THE BOTTOM
 	---------------------------------------------------------------------
+	local subOrder = { "Aimbot", "Silent", "Triggerbot" }
+	local subPages = { Aimbot = aimP, Silent = silP, Triggerbot = trigP }
 	local currentSub = "Aimbot"
 	local subToken = 0
 
 	local function showSub(name)
-		if name == currentSub then
+		if name == currentSub or not subPages[name] then
 			return
 		end
 		currentSub = name
@@ -2667,20 +2802,20 @@ function AimbotPage.build(parent, T, H, opts)
 		subToken = subToken + 1
 		local tk = subToken
 
-		local showP = aimP
-		local hideP = silP
-		if name == "Silent" then
-			showP = silP
-			hideP = aimP
+		-- every other page fades out
+		for pageName, pg in pairs(subPages) do
+			if pageName ~= name then
+				TweenService:Create(pg.holder, FAST, { GroupTransparency = 1 }):Play()
+				task.delay(0.14, function()
+					if tk == subToken then
+						pg.holder.Visible = false
+					end
+				end)
+			end
 		end
 
-		TweenService:Create(hideP.holder, FAST, { GroupTransparency = 1 }):Play()
-		task.delay(0.14, function()
-			if tk == subToken then
-				hideP.holder.Visible = false
-			end
-		end)
-
+		-- the chosen page fades in and slides up a little
+		local showP = subPages[name]
 		showP.holder.Position = UDim2.fromOffset(0, 8)
 		showP.holder.GroupTransparency = 1
 		showP.holder.Visible = true
@@ -2688,11 +2823,13 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	do
+		local COUNT = #subOrder
+
 		local tray = new("Frame", {
 			Name = "ModeSwitch",
 			AnchorPoint = Vector2.new(0.5, 1),
 			Position = UDim2.new(0.5, 0, 1, -6),
-			Size = UDim2.fromOffset(220, 32),
+			Size = UDim2.fromOffset(300, 32),
 			BackgroundColor3 = T.SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, root)
@@ -2707,27 +2844,28 @@ function AimbotPage.build(parent, T, H, opts)
 		}, tray)
 
 		local slider = new("Frame", {
-			Size = UDim2.new(0.5, 0, 1, 0),
+			Size = UDim2.new(1 / COUNT, 0, 1, 0),
 			BackgroundColor3 = T.HOVER_GREY,
 			BorderSizePixel = 0,
 		}, inner)
 		corner(slider, RADIUS + 1)
 
-		local names = { "Aimbot", "Silent" }
 		local tabBtns = {}
 
 		local function paintTabs(animate)
 			local index = 1
-			if currentSub == "Silent" then
-				index = 2
+			for i = 1, COUNT do
+				if subOrder[i] == currentSub then
+					index = i
+				end
 			end
-			local pos = UDim2.new((index - 1) / 2, 0, 0, 0)
+			local pos = UDim2.new((index - 1) / COUNT, 0, 0, 0)
 			if animate then
 				TweenService:Create(slider, SMOOTH, { Position = pos }):Play()
 			else
 				slider.Position = pos
 			end
-			for i = 1, 2 do
+			for i = 1, COUNT do
 				local colr = T.ICON
 				if i == index then
 					colr = T.ICON_HOVER
@@ -2736,21 +2874,21 @@ function AimbotPage.build(parent, T, H, opts)
 			end
 		end
 
-		for i = 1, 2 do
+		for i = 1, COUNT do
 			local b = new("TextButton", {
 				AutoButtonColor = false,
-				Position = UDim2.new((i - 1) / 2, 0, 0, 0),
-				Size = UDim2.new(0.5, 0, 1, 0),
+				Position = UDim2.new((i - 1) / COUNT, 0, 0, 0),
+				Size = UDim2.new(1 / COUNT, 0, 1, 0),
 				BackgroundTransparency = 1,
 				BorderSizePixel = 0,
-				Text = names[i],
+				Text = subOrder[i],
 				TextColor3 = T.ICON,
 				Font = Enum.Font.GothamMedium,
 				TextSize = 12,
 			}, inner)
 			tabBtns[i] = b
 			b.Activated:Connect(function()
-				showSub(names[i])
+				showSub(subOrder[i])
 				paintTabs(true)
 			end)
 		end
