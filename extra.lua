@@ -1,15 +1,16 @@
--- extra.lua  (Y1 Misc tab > Extra page: BulletTracer)
+-- extra.lua  (Y1 Misc tab > Extra page: BulletTracer, Zee Hood only)
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Your gun script makes a "BULLET_RAYS" part for every shot. This module watches for those and
--- leaves a tracer that fades out. Same layout style as aimbot.lua (cards in two columns, switches,
--- sliders, drop-downs and a colour picker).
+-- leaves a tracer that fades out. Only YOUR shots get a tracer (a bullet that does not start close
+-- to your character is ignored).
 --
--- LEFT   TRACER   Enable (off every time the script starts), Color (+ opacity), Thickness, Duration
---        FILTERS  Own Shots Only, Max Tracers, Preview (fires a test tracer from your camera)
--- RIGHT  STYLE    Material, Fade Style, Shrink While Fading, Rainbow (+ Speed), Use Bullet Color
+-- The page is one small Enable card (a switch, OFF every time the script starts, and three dots).
+-- The dots open one settings pop-up: Color (+ opacity), Material, Fade Style, Thickness, Duration,
+-- Rainbow (+ Speed). Click the dots again, or anywhere except the pop-up, to close it.
+-- Material and Fade Style: click the button to go to the next choice.
 --
--- Build signature: Extra.build(container, T, H, ctx) -> { Unload = fn }
+-- Build signature: Extra.build(container, T, H, ctx) -> { Root = ..., Unload = fn }
 
 local ExtraPage = {}
 
@@ -34,14 +35,12 @@ function ExtraPage.build(parent, T, H, ctx)
 		fade = 2.5,             -- seconds
 		material = "Neon",
 		easing = "Linear",
-		shrink = false,
 		rainbow = false,
 		rainbowSpeed = 5,
-		useBullet = false,      -- take the colour the gun script gave the bullet
-		ownOnly = false,
-		maxCount = 100,
 	}
 
+	local OWN_RANGE = 15        -- a bullet has to start this close to your character to count as yours
+	local MAX_TRACERS = 100
 	local MATERIALS = { "Neon", "Glass", "SmoothPlastic", "ForceField" }
 	local EASINGS = { "Linear", "Quad", "Sine", "Exponential" }
 
@@ -87,11 +86,8 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- page layout: one scrolling page with two columns of cards
+	-- root + the one card
 	---------------------------------------------------------------------
-	local BODY_Y = 2
-	local GAP = 8
-
 	local root = new("Frame", {
 		Name = "ExtraRoot",
 		Size = UDim2.fromScale(1, 1),
@@ -99,57 +95,6 @@ function ExtraPage.build(parent, T, H, ctx)
 		BorderSizePixel = 0,
 	}, parent)
 
-	local P = {}
-	P.scroll = new("ScrollingFrame", {
-		Name = "ExtraScroll",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ScrollBarThickness = 3,
-		ScrollBarImageColor3 = T.ICON,
-		ScrollBarImageTransparency = 0.5,
-		ScrollingDirection = Enum.ScrollingDirection.Y,
-		CanvasSize = UDim2.new(0, 0, 0, 0),
-		ElasticBehavior = Enum.ElasticBehavior.Never,
-	}, root)
-	P.body = new("Frame", {
-		Name = "Body",
-		Position = UDim2.fromOffset(2, BODY_Y),
-		Size = UDim2.new(1, -12, 0, 10),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-	}, P.scroll)
-
-	local colY = { 0, 0 }
-
-	function P.place(col, h)
-		local f = new("Frame", {
-			Position = UDim2.new((col - 1) * 0.5, (col - 1) * 6, 0, colY[col]),
-			Size = UDim2.new(0.5, -6, 0, h),
-			BackgroundColor3 = T.SIDEBAR_BG,
-			BorderSizePixel = 0,
-		}, P.body)
-		corner(f, RADIUS + 4)
-		stroke(f, T.BORDER, 1, 0)
-		colY[col] = colY[col] + h + GAP
-		return f
-	end
-
-	function P.section(col, text)
-		label(P.body, text, UDim2.new((col - 1) * 0.5, (col - 1) * 6 + 2, 0, colY[col]),
-			UDim2.new(0.5, -10, 0, 14), Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-		colY[col] = colY[col] + 22
-	end
-
-	function P.finish()
-		local bodyH = math.max(colY[1], colY[2]) - GAP
-		P.body.Size = UDim2.new(1, -12, 0, bodyH)
-		P.scroll.CanvasSize = UDim2.new(0, 0, 0, BODY_Y + bodyH + 8)
-	end
-
-	---------------------------------------------------------------------
-	-- floating pop-ups (sit on the whole page so a scrolling page never cuts them off)
-	---------------------------------------------------------------------
 	local probe = new("Frame", {
 		Position = UDim2.fromOffset(-300, -300),
 		Size = UDim2.fromOffset(100, 100),
@@ -165,21 +110,34 @@ function ExtraPage.build(parent, T, H, ctx)
 		return s
 	end
 
-	local function placeNear(anchor, w, h)
+	local function rectIn(obj)
+		local s = uiScale()
+		local rp = root.AbsolutePosition
+		local p = obj.AbsolutePosition
+		local z = obj.AbsoluteSize
+		return (p.X - rp.X) / s, (p.Y - rp.Y) / s, z.X / s, z.Y / s
+	end
+
+	-- where a w x h pop-up goes: next to the anchor (right of it, or left when there is no room).
+	-- With "beside" it goes to the left (or right) of that frame instead. Always kept inside the page.
+	local function placeNear(anchor, w, h, beside)
 		local s = uiScale()
 		local rw = root.AbsoluteSize.X / s
 		local rh = root.AbsoluteSize.Y / s
-		local rp = root.AbsolutePosition
-		local ap = anchor.AbsolutePosition
-		local az = anchor.AbsoluteSize
-		local ax = (ap.X - rp.X) / s
-		local ay = (ap.Y - rp.Y) / s
-		local aw = az.X / s
-		local ah = az.Y / s
-		local x = ax + aw - w
-		local y = ay + ah + 6
-		if y + h > rh - 4 then
-			y = ay - h - 6
+		local ax, ay, aw, ah = rectIn(anchor)
+		local x = ax + aw + 8
+		local y = ay
+		if x + w > rw - 4 then
+			x = ax - 8 - w
+		end
+		if beside then
+			local bx, by, bw = rectIn(beside)
+			if bx - 8 - w >= 4 then
+				x = bx - 8 - w
+			else
+				x = bx + bw + 8
+			end
+			y = by
 		end
 		x = math.clamp(x, 4, math.max(4, rw - w - 4))
 		y = math.clamp(y, 4, math.max(4, rh - h - 4))
@@ -315,17 +273,61 @@ function ExtraPage.build(parent, T, H, ctx)
 		return api
 	end
 
+	-- three horizontal dots (lit while hovered or while open)
+	local function makeDots(c, pos)
+		local D = { over = false, open = false, parts = {} }
+		D.btn = new("TextButton", {
+			Name = "MoreButton",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = pos,
+			Size = UDim2.fromOffset(32, 26),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, c)
+		for i = 1, 3 do
+			local d = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, (i - 2) * 7, 0.5, 0),
+				Size = UDim2.fromOffset(4, 4),
+				BackgroundColor3 = T.ICON,
+				BorderSizePixel = 0,
+			}, D.btn)
+			corner(d, 100)
+			D.parts[i] = d
+		end
+		function D.paint()
+			local colr = T.ICON
+			if D.open or D.over then
+				colr = T.ICON_HOVER
+			end
+			for i = 1, #D.parts do
+				TweenService:Create(D.parts[i], FAST, { BackgroundColor3 = colr }):Play()
+			end
+		end
+		D.btn.MouseEnter:Connect(function()
+			D.over = true
+			D.paint()
+		end)
+		D.btn.MouseLeave:Connect(function()
+			D.over = false
+			D.paint()
+		end)
+		return D
+	end
+
 	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue)
-		label(c, name, UDim2.fromOffset(14, y), UDim2.fromOffset(labelW, 20),
+		label(c, name, UDim2.fromOffset(16, y), UDim2.fromOffset(labelW, 20),
 			Enum.Font.GothamMedium, 12, T.ICON)
-		local valueLabel = label(c, "", UDim2.new(1, -58, 0, y), UDim2.fromOffset(46, 20),
+		local valueLabel = label(c, "", UDim2.new(1, -60, 0, y), UDim2.fromOffset(46, 20),
 			Enum.Font.GothamMedium, 12, T.TEXT_COLOR, Enum.TextXAlignment.Right)
 
-		local x0 = 14 + labelW + 6
+		local x0 = 16 + labelW + 6
 
 		local track = new("Frame", {
 			Position = UDim2.fromOffset(x0, y + 7),
-			Size = UDim2.new(1, -(x0 + 66), 0, 6),
+			Size = UDim2.new(1, -(x0 + 68), 0, 6),
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
 		}, c)
@@ -351,7 +353,7 @@ function ExtraPage.build(parent, T, H, ctx)
 			AutoButtonColor = false,
 			Text = "",
 			Position = UDim2.fromOffset(x0, y),
-			Size = UDim2.new(1, -(x0 + 66), 0, 20),
+			Size = UDim2.new(1, -(x0 + 68), 0, 20),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, c)
@@ -414,212 +416,47 @@ function ExtraPage.build(parent, T, H, ctx)
 		return api
 	end
 
-	-- a card with only a slider
-	local function sliderCard(col, title, minV, maxV, stepV, startValue, fmt, setValue)
-		local c = P.place(col, 46)
-		makeSlider(c, 13, title, 70, minV, maxV, stepV, startValue, fmt, setValue)
-		return c
-	end
-
-	-- a small card: title + dim line on the left, a switch on the right
-	local function toggleCard(col, title, subText, startOn, onChange)
-		local c = P.place(col, 46)
-		label(c, title, UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		label(c, subText, UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-		makeSwitch(c, startOn, onChange, 23)
-		return c
-	end
-
-	-- a drop-down card: title on the left, a button with the current value on the right
-	local function dropdownCard(col, title, options, startValue, onChange, z)
-		local c = P.place(col, 46)
-		c.ZIndex = z
-
-		label(c, title, UDim2.fromOffset(14, 0), UDim2.new(1, -150, 1, 0),
+	-- a row with a title on the left and a button on the right; clicking the button goes to the next choice
+	-- (no drop-down list, so nothing gets cut off inside the pop-up)
+	local function cycleRow(c, y, title, options, startValue, onChange)
+		label(c, title, UDim2.fromOffset(16, y), UDim2.new(1, -150, 0, 28),
 			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
 
-		local trigger = new("TextButton", {
+		local btn = new("TextButton", {
 			AutoButtonColor = false,
-			Text = "",
-			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -12, 0.5, 0),
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -16, 0, y),
 			Size = UDim2.fromOffset(124, 28),
 			BackgroundColor3 = T.CLUSTER_BG,
 			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = T.ICON_HOVER,
+			Text = startValue,
 		}, c)
-		corner(trigger, RADIUS + 2)
+		corner(btn, RADIUS + 2)
 
-		local valueLabel = label(trigger, startValue, UDim2.fromOffset(10, 0), UDim2.new(1, -30, 1, 0),
-			Enum.Font.GothamMedium, 12, T.ICON_HOVER)
-
-		local chev = {}
-		local function chevBar(x, rot)
-			local f = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(1, x, 0.5, 0),
-				Size = UDim2.fromOffset(6, 2),
-				Rotation = rot,
-				BackgroundColor3 = T.ICON,
-				BorderSizePixel = 0,
-			}, trigger)
-			corner(f, 1)
-			chev[#chev + 1] = f
-		end
-		chevBar(-15, 45)
-		chevBar(-11, -45)
-
-		local ITEM_H = 28
-		local PAD_P = 4
-		local LIST_H = #options * ITEM_H + PAD_P * 2
-		local SHOWN = UDim2.new(1, -12, 0, 40)
-		local HIDDEN = UDim2.new(1, -12, 0, 34)
-		local OPEN_INFO = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-		local CLOSE_INFO = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-
-		local popup = new("CanvasGroup", {
-			Name = "DropdownList",
-			AnchorPoint = Vector2.new(1, 0),
-			Position = HIDDEN,
-			Size = UDim2.fromOffset(150, LIST_H),
-			BackgroundColor3 = T.POPUP_BG,
-			BorderSizePixel = 0,
-			GroupTransparency = 1,
-			Visible = false,
-			ZIndex = 50,
-		}, c)
-		corner(popup, RADIUS + 3)
-		stroke(popup, T.BORDER, 1, 0)
-
-		local isOpen = false
-		local token = 0
-		local over = false
-		local current = startValue
-		local items = {}
-
-		local function paintTrigger()
-			local bg = T.CLUSTER_BG
-			local colr = T.ICON
-			if isOpen or over then
-				bg = T.HOVER_GREY
-				colr = T.ICON_HOVER
-			end
-			TweenService:Create(trigger, FAST, { BackgroundColor3 = bg }):Play()
-			for i = 1, #chev do
-				TweenService:Create(chev[i], FAST, { BackgroundColor3 = colr }):Play()
-			end
-		end
-
-		local function refreshItems()
-			for i = 1, #items do
-				local it = items[i]
-				local textColor = T.ICON
-				local dotT = 1
-				if it.value == current then
-					textColor = T.ICON_HOVER
-					dotT = 0
-				end
-				TweenService:Create(it.text, FAST, { TextColor3 = textColor }):Play()
-				TweenService:Create(it.dot, FAST, { BackgroundTransparency = dotT }):Play()
-			end
-		end
-
-		local function openList()
-			if isOpen then
-				return
-			end
-			isOpen = true
-			token = token + 1
-			popup.Position = HIDDEN
-			popup.GroupTransparency = 1
-			popup.Visible = true
-			TweenService:Create(popup, OPEN_INFO, { Position = SHOWN, GroupTransparency = 0 }):Play()
-			paintTrigger()
-		end
-
-		local function closeList()
-			if not isOpen then
-				return
-			end
-			isOpen = false
-			token = token + 1
-			local tk = token
-			TweenService:Create(popup, CLOSE_INFO, { Position = HIDDEN, GroupTransparency = 1 }):Play()
-			task.delay(CLOSE_INFO.Time + 0.02, function()
-				if tk == token then
-					popup.Visible = false
-				end
-			end)
-			paintTrigger()
-		end
-
+		local index = 1
 		for i = 1, #options do
-			local opt = options[i]
-			local b = new("TextButton", {
-				AutoButtonColor = false,
-				Text = "",
-				Position = UDim2.fromOffset(PAD_P, PAD_P + (i - 1) * ITEM_H),
-				Size = UDim2.new(1, -(PAD_P * 2), 0, ITEM_H),
-				BackgroundColor3 = T.HOVER_GREY,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-			}, popup)
-			corner(b, RADIUS + 1)
-			local t = label(b, opt, UDim2.fromOffset(10, 0), UDim2.new(1, -32, 1, 0),
-				Enum.Font.GothamMedium, 12, T.ICON)
-			local dot = new("Frame", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -10, 0.5, 0),
-				Size = UDim2.fromOffset(6, 6),
-				BackgroundColor3 = T.ICON_HOVER,
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-			}, b)
-			corner(dot, 100)
-			items[i] = { value = opt, text = t, dot = dot }
-
-			b.MouseEnter:Connect(function()
-				TweenService:Create(b, FAST, { BackgroundTransparency = 0.45 }):Play()
-			end)
-			b.MouseLeave:Connect(function()
-				TweenService:Create(b, FAST, { BackgroundTransparency = 1 }):Play()
-			end)
-			b.Activated:Connect(function()
-				if current ~= opt then
-					current = opt
-					valueLabel.Text = opt
-					refreshItems()
-					onChange(opt)
-				end
-				closeList()
-			end)
-		end
-		refreshItems()
-
-		trigger.MouseEnter:Connect(function()
-			over = true
-			paintTrigger()
-		end)
-		trigger.MouseLeave:Connect(function()
-			over = false
-			paintTrigger()
-		end)
-		trigger.Activated:Connect(function()
-			if isOpen then
-				closeList()
-			else
-				openList()
+			if options[i] == startValue then
+				index = i
 			end
-		end)
+		end
 
-		popupList[#popupList + 1] = {
-			isOpen = function()
-				return isOpen
-			end,
-			close = closeList,
-			hit = { popup, trigger },
-		}
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+		end)
+		btn.Activated:Connect(function()
+			index = index + 1
+			if index > #options then
+				index = 1
+			end
+			btn.Text = options[index]
+			onChange(options[index])
+		end)
 	end
 
 	---------------------------------------------------------------------
@@ -784,7 +621,6 @@ function ExtraPage.build(parent, T, H, ctx)
 			ZIndex = 4,
 		}, alphaBox)
 
-		-- bottom row: colour + hex text | opacity text
 		local valBox = new("Frame", {
 			Position = UDim2.fromOffset(12, 222),
 			Size = UDim2.fromOffset(164, 28),
@@ -944,13 +780,13 @@ function ExtraPage.build(parent, T, H, ctx)
 			return F.isOpen()
 		end
 
-		function picker.open(anchor, color, alpha, cb)
+		function picker.open(anchor, color, alpha, cb, beside)
 			onChange = nil
 			h, s, v = color:ToHSV()
 			a = alpha
 			refresh(false)
 			onChange = cb
-			local pos = placeNear(anchor, PW, PH)
+			local pos = placeNear(anchor, PW, PH, beside)
 			if F.isOpen() then
 				F.move(pos)
 			else
@@ -974,6 +810,149 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
+	-- THE ENABLE CARD (switch + three dots)
+	---------------------------------------------------------------------
+	local card = new("Frame", {
+		Name = "EnableCard",
+		Position = UDim2.fromOffset(2, 24),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, root)
+	corner(card, RADIUS + 4)
+	stroke(card, T.BORDER, 1, 0)
+
+	label(root, "BULLET TRACER", UDim2.fromOffset(4, 6), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local enableSub = label(card, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	enableSub.RichText = true
+
+	local function refreshStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if S.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font>'
+		end
+		enableSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+	end
+	refreshStatus()
+
+	makeSwitch(card, S.enabled, function(on)
+		S.enabled = on
+		refreshStatus()
+	end, 23)
+
+	local dots = makeDots(card, UDim2.new(1, -58, 0, 23))
+
+	---------------------------------------------------------------------
+	-- SETTINGS POP-UP (opens from the three dots)
+	--   Color / Material / Fade Style / Thickness / Duration / Rainbow (+ Speed)
+	---------------------------------------------------------------------
+	local SW = 264
+	local SH = 296
+	local settings = makeFloating("TracerSettings", SW, SH)
+	local pop = settings.frame
+	local colorSwatch = nil
+
+	label(pop, "Bullet Tracer", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, pop)
+
+	-- Color (+ opacity in the picker)
+	label(pop, "Color", UDim2.fromOffset(16, 48), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	colorSwatch = makeSwatch(pop, UDim2.new(1, -16, 0, 62), S.color, function()
+		if picker.isOpen() then
+			picker.close()
+			return
+		end
+		picker.open(colorSwatch.btn, S.color, S.alpha, function(c, al)
+			S.color = c
+			S.alpha = al
+			colorSwatch.paint(c)
+		end, settings.frame)
+	end)
+
+	cycleRow(pop, 84, "Material", MATERIALS, S.material, function(v)
+		S.material = v
+	end)
+
+	cycleRow(pop, 118, "Fade Style", EASINGS, S.easing, function(v)
+		S.easing = v
+	end)
+
+	makeSlider(pop, 156, "Thickness", 64, 0.01, 1, 0.01, S.width, "%.2f", function(v)
+		S.width = v
+	end)
+
+	makeSlider(pop, 186, "Duration", 64, 0.1, 10, 0.1, S.fade, "%.1fs", function(v)
+		S.fade = v
+	end)
+
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 218),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, pop)
+
+	-- Rainbow with a Speed slider under it
+	label(pop, "Rainbow", UDim2.fromOffset(16, 224), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local speedApi = makeSlider(pop, 262, "Speed", 64, 1, 20, 1, S.rainbowSpeed, "%d", function(v)
+		S.rainbowSpeed = v
+	end)
+	speedApi.dim(S.rainbow)
+	makeSwitch(pop, S.rainbow, function(on)
+		S.rainbow = on
+		speedApi.dim(on)
+	end, 238, 16)
+
+	local function openSettings()
+		if settings.isOpen() then
+			return
+		end
+		settings.open(placeNear(dots.btn, SW, SH, nil))
+		dots.open = true
+		dots.paint()
+	end
+
+	local function closeSettings()
+		settings.close()
+		if picker.isOpen() then
+			picker.close()
+		end
+		dots.open = false
+		dots.paint()
+	end
+
+	dots.btn.Activated:Connect(function()
+		if settings.isOpen() then
+			closeSettings()
+		else
+			openSettings()
+		end
+	end)
+
+	popupList[#popupList + 1] = {
+		isOpen = function()
+			return settings.isOpen()
+		end,
+		close = closeSettings,
+		hit = { pop, picker.frame, dots.btn },
+	}
+	-- the colour picker must not close when the colour square is clicked
+	table.insert(pickerEntry.hit, colorSwatch.btn)
+
+	---------------------------------------------------------------------
 	-- THE TRACER
 	---------------------------------------------------------------------
 	local function effectsParent()
@@ -990,8 +969,8 @@ function ExtraPage.build(parent, T, H, ctx)
 		return fx
 	end
 
-	-- cf = the middle of the tracer (already moved halfway along the shot), length = how long it is
-	local function spawnTracer(cf, length, color)
+	-- cf = the middle of the tracer (already moved halfway along the shot)
+	local function spawnTracer(cf, length)
 		local mat = Enum.Material.Neon
 		pcall(function()
 			mat = Enum.Material[S.material]
@@ -1000,6 +979,11 @@ function ExtraPage.build(parent, T, H, ctx)
 		pcall(function()
 			style = Enum.EasingStyle[S.easing]
 		end)
+
+		local color = S.color
+		if S.rainbow then
+			color = Color3.fromHSV((os.clock() * S.rainbowSpeed * 0.1) % 1, 1, 1)
+		end
 
 		local t = Instance.new("Part")
 		t.Name = "BulletTracer"
@@ -1016,32 +1000,15 @@ function ExtraPage.build(parent, T, H, ctx)
 		t.Parent = effectsParent()
 
 		tracers[#tracers + 1] = t
-		while #tracers > S.maxCount do
+		while #tracers > MAX_TRACERS do
 			local old = table.remove(tracers, 1)
 			if old and old.Parent then
 				old:Destroy()
 			end
 		end
 
-		local goal = { Transparency = 1 }
-		if S.shrink then
-			goal.Size = Vector3.new(0.001, 0.001, length)
-		end
-		TweenService:Create(t, TweenInfo.new(S.fade, style, Enum.EasingDirection.Out), goal):Play()
+		TweenService:Create(t, TweenInfo.new(S.fade, style, Enum.EasingDirection.Out), { Transparency = 1 }):Play()
 		Debris:AddItem(t, S.fade + 0.1)
-	end
-
-	local function pickColor(bulletPart)
-		if S.rainbow then
-			return Color3.fromHSV((os.clock() * S.rainbowSpeed * 0.1) % 1, 1, 1)
-		end
-		if S.useBullet and bulletPart then
-			local beam = bulletPart:FindFirstChild("NewGunBeam")
-			if beam and beam:IsA("Beam") and beam.Color.Keypoints[1] then
-				return beam.Color.Keypoints[1].Value
-			end
-		end
-		return S.color
 	end
 
 	local function onBullet(bulletPart)
@@ -1051,15 +1018,14 @@ function ExtraPage.build(parent, T, H, ctx)
 			return
 		end
 
-		if S.ownOnly then
-			local char = player.Character
-			local rp = nil
-			if char then
-				rp = char:FindFirstChild("HumanoidRootPart")
-			end
-			if not rp or (rp.Position - bulletPart.Position).Magnitude > 15 then
-				return
-			end
+		-- only your own shots: the bullet has to start next to your character
+		local char = player.Character
+		local rp = nil
+		if char then
+			rp = char:FindFirstChild("HumanoidRootPart")
+		end
+		if not rp or (rp.Position - bulletPart.Position).Magnitude > OWN_RANGE then
+			return
 		end
 
 		-- the end attachment sits at Z = -distance from the muzzle
@@ -1074,7 +1040,7 @@ function ExtraPage.build(parent, T, H, ctx)
 			return
 		end
 
-		spawnTracer(bulletPart.CFrame * CFrame.new(0, 0, -distance / 2), distance, pickColor(bulletPart))
+		spawnTracer(bulletPart.CFrame * CFrame.new(0, 0, -distance / 2), distance)
 	end
 
 	conns[#conns + 1] = workspace.DescendantAdded:Connect(function(d)
@@ -1083,148 +1049,9 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 	end)
 
-	local function preview()
-		local cam = workspace.CurrentCamera
-		if not cam then
-			return
-		end
-		local origin = cam.CFrame * CFrame.new(1.5, -1, -2)
-		spawnTracer(origin * CFrame.new(0, 0, -30), 60, pickColor(nil))
-	end
-
 	---------------------------------------------------------------------
-	-- THE CARDS
+	-- INPUT: a click or tap anywhere except inside an open pop-up (or its button) closes it
 	---------------------------------------------------------------------
-	local outlineSwatch = nil
-
-	-- LEFT: TRACER
-	P.section(1, "TRACER")
-
-	local enableCard = P.place(1, 46)
-	label(enableCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local enableSub = label(enableCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	local function refreshStatus()
-		if S.enabled then
-			enableSub.Text = "Active"
-			enableSub.TextColor3 = T.GREEN
-		else
-			enableSub.Text = "Off"
-			enableSub.TextColor3 = T.DIM_TEXT
-		end
-	end
-	refreshStatus()
-	makeSwitch(enableCard, S.enabled, function(on)
-		S.enabled = on
-		refreshStatus()
-	end, 23)
-
-	-- Color card: colour square on the right opens the picker (opacity is in the picker)
-	local colorCard = P.place(1, 46)
-	label(colorCard, "Color", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	label(colorCard, "Colour and opacity", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	outlineSwatch = makeSwatch(colorCard, UDim2.new(1, -12, 0.5, 0), S.color, function()
-		if picker.isOpen() then
-			picker.close()
-			return
-		end
-		picker.open(outlineSwatch.btn, S.color, S.alpha, function(c, al)
-			S.color = c
-			S.alpha = al
-			outlineSwatch.paint(c)
-		end)
-	end)
-	table.insert(pickerEntry.hit, outlineSwatch.btn)
-
-	sliderCard(1, "Thickness", 0.01, 1, 0.01, S.width, "%.2f", function(v)
-		S.width = v
-	end)
-
-	sliderCard(1, "Duration", 0.1, 10, 0.1, S.fade, "%.1fs", function(v)
-		S.fade = v
-	end)
-
-	P.section(1, "FILTERS")
-
-	toggleCard(1, "Own Shots Only", "Skip other players' tracers", S.ownOnly, function(on)
-		S.ownOnly = on
-	end)
-
-	sliderCard(1, "Max Tracers", 10, 300, 10, S.maxCount, "%d", function(v)
-		S.maxCount = v
-	end)
-
-	local prevCard = P.place(1, 46)
-	label(prevCard, "Preview", UDim2.fromOffset(14, 7), UDim2.new(1, -110, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	label(prevCard, "Fire a test tracer", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	local prevBtn = new("TextButton", {
-		AutoButtonColor = false,
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -12, 0.5, 0),
-		Size = UDim2.fromOffset(76, 28),
-		BackgroundColor3 = T.CLUSTER_BG,
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
-		TextColor3 = T.ICON_HOVER,
-		Text = "Fire",
-	}, prevCard)
-	corner(prevBtn, RADIUS + 2)
-	prevBtn.MouseEnter:Connect(function()
-		TweenService:Create(prevBtn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
-	end)
-	prevBtn.MouseLeave:Connect(function()
-		TweenService:Create(prevBtn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
-	end)
-	prevBtn.Activated:Connect(preview)
-
-	-- RIGHT: STYLE
-	P.section(2, "STYLE")
-
-	dropdownCard(2, "Material", MATERIALS, S.material, function(v)
-		S.material = v
-	end, 26)
-
-	dropdownCard(2, "Fade Style", EASINGS, S.easing, function(v)
-		S.easing = v
-	end, 25)
-
-	toggleCard(2, "Shrink", "Gets thinner while fading", S.shrink, function(on)
-		S.shrink = on
-	end)
-
-	toggleCard(2, "Use Bullet Color", "Colour from the gun script", S.useBullet, function(on)
-		S.useBullet = on
-	end)
-
-	-- Rainbow with a Speed slider under it
-	do
-		local rc = P.place(2, 82)
-		label(rc, "Rainbow", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		label(rc, "Colour cycles every shot", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-		local sp = makeSlider(rc, 50, "Speed", 40, 1, 20, 1, S.rainbowSpeed, "%d", function(v)
-			S.rainbowSpeed = v
-		end)
-		sp.dim(S.rainbow)
-		makeSwitch(rc, S.rainbow, function(on)
-			S.rainbow = on
-			sp.dim(on)
-		end, 23)
-	end
-
-	P.finish()
-
-	-- the floating pop-ups stay where they opened, so they close when the page is scrolled
-	conns[#conns + 1] = P.scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(closeAllPopups)
-
-	-- a click or tap anywhere except inside an open pop-up (or its button) closes that pop-up
 	conns[#conns + 1] = UserInputService.InputBegan:Connect(function(input)
 		if not running then
 			return
@@ -1249,13 +1076,18 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 	end)
 
-	-- leaving the page closes every pop-up
-	if parent:IsA("GuiObject") then
-		conns[#conns + 1] = parent:GetPropertyChangedSignal("Visible"):Connect(function()
-			if not parent.Visible then
-				closeAllPopups()
-			end
-		end)
+	-- leaving this page (or the Misc tab) closes every pop-up: watch the page and everything above it
+	do
+		local a = parent
+		while a and a:IsA("GuiObject") do
+			local node = a
+			conns[#conns + 1] = node:GetPropertyChangedSignal("Visible"):Connect(function()
+				if not node.Visible then
+					closeAllPopups()
+				end
+			end)
+			a = a.Parent
+		end
 	end
 
 	---------------------------------------------------------------------
@@ -1283,6 +1115,12 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 		tracers = {}
 	end
+
+	conns[#conns + 1] = root.AncestryChanged:Connect(function()
+		if not root:IsDescendantOf(game) then
+			unload()
+		end
+	end)
 
 	return { Root = root, Unload = unload }
 end
