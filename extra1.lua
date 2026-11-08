@@ -31,17 +31,18 @@ function Extra1Page.build(parent, T, H, ctx)
 	local ARMOR_TAG = "[Full Armor]"
 	local STIM_TAG = "[Stim]"
 	local COOLDOWN = 0       -- 0 = click every frame (fastest). Raise it (like 0.1) if purchases get ignored.
+	local MULTI_CLICKS = 8   -- Multi Buy: how many clicks are sent per item per frame
 
 	local OPTIONS = {
 		{ key = "armor", title = "Auto Buy Armor" },
-		{ key = "stim", title = "Auto Buy Stim" },
-		{ key = "food", title = "Auto Buy Food" },
+		{ key = "stim", title = "Auto Buy Stim", multi = true },
+		{ key = "food", title = "Auto Buy Food", multi = true },
 	}
 
 	local S = {
 		armor = { enabled = false, range = 12 },
-		stim = { enabled = false, range = 12 },
-		food = { enabled = false, range = 12 },
+		stim = { enabled = false, range = 12, multi = false },
+		food = { enabled = false, range = 12, multi = false },
 	}
 
 	local running = true
@@ -219,12 +220,21 @@ function Extra1Page.build(parent, T, H, ctx)
 		local st = S[opt.key]
 		local y = 6 + (i - 1) * ROW_H
 
-		label(card, opt.title, UDim2.fromOffset(14, y + 6), UDim2.new(1, -90, 0, 18),
+		label(card, opt.title, UDim2.fromOffset(14, y + 6), UDim2.new(1, -200, 0, 18),
 			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
 
 		makeSwitch(card, st.enabled, function(on)
 			st.enabled = on
 		end, y + 16, 14)
+
+		-- Multi Buy switch (stim and food only): sits just left of the main switch
+		if opt.multi then
+			label(card, "Multi Buy", UDim2.new(1, -(112 + 64), 0, y + 7), UDim2.fromOffset(64, 18),
+				Enum.Font.GothamMedium, 12, T.ICON, Enum.TextXAlignment.Right)
+			makeSwitch(card, st.multi, function(on)
+				st.multi = on
+			end, y + 16, 66)
+		end
 
 		makeSlider(card, y + 32, "Range", 44, 3, 15, 1, st.range, "%d", function(v)
 			st.range = v
@@ -264,7 +274,9 @@ function Extra1Page.build(parent, T, H, ctx)
 	end
 
 	-- left click on the model's Head
-	local function clickHead(model, head)
+	-- count > 1 = Multi Buy: a burst of simulated clicks (like holding Ctrl and clicking over and over),
+	-- done by firing the click detector directly, so no key presses are used
+	local function clickHead(model, head, count)
 		local cd = head:FindFirstChildOfClass("ClickDetector")
 		if not cd then
 			cd = model:FindFirstChildWhichIsA("ClickDetector", true)
@@ -272,9 +284,11 @@ function Extra1Page.build(parent, T, H, ctx)
 		if not cd then
 			return
 		end
-		pcall(function()
-			fireclickdetector(cd)
-		end)
+		for _ = 1, count do
+			pcall(function()
+				fireclickdetector(cd)
+			end)
+		end
 	end
 
 	local function step()
@@ -313,7 +327,11 @@ function Extra1Page.build(parent, T, H, ctx)
 						if (not last or now - last >= COOLDOWN)
 							and (head.Position - hrp.Position).Magnitude <= st.range then
 							lastBuy[model] = now
-							clickHead(model, head)
+							local clicks = 1
+							if st.multi then
+								clicks = MULTI_CLICKS
+							end
+							clickHead(model, head, clicks)
 						end
 					end
 				end
