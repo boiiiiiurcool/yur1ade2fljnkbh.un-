@@ -3,10 +3,18 @@
 --
 -- Detects the Idle / Walk / Run / Jump / Fall / Swim / Climb animations your character has right now
 -- (from its Animate script) and remembers them as "Default". The three dots open a pop-up with
--- one drop-down per animation: Default or any animation package.
+-- one drop-down per animation: Default or any animation package, and a Reset All button.
 -- It changes the AnimationId values inside your Animate script and restarts that script, so the
 -- animations are played by your own client and Roblox shows them to every other player.
 -- Packages are R15 only. Turning the switch off (or unloading) puts your defaults back.
+--
+-- NO MIXING: every change is done in one clean step: the Animate script is switched off, every
+-- movement animation that is still playing (old default or old package) is stopped, the new ids are
+-- written, then the script is switched on again. Changes are queued so two of them never overlap.
+--
+-- RESET ALL: puts every drop-down back on Default, restores your default ids, stops every movement
+-- animation and restarts the Animate script so the character animates from a clean start.
+-- Set RESPAWN_ON_RESET = true to also respawn your character (off by default: it kills you in game).
 --
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
 -- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
@@ -15,10 +23,14 @@ local AnimationPage = {}
 
 function AnimationPage.build(parent, T, H, ctx)
 	local Players = game:GetService("Players")
+	local TweenService = game:GetService("TweenService")
 	local player = Players.LocalPlayer
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
 	local RADIUS = T.RADIUS
+	local FAST = T.FAST
+
+	local RESPAWN_ON_RESET = false
 
 	local X = nil
 	if type(ctx) == "table" then
@@ -47,6 +59,16 @@ function AnimationPage.build(parent, T, H, ctx)
 	local NAMES = { "Default" }
 	for i = 1, #PACKS do
 		NAMES[i + 1] = PACKS[i].name
+	end
+
+	-- every package animation id (numbers only): playing tracks with these ids get stopped on a change
+	local KNOWN = {}
+	for p = 1, #PACKS do
+		for k, v in pairs(PACKS[p]) do
+			if k ~= "name" then
+				KNOWN[v] = true
+			end
+		end
 	end
 
 	-- the drop-downs, top to bottom (key = which selection it controls)
@@ -81,12 +103,19 @@ function AnimationPage.build(parent, T, H, ctx)
 	local enabled = false
 	local sel = { idle = 1, walk = 1, run = 1, jump = 1, fall = 1, swim = 1, climb = 1 }   -- 1 = Default
 	local defaults = {}
+	local defaultNums = {}
 	local hasDefaults = false
 	local detected = "Game default"
 	local conns = {}
 	local applyToken = 0
 	local statusLbl = nil
 	local schedule = nil
+
+	-- queue so two changes never run at the same time
+	local working = false
+	local again = false
+	local nextForceDefault = false
+	local nextForce = false
 
 	local function num(id)
 		return string.match(tostring(id or ""), "(%d+)%s*$")
@@ -153,7 +182,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	local dots = X.makeDots(card, UDim2.new(1, -58, 0, 23))
 
 	local PW = 300
-	local PH = 328
+	local PH = 352
 	local F = X.makeFloating("AnimationSettings", PW, PH)
 	local pop = F.frame
 
@@ -171,12 +200,33 @@ function AnimationPage.build(parent, T, H, ctx)
 	local dropdowns = {}
 	for i = 1, #ROWS do
 		local row = ROWS[i]
-		dropdowns[#dropdowns + 1] = X.dropdownRow(pop, 68 + (i - 1) * 36, row.title, 120, 128, NAMES, 1,
+		dropdowns[#dropdowns + 1] = X.dropdownRow(pop, 66 + (i - 1) * 34, row.title, 120, 128, NAMES, 1,
 			function(idx)
 				sel[row.key] = idx
 				schedule()
 			end, pop)
 	end
+
+	-- Reset All button
+	local resetBtn = new("TextButton", {
+		Name = "ResetAll",
+		AutoButtonColor = false,
+		Position = UDim2.fromOffset(16, 66 + #ROWS * 34 + 6),
+		Size = UDim2.new(1, -32, 0, 30),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = T.ICON_HOVER,
+		Text = "Reset All",
+	}, pop)
+	corner(resetBtn, RADIUS + 2)
+	resetBtn.MouseEnter:Connect(function()
+		TweenService:Create(resetBtn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+	end)
+	resetBtn.MouseLeave:Connect(function()
+		TweenService:Create(resetBtn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+	end)
 
 	local function openAnim()
 		if F.isOpen() then
@@ -239,11 +289,16 @@ function AnimationPage.build(parent, T, H, ctx)
 
 	local function capture(animate)
 		defaults = {}
+		defaultNums = {}
 		for i = 1, #TARGETS do
 			local t = TARGETS[i]
 			local a = findAnim(animate, t.folder, t.anim, t.exact)
 			if a then
 				defaults[t.field] = a.AnimationId
+				local n = num(a.AnimationId)
+				if n then
+					defaultNums[n] = true
+				end
 			end
 		end
 		hasDefaults = true
@@ -264,44 +319,39 @@ function AnimationPage.build(parent, T, H, ctx)
 		refreshStatus()
 	end
 
-	-- the Animate script only reads its ids when it starts, so it is switched off and on again
-	local function restart(char, animate, old)
-		task.spawn(function()
-			local hum = char:FindFirstChildOfClass("Humanoid")
-			local animator = nil
-			if hum then
-				animator = hum:FindFirstChildOfClass("Animator")
-			end
-			pcall(function()
-				animate.Disabled = true
-			end)
-			if animator then
-				local ok, tracks = pcall(function()
-					return animator:GetPlayingAnimationTracks()
-				end)
-				if ok and tracks then
-					for i = 1, #tracks do
-						local a = tracks[i].Animation
-						local n = nil
-						if a then
-							n = num(a.AnimationId)
-						end
-						if n and old[n] then
-							pcall(function()
-								tracks[i]:Stop(0)
-							end)
-						end
-					end
-				end
-			end
-			task.wait()
-			pcall(function()
-				animate.Disabled = false
-			end)
+	-- stops every movement animation that is still playing: your default ids and every package id.
+	-- This is what stops old and new animations from blending together.
+	local function stopMoveTracks(char)
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local animator = nil
+		if hum then
+			animator = hum:FindFirstChildOfClass("Animator")
+		end
+		if not animator then
+			return
+		end
+		local ok, tracks = pcall(function()
+			return animator:GetPlayingAnimationTracks()
 		end)
+		if not ok or not tracks then
+			return
+		end
+		for i = 1, #tracks do
+			local a = tracks[i].Animation
+			local n = nil
+			if a then
+				n = num(a.AnimationId)
+			end
+			if n and (KNOWN[n] or defaultNums[n]) then
+				pcall(function()
+					tracks[i]:Stop(0)
+				end)
+			end
+		end
 	end
 
-	local function apply()
+	-- one clean change: script off -> stop old animations -> write ids -> script on
+	local function doApply(forceDefault, force)
 		local char = player.Character
 		local animate = nil
 		if char then
@@ -310,50 +360,109 @@ function AnimationPage.build(parent, T, H, ctx)
 		if not animate or not hasDefaults then
 			return
 		end
-		local old = {}
-		local changed = false
+
+		local changes = {}
 		for i = 1, #TARGETS do
 			local t = TARGETS[i]
 			local a = findAnim(animate, t.folder, t.anim, t.exact)
 			local base = defaults[t.field]
 			if a and base then
 				local want = base
-				if enabled then
+				if enabled and not forceDefault then
 					local idx = sel[t.sel]
 					if idx > 1 then
 						want = "rbxassetid://" .. PACKS[idx - 1][t.field]
 					end
 				end
-				if a.AnimationId ~= want then
-					local n = num(a.AnimationId)
-					if n then
-						old[n] = true
-					end
-					a.AnimationId = want
-					changed = true
+				if a.AnimationId ~= want or force then
+					changes[#changes + 1] = { a, want }
 				end
 			end
 		end
-		if changed then
-			restart(char, animate, old)
+		if #changes == 0 and not force then
+			return
 		end
+
+		pcall(function()
+			animate.Disabled = true
+		end)
+		stopMoveTracks(char)
+		for i = 1, #changes do
+			pcall(function()
+				changes[i][1].AnimationId = changes[i][2]
+			end)
+		end
+		task.wait(0.1)
+		stopMoveTracks(char)
+		pcall(function()
+			animate.Disabled = false
+		end)
 	end
 
-	-- several quick clicks become one restart
+	local function runApply(forceDefault, force)
+		if forceDefault then
+			nextForceDefault = true
+		end
+		if force then
+			nextForce = true
+		end
+		if working then
+			again = true
+			return
+		end
+		working = true
+		task.spawn(function()
+			repeat
+				again = false
+				local fd = nextForceDefault
+				local ff = nextForce
+				nextForceDefault = false
+				nextForce = false
+				pcall(doApply, fd, ff)
+			until not again
+			working = false
+		end)
+	end
+
+	-- several quick clicks become one change
 	schedule = function()
 		applyToken = applyToken + 1
 		local tk = applyToken
 		task.delay(0.15, function()
 			if tk == applyToken and running then
-				apply()
+				runApply(false, false)
 			end
 		end)
 	end
+
+	-- Reset All: every drop-down back on Default, defaults restored, animations restarted from scratch
+	resetBtn.Activated:Connect(function()
+		for i = 1, #ROWS do
+			sel[ROWS[i].key] = 1
+			local dd = dropdowns[i]
+			if dd and type(dd.set) == "function" then
+				dd.set(1)
+			end
+		end
+		applyToken = applyToken + 1
+		runApply(true, true)
+		if RESPAWN_ON_RESET then
+			local char = player.Character
+			local hum = nil
+			if char then
+				hum = char:FindFirstChildOfClass("Humanoid")
+			end
+			if hum then
+				hum.Health = 0
+			end
+		end
+	end)
 
 	-- every respawn resets the Animate script, so the defaults are read again and the picks re-applied
 	local function onCharacter(char)
 		hasDefaults = false
 		defaults = {}
+		defaultNums = {}
 		task.spawn(function()
 			local animate = char:WaitForChild("Animate", 10)
 			if not running or not animate then
@@ -366,7 +475,7 @@ function AnimationPage.build(parent, T, H, ctx)
 			end
 			capture(animate)
 			if enabled then
-				apply()
+				runApply(false, false)
 			end
 		end)
 	end
@@ -385,8 +494,9 @@ function AnimationPage.build(parent, T, H, ctx)
 			return
 		end
 		enabled = false
-		pcall(apply)
 		running = false
+		applyToken = applyToken + 1
+		runApply(true, false)
 		for i = 1, #conns do
 			pcall(function()
 				conns[i]:Disconnect()
