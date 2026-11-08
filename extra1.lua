@@ -227,7 +227,7 @@ function Extra1Page.build(parent, T, H, ctx)
 			st.enabled = on
 		end, y + 16, 14)
 
-		makeSlider(card, y + 32, "Range", 44, 3, 50, 1, st.range, "%d", function(v)
+		makeSlider(card, y + 32, "Range", 44, 3, 15, 1, st.range, "%d", function(v)
 			st.range = v
 		end)
 
