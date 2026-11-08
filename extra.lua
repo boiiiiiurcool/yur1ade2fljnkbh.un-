@@ -16,6 +16,12 @@
 --   Shooter == your character count. If GunHandler cannot be found, it falls back to watching the
 --   BULLET_RAYS parts and re-checking the bullet path with a raycast.
 --
+-- HIT MARKERS
+--   When you shoot someone, the damage you did shows as red text next to them (like -200 or -100).
+--   The text is a world-size billboard, so it gets bigger when they are close and smaller when
+--   they are far. The only setting is Fade Speed (how fast the text disappears).
+--   The damage is measured from the target's health dropping right after your hit lands.
+--
 -- Each page card is a small Enable card (a switch, OFF every time the script starts, and three dots).
 -- The dots open one settings pop-up. Click the dots again, or anywhere except the pop-up, to close it.
 -- Tracer: Material and Fade Style: click the button to go to the next choice.
@@ -81,6 +87,12 @@ function ExtraPage.build(parent, T, H, ctx)
 		soundIndex = 1,
 		mode = "On Hit",
 		volume = 1,
+	}
+
+	-- hit marker settings (speed 1 = text stays about 3s, 10 = about 0.3s)
+	local HM = {
+		enabled = false,
+		speed = 3,
 	}
 
 	local OWN_RANGE = 15        -- a bullet has to start this close to your character to count as yours
@@ -1287,33 +1299,129 @@ function ExtraPage.build(parent, T, H, ctx)
 	}
 
 	---------------------------------------------------------------------
+	-- HIT MARKERS CARD (switch + three dots)   second row, left half
+	---------------------------------------------------------------------
+	local hmCard = new("Frame", {
+		Name = "HitMarkersCard",
+		Position = UDim2.fromOffset(2, 98),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, root)
+	corner(hmCard, RADIUS + 4)
+	stroke(hmCard, T.BORDER, 1, 0)
+
+	label(root, "HIT MARKERS", UDim2.fromOffset(4, 80), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(hmCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local hmSub = label(hmCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	hmSub.RichText = true
+
+	local function refreshHmStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if HM.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font>'
+		end
+		hmSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+	end
+	refreshHmStatus()
+
+	makeSwitch(hmCard, HM.enabled, function(on)
+		HM.enabled = on
+		refreshHmStatus()
+	end, 23)
+
+	local hmDots = makeDots(hmCard, UDim2.new(1, -58, 0, 23))
+
+	-- settings pop-up: only the Fade Speed
+	local HMW = 280
+	local HMH = 92
+	local hmSettings = makeFloating("HitMarkerSettings", HMW, HMH)
+	local hmPop = hmSettings.frame
+
+	label(hmPop, "Hit Markers", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, hmPop)
+
+	makeSlider(hmPop, 56, "Fade Speed", 76, 1, 10, 1, HM.speed, "%d", function(v)
+		HM.speed = v
+	end)
+
+	local function openHm()
+		if hmSettings.isOpen() then
+			return
+		end
+		hmSettings.open(placeNear(hmDots.btn, HMW, HMH, nil))
+		hmDots.open = true
+		hmDots.paint()
+	end
+
+	local function closeHm()
+		hmSettings.close()
+		hmDots.open = false
+		hmDots.paint()
+	end
+
+	hmDots.btn.Activated:Connect(function()
+		if hmSettings.isOpen() then
+			closeHm()
+		else
+			openHm()
+		end
+	end)
+
+	popupList[#popupList + 1] = {
+		isOpen = function()
+			return hmSettings.isOpen()
+		end,
+		close = closeHm,
+		hit = { hmPop, hmDots.btn },
+	}
+
+	---------------------------------------------------------------------
 	-- HIT SOUNDS: detecting YOUR shots / YOUR hits
 	---------------------------------------------------------------------
 	local hooked = false
+	local trackHit = nil   -- filled in below (the hit marker code); called by both hit detectors
 	local hookGH = nil
 	local hookOriginal = nil
 	local hookFn = nil
 
-	-- true when inst belongs to a living character that is not you
-	local function isEnemyHit(inst)
+	-- the Humanoid of the living character inst belongs to (not you), or nil
+	local function enemyHumanoid(inst)
 		if typeof(inst) ~= "Instance" then
-			return false
+			return nil
 		end
 		local myChar = player.Character
 		if myChar and inst:IsDescendantOf(myChar) then
-			return false
+			return nil
 		end
 		local m = inst
 		while m and m ~= workspace and m ~= game do
 			if m:IsA("Model") then
 				local hum = m:FindFirstChildOfClass("Humanoid")
 				if hum then
-					return hum.Health > 0
+					if hum.Health > 0 then
+						return hum
+					end
+					return nil
 				end
 			end
 			m = m.Parent
 		end
-		return false
+		return nil
+	end
+
+	local function isEnemyHit(inst)
+		return enemyHumanoid(inst) ~= nil
 	end
 
 	-- the params table passed to GunHandler.Shoot (it has a Shooter field)
@@ -1360,21 +1468,29 @@ function ExtraPage.build(parent, T, H, ctx)
 		local function hook(...)
 			local params = findParams(...)
 			local mine = false
-			if running and HS.enabled and params ~= nil then
+			if running and (HS.enabled or HM.enabled) and params ~= nil then
 				mine = isMyShot(params)
 			end
 
 			-- On Shot: play right away, before the gun script does its (slow) effects work
-			if mine and HS.mode == "On Shot" then
+			if mine and HS.enabled and HS.mode == "On Shot" then
 				pcall(playHitSound, false)
 			end
 
 			-- Shoot returns: hit position, the instance that was hit, hit normal
 			local r1, r2, r3 = original(...)
 
-			-- On Hit: only when MY shot hit another character
-			if mine and HS.mode == "On Hit" and isEnemyHit(r2) then
-				pcall(playHitSound, false)
+			-- only when MY shot hit another character: hit sound (On Hit) and hit marker
+			if mine then
+				local hum = enemyHumanoid(r2)
+				if hum then
+					if HS.enabled and HS.mode == "On Hit" then
+						pcall(playHitSound, false)
+					end
+					if HM.enabled and trackHit then
+						pcall(trackHit, hum, r2)
+					end
+				end
 			end
 
 			return r1, r2, r3
@@ -1390,7 +1506,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	-- fallback when GunHandler could not be wrapped: watch BULLET_RAYS parts and re-check the path
 	local function onBulletForSound(bulletPart)
 		task.wait()
-		if not running or not HS.enabled or hooked or not bulletPart.Parent then
+		if not running or not (HS.enabled or HM.enabled) or hooked or not bulletPart.Parent then
 			return
 		end
 		local char = player.Character
@@ -1412,8 +1528,11 @@ function ExtraPage.build(parent, T, H, ctx)
 			return
 		end
 
-		if HS.mode == "On Shot" then
+		if HS.enabled and HS.mode == "On Shot" then
 			playHitSound(false)
+		end
+		local wantHit = HM.enabled or (HS.enabled and HS.mode == "On Hit")
+		if not wantHit then
 			return
 		end
 
@@ -1438,13 +1557,22 @@ function ExtraPage.build(parent, T, H, ctx)
 		rayParams.FilterType = Enum.RaycastFilterType.Exclude
 		rayParams.IgnoreWater = true
 		local res = workspace:Raycast(bulletPart.Position, bulletPart.CFrame.LookVector * (distance + 1), rayParams)
-		if res and isEnemyHit(res.Instance) then
-			playHitSound(false)
+		local hum = nil
+		if res then
+			hum = enemyHumanoid(res.Instance)
+		end
+		if hum then
+			if HS.enabled and HS.mode == "On Hit" then
+				playHitSound(false)
+			end
+			if HM.enabled and trackHit then
+				pcall(trackHit, hum, res.Instance)
+			end
 		end
 	end
 
 	conns[#conns + 1] = workspace.DescendantAdded:Connect(function(d)
-		if running and HS.enabled and not hooked and d.Name == "BULLET_RAYS" and d:IsA("BasePart") then
+		if running and (HS.enabled or HM.enabled) and not hooked and d.Name == "BULLET_RAYS" and d:IsA("BasePart") then
 			task.spawn(onBulletForSound, d)
 		end
 	end)
@@ -1464,6 +1592,107 @@ function ExtraPage.build(parent, T, H, ctx)
 			fx.Parent = ignored
 		end
 		return fx
+	end
+
+	-- HIT MARKERS: red damage text next to the player you hit.
+	-- The text lives in a BillboardGui whose size is in studs, so it shrinks with distance and grows
+	-- when the target is close.
+	local pendingHits = setmetatable({}, { __mode = "k" })
+
+	local function showMarker(target, dmg)
+		local cam = workspace.CurrentCamera
+		local right = Vector3.new(1, 0, 0)
+		if cam then
+			right = cam.CFrame.RightVector
+		end
+		local side = 2.6 + (math.random() - 0.5) * 0.8
+		local up = 1.4 + math.random() * 0.7
+		local startPos = target.Position + right * side + Vector3.new(0, up, 0)
+		local dur = 3 / math.max(1, HM.speed)
+
+		local anchor = Instance.new("Part")
+		anchor.Name = "HitMarker"
+		anchor.Anchored = true
+		anchor.CanCollide = false
+		anchor.CanTouch = false
+		anchor.CanQuery = false
+		anchor.CastShadow = false
+		anchor.Transparency = 1
+		anchor.Size = Vector3.new(0.2, 0.2, 0.2)
+		anchor.Position = startPos
+		anchor.Parent = effectsParent()
+
+		local gui = Instance.new("BillboardGui")
+		gui.Name = "HitMarkerGui"
+		gui.Adornee = anchor
+		gui.Size = UDim2.fromScale(5, 2.2)   -- scale = studs, that is what makes it size with distance
+		gui.AlwaysOnTop = true
+		gui.LightInfluence = 0
+		gui.Parent = anchor
+
+		local txt = Instance.new("TextLabel")
+		txt.BackgroundTransparency = 1
+		txt.Size = UDim2.fromScale(1, 1)
+		txt.Font = Enum.Font.GothamBlack
+		txt.TextScaled = true
+		txt.Text = "-" .. tostring(math.floor(dmg + 0.5))
+		txt.TextColor3 = Color3.fromRGB(255, 50, 50)
+		txt.TextStrokeColor3 = Color3.fromRGB(20, 0, 0)
+		txt.TextStrokeTransparency = 0.25
+		txt.Parent = gui
+
+		TweenService:Create(txt, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		}):Play()
+		TweenService:Create(anchor, TweenInfo.new(dur, Enum.EasingStyle.Linear), {
+			Position = startPos + Vector3.new(0, 1.5, 0),
+		}):Play()
+		Debris:AddItem(anchor, dur + 0.2)
+	end
+
+	-- called when one of YOUR shots hits a character: watch its health for a moment and show every
+	-- drop as a number (shotgun pellets that land one after another each get their own number)
+	trackHit = function(hum, part)
+		if not HM.enabled then
+			return
+		end
+		local target = part
+		local model = hum.Parent
+		if model then
+			local hrp2 = model:FindFirstChild("HumanoidRootPart")
+			if hrp2 and hrp2:IsA("BasePart") then
+				target = hrp2
+			end
+		end
+		if not target or not target:IsA("BasePart") then
+			return
+		end
+
+		local now = os.clock()
+		local rec = pendingHits[hum]
+		if rec then
+			rec.expire = now + 0.8
+			rec.target = target
+			return
+		end
+
+		rec = { last = hum.Health, expire = now + 0.8, target = target }
+		pendingHits[hum] = rec
+		local c = hum.HealthChanged:Connect(function(newHealth)
+			local d = rec.last - newHealth
+			rec.last = newHealth
+			if running and HM.enabled and d >= 1 and os.clock() <= rec.expire then
+				pcall(showMarker, rec.target, d)
+			end
+		end)
+		task.spawn(function()
+			while running and hum.Parent and os.clock() < rec.expire do
+				task.wait(0.05)
+			end
+			c:Disconnect()
+			pendingHits[hum] = nil
+		end)
 	end
 
 	-- cf = the middle of the tracer (already moved halfway along the shot)
@@ -1597,6 +1826,7 @@ function ExtraPage.build(parent, T, H, ctx)
 		running = false
 		S.enabled = false
 		HS.enabled = false
+		HM.enabled = false
 		-- put GunHandler.Shoot back the way it was (only if nobody wrapped it after us)
 		if hookGH and hookFn and hookGH.Shoot == hookFn then
 			pcall(function()
