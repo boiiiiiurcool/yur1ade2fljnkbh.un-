@@ -87,6 +87,7 @@ function ExtraPage.build(parent, T, H, ctx)
 		soundIndex = 1,
 		mode = "On Hit",
 		volume = 1,
+		muteGun = false,   -- mute the game's own gun sound for YOUR gun while Hit Sounds is on
 	}
 
 	-- hit marker settings (speed 1 = text stays about 3s, 10 = about 0.3s)
@@ -1223,7 +1224,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	--   Sound (drop-down) / Sound Player Option (drop-down) / Volume
 	---------------------------------------------------------------------
 	local HSW = 320
-	local HSH = 166
+	local HSH = 210
 	local hsSettings = makeFloating("HitSoundSettings", HSW, HSH)
 	local hsPop = hsSettings.frame
 
@@ -1259,6 +1260,13 @@ function ExtraPage.build(parent, T, H, ctx)
 	makeSlider(hsPop, 130, "Volume", 64, 0.1, 3, 0.1, HS.volume, "%.1f", function(v)
 		HS.volume = v
 	end)
+
+	-- Mute Gun Sounds: silences the game's normal shot sound for your own gun
+	label(hsPop, "Mute Gun Sounds", UDim2.fromOffset(16, 166), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	makeSwitch(hsPop, HS.muteGun, function(on)
+		HS.muteGun = on
+	end, 180, 16)
 
 	local function openHs()
 		if hsSettings.isOpen() then
@@ -1391,6 +1399,9 @@ function ExtraPage.build(parent, T, H, ctx)
 	---------------------------------------------------------------------
 	local hooked = false
 	local trackHit = nil   -- filled in below (the hit marker code); called by both hit detectors
+	local gspTable = nil
+	local gspOriginal = nil
+	local gspFn = nil
 	local hookGH = nil
 	local hookOriginal = nil
 	local hookFn = nil
@@ -1501,6 +1512,34 @@ function ExtraPage.build(parent, T, H, ctx)
 		hookFn = hook
 		gh.Shoot = hook
 		hooked = true
+	end)
+
+	-- wrap GunSoundPlay.SoundPlay (the gun script calls it for every shot). While Mute Gun Sounds is on,
+	-- shots from YOUR gun make no normal sound, so only your hit sound plays. Other players' guns are untouched.
+	task.spawn(function()
+		local ok, gsp = pcall(function()
+			return require(ReplicatedStorage:WaitForChild("GunSoundPlay", 10))
+		end)
+		if not running then
+			return
+		end
+		if not ok or type(gsp) ~= "table" or type(gsp.SoundPlay) ~= "function" then
+			return
+		end
+		local origSound = gsp.SoundPlay
+		local function muted(handle, ...)
+			if running and HS.enabled and HS.muteGun and typeof(handle) == "Instance" then
+				local myChar = player.Character
+				if myChar and handle:IsDescendantOf(myChar) then
+					return
+				end
+			end
+			return origSound(handle, ...)
+		end
+		gspTable = gsp
+		gspOriginal = origSound
+		gspFn = muted
+		gsp.SoundPlay = muted
 	end)
 
 	-- fallback when GunHandler could not be wrapped: watch BULLET_RAYS parts and re-check the path
@@ -1831,6 +1870,12 @@ function ExtraPage.build(parent, T, H, ctx)
 		if hookGH and hookFn and hookGH.Shoot == hookFn then
 			pcall(function()
 				hookGH.Shoot = hookOriginal
+			end)
+		end
+		-- put GunSoundPlay.SoundPlay back the way it was
+		if gspTable and gspFn and gspTable.SoundPlay == gspFn then
+			pcall(function()
+				gspTable.SoundPlay = gspOriginal
 			end)
 		end
 		for i = 1, #conns do
