@@ -27,6 +27,8 @@
 --                              Click the dots again, or anywhere else, to close it.
 --                 Hit Part     a drop-down: Head (default) / Body / Left Leg / Right Leg / Left Arm /
 --                              Right Arm / Closest Part - which part of a player it fires at
+--                 Fire Method  a drop-down: Tool Activate (default, calls Activate()/Deactivate() on the
+--                              Tool you hold) or Mouse Click (mouse1press / mouse1release)
 --                 FILTERS      Team Check     ON = never fires at players on your team
 --                              Visible Check  ON = the wall check: a raycast from the camera to the hit
 --                                             part has to be clear, so it never fires at someone it
@@ -38,6 +40,12 @@
 --                                             that value, so it does nothing.
 --                              All four are off every time the script runs.
 --   Right column  Distance     Min / Max studs (from your character) the target has to be between
+--                 TIMING       Delay   = ms a target has to stay valid before it fires
+--                              Release = ms the fire button is held before it lets go (0 = hold until
+--                                        the target is no longer valid)
+--                              Random Delay   a switch (OFF every time the script runs). While it is
+--                                             on, the fixed Delay is not used: every shot waits a random
+--                                             time between the Min and Max slider (ms) instead.
 --
 --   Key / Mode / Target Lock (in the dots panel)
 --     Key          click it, then press a key or a mouse button (default: Mouse 2)
@@ -45,9 +53,8 @@
 --     Target Lock  ON = keeps firing at the same target instead of picking the nearest one every frame
 --                  (it still lets go the moment that target is no longer valid)
 --
--- HOW IT FIRES: it holds the Tool you are wielding Activated for as long as a target stays valid
--- (Activate() when one appears, Deactivate() the moment it does not). If your game fires some other
--- way, change pressFire() and releaseFire() below.
+-- HOW IT FIRES: the Fire Method drop-down (Tool Activate or Mouse Click). If your game has its own fire
+-- function, change pressFire() and releaseFire() below.
 --
 -- It switches itself off and cleans up when the Y1 window is unloaded.
 
@@ -84,6 +91,7 @@ function SilentPage.build(container, T, H, ctx)
 		mode = "Hold",
 		lockOn = false,       -- Target Lock
 		part = "Head",
+		fireMethod = "Tool Activate",
 		minDist = 0,
 		maxDist = 1000,
 		teamCheck = false,
@@ -91,21 +99,66 @@ function SilentPage.build(container, T, H, ctx)
 		healthCheck = false,
 		minHealth = 20,       -- percent; used while Health Check is on
 		knockedCheck = false, -- Zee Hood only, off every time the script runs
+		delayMs = 0,
+		releaseMs = 15,
+		randDelay = false,
+		randMin = 10,
+		randMax = 60,
 	}
 
 	local active = false      -- armed (the key is held / toggled on)
 	local locked = nil        -- the current target while Target Lock is on
 	local firing = false
 	local firingTool = nil
+	local firingMethod = "Tool"
+	local curDelay = 0
+	local warnedMouse = false
+	local mouseIgnoreUntil = 0
+	local waitStart = nil
+	local fireStart = 0
 	local listening = nil
 	local running = true
 	local conns = {}
 	local popupList = {}      -- every popup registers here so one click outside can close them all
 
 	---------------------------------------------------------------------
-	-- FIRE HOOKS (change these if your game fires some other way)
+	-- FIRE HOOKS (same idea as triggerbot.lua - change these if your game fires some other way)
 	---------------------------------------------------------------------
+	local mousePress = nil
+	local mouseRelease = nil
+	do
+		local okP, fnP = pcall(function()
+			return mouse1press
+		end)
+		local okR, fnR = pcall(function()
+			return mouse1release
+		end)
+		if okP and type(fnP) == "function" then
+			mousePress = fnP
+		end
+		if okR and type(fnR) == "function" then
+			mouseRelease = fnR
+		end
+	end
+
 	local function pressFire()
+		-- Mouse Click: hold the left mouse button down
+		if S.fireMethod == "Mouse Click" then
+			if mousePress == nil or mouseRelease == nil then
+				if not warnedMouse then
+					warnedMouse = true
+					warn("[silent] this executor has no mouse1press / mouse1release, so Mouse Click cannot fire. Use Fire Method: Tool Activate.")
+				end
+				return false
+			end
+			firingMethod = "Mouse"
+			firingTool = nil
+			mouseIgnoreUntil = os.clock() + 0.3
+			pcall(mousePress)
+			return true
+		end
+
+		-- Tool Activate: activate the Tool you are holding
 		local char = player.Character
 		if not char then
 			return false
@@ -114,12 +167,20 @@ function SilentPage.build(container, T, H, ctx)
 		if not tool then
 			return false
 		end
+		firingMethod = "Tool"
 		firingTool = tool
 		tool:Activate()
 		return true
 	end
 
 	local function releaseFire()
+		if firingMethod == "Mouse" then
+			mouseIgnoreUntil = os.clock() + 0.3
+			if mouseRelease then
+				pcall(mouseRelease)
+			end
+			return
+		end
 		local tool = firingTool
 		firingTool = nil
 		if tool and tool.Parent then
@@ -132,6 +193,7 @@ function SilentPage.build(container, T, H, ctx)
 			firing = false
 			releaseFire()
 		end
+		waitStart = nil
 	end
 
 	local function setActive(v)
@@ -828,8 +890,8 @@ function SilentPage.build(container, T, H, ctx)
 
 	---------------------------------------------------------------------
 	-- THE PAGE
-	--   left : Enable (switch + three dots), Hit Part, FILTERS
-	--   right: Distance
+	--   left : Enable (switch + three dots), Hit Part, Fire Method, FILTERS
+	--   right: Distance, Timing, Random Delay
 	---------------------------------------------------------------------
 	section(1, "SILENT AIM")
 
@@ -864,6 +926,11 @@ function SilentPage.build(container, T, H, ctx)
 	dropdownCard(1, "Hit Part", PART_OPTIONS, S.part, function(v)
 		S.part = v
 		locked = nil
+	end)
+
+	-- Fire Method: Tool Activate (default) or a real mouse click
+	dropdownCard(1, "Fire Method", { "Tool Activate", "Mouse Click" }, S.fireMethod, function(v)
+		S.fireMethod = v
 	end)
 
 	section(1, "FILTERS")
@@ -915,6 +982,58 @@ function SilentPage.build(container, T, H, ctx)
 	-- right column
 	section(2, "RANGE")
 	rangeCard(2)
+
+	section(2, "TIMING")
+
+	local fixedDelayApi = nil
+	do
+		local c = place(2, 106)
+		label(c, "Timing (ms)", UDim2.fromOffset(14, 6), UDim2.new(1, -28, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(c, "Release 0 = hold until the target is gone", UDim2.fromOffset(14, 23), UDim2.new(1, -28, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		fixedDelayApi = makeSlider(c, 44, "Delay", 50, 0, 500, 1, S.delayMs, "%d", function(v)
+			S.delayMs = v
+		end)
+		local releaseApi = makeSlider(c, 74, "Release", 50, 0, 500, 1, S.releaseMs, "%d", function(v)
+			S.releaseMs = v
+		end)
+		fixedDelayApi.dim(not S.randDelay)
+		releaseApi.dim(true)
+	end
+
+	-- Random Delay: a new random delay (between Min and Max) before every shot, instead of the fixed Delay
+	do
+		local c = place(2, 106)
+		label(c, "Random Delay", UDim2.fromOffset(14, 6), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(c, "Replaces Delay with this range", UDim2.fromOffset(14, 23), UDim2.new(1, -70, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		local minApi = nil
+		local maxApi = nil
+		minApi = makeSlider(c, 44, "Min", 50, 0, 500, 1, S.randMin, "%d", function(v)
+			S.randMin = v
+			if S.randMax < v then
+				S.randMax = v
+				maxApi.set(v)
+			end
+		end)
+		maxApi = makeSlider(c, 74, "Max", 50, 0, 500, 1, S.randMax, "%d", function(v)
+			S.randMax = v
+			if S.randMin > v then
+				S.randMin = v
+				minApi.set(v)
+			end
+		end)
+		minApi.dim(S.randDelay)
+		maxApi.dim(S.randDelay)
+		makeSwitch(c, S.randDelay, function(on)
+			S.randDelay = on
+			minApi.dim(on)
+			maxApi.dim(on)
+			fixedDelayApi.dim(not on)
+		end, 19)
+	end
 
 	finish()
 
@@ -1127,9 +1246,18 @@ function SilentPage.build(container, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- MAIN STEP: fires at whatever pickTarget() returns - no delay, no release timer. It holds the
-	-- Tool Activated for as long as a target stays valid and lets go the moment it is not.
+	-- MAIN STEP: fires at whatever pickTarget() returns, with the same Delay / Release timing the
+	-- triggerbot tab uses
 	---------------------------------------------------------------------
+	local function rollDelay()
+		if S.randDelay then
+			local lo = math.min(S.randMin, S.randMax)
+			local hi = math.max(S.randMin, S.randMax)
+			return lo + math.random() * (hi - lo)
+		end
+		return S.delayMs
+	end
+
 	local function step(dt)
 		if not running or not active then
 			return
@@ -1144,16 +1272,60 @@ function SilentPage.build(container, T, H, ctx)
 		local origin = Targeting.originPos(cam)
 		local target = pickTarget(cam, ref, origin)
 		local near = target ~= nil
+		local now = os.clock()
 
-		if near and not firing then
+		if firing then
+			local done = false
+			local held = (now - fireStart) * 1000
+			if S.releaseMs > 0 then
+				if held >= S.releaseMs then
+					done = true
+				end
+			else
+				if not near then
+					done = true
+				end
+			end
+			-- the tool was unequipped or removed (only matters for Tool Activate)
+			if firingMethod == "Tool" and (firingTool == nil or firingTool.Parent ~= player.Character) then
+				done = true
+			end
+			if done then
+				stopFiring()
+				-- still near a target: with the fixed Delay the next shot needs no new wait,
+				-- with Random Delay every shot gets a new random wait
+				if near then
+					if S.randDelay then
+						curDelay = rollDelay()
+						waitStart = now
+					else
+						curDelay = S.delayMs
+						waitStart = now - curDelay / 1000
+					end
+				end
+			end
+			return
+		end
+
+		if not near then
+			waitStart = nil
+			return
+		end
+
+		if waitStart == nil then
+			waitStart = now
+			curDelay = rollDelay()
+		end
+		local need = S.delayMs
+		if S.randDelay then
+			need = curDelay
+		end
+		if (now - waitStart) * 1000 >= need then
 			if pressFire() then
 				firing = true
+				fireStart = now
+				waitStart = nil
 			end
-		elseif (not near) and firing then
-			stopFiring()
-		elseif firing and (firingTool == nil or firingTool.Parent ~= player.Character) then
-			-- the tool was unequipped or removed while we were firing
-			stopFiring()
 		end
 	end
 
@@ -1217,6 +1389,11 @@ function SilentPage.build(container, T, H, ctx)
 			return
 		end
 
+		-- the click we sent ourselves (Fire Method: Mouse Click) is not the trigger key
+		if S.keybind == Enum.UserInputType.MouseButton1 and os.clock() < mouseIgnoreUntil then
+			return
+		end
+
 		-- keys respect "processed" (typing in chat); mouse buttons ignore it
 		local isMouseBind = S.keybind.EnumType ~= Enum.KeyCode
 		if processed and not isMouseBind then
@@ -1232,6 +1409,9 @@ function SilentPage.build(container, T, H, ctx)
 
 	conns[#conns + 1] = UserInputService.InputEnded:Connect(function(input)
 		if running and S.mode == "Hold" and matches(input, S.keybind) then
+			if S.keybind == Enum.UserInputType.MouseButton1 and os.clock() < mouseIgnoreUntil then
+				return
+			end
 			setActive(false)
 		end
 	end)
