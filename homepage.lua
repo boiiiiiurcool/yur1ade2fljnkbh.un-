@@ -12,16 +12,21 @@
 --       Component = "Rock and Roll by reruinz",
 --       OnNext = function() end,      -- the Next button (ui.lua opens the Info tab)
 --       OnEnable = function() end,    -- the Enable button (main.lua runs disable.lua here)
+--       AutoClose = 3,                -- seconds the notification stays after Enable worked (0 = stay)
 --   })
 --
 -- Inside: the game name, a green "Ready" pill, "yur1 is ready", a small line of text and
 -- Access / Build / Component at the bottom left. On the right a card with the game image.
 -- The game image also shows very dim behind the page. Layout follows the window size.
 --
--- In the empty space on the left there is a small notice for Zee Hood players with an
--- Enable button. The button works ONCE: it calls opts.OnEnable, and when that finishes the
--- button turns into a greyed-out "Enabled" and cannot be pressed again. If OnEnable fails
--- (for example the download failed) the button becomes "Try again" so you can retry.
+-- In the empty space on the left a notification fades in for Zee Hood players. It is a soft
+-- glass card (see-through, so the page behind it shows a little) with two ways out:
+--   * the X in its corner closes it for good,
+--   * Enable calls opts.OnEnable. That works ONCE: when it finishes the button turns into a
+--     greyed-out "Enabled" and the notification closes by itself after opts.AutoClose seconds
+--     (default 3, set 0 to keep it open).
+-- If OnEnable fails (for example the download failed or the file has an error) the full error
+-- text is shown inside the notification and the button becomes "Try again".
 
 local HomePage = {}
 
@@ -158,45 +163,183 @@ function HomePage.build(parent, T, H, opts)
 	sub.TextYAlignment = Enum.TextYAlignment.Top
 	sub.ZIndex = 3
 
-	-- ZEE HOOD NOTICE: in the empty space on the left, under the subtitle.
-	-- The Enable button works once (see the header of this file).
-	local notice = new("Frame", {
+	-- ZEE HOOD NOTIFICATION: floats in the empty space on the left, under the subtitle.
+	-- It fades in a moment after the page opens. The X closes it for good, Enable runs it once.
+	-- Built as a soft glass card: a gradient that is more see-through towards the right, a very
+	-- faint outline and no hard fill, so it melts into the page instead of sitting on it like a box.
+	local NOTICE_H = 106        -- normal height
+	local NOTICE_H_ERR = 150   -- height while an error message is showing
+	local AUTO_CLOSE = opts.AutoClose
+	if AUTO_CLOSE == nil then
+		AUTO_CLOSE = 3
+	end
+	local NOTICE_X = UDim2.new(1, -(CARD_S + 24 + 28 + 10) + 4, 0, 0)   -- width (4px more for the outline room)
+	local noticeBase = UDim2.fromOffset(22, 174)
+
+	-- canvas group so the whole notification fades together; it is 2px bigger than the glass
+	-- so the outline is not cut off at the edge
+	local notice = new("CanvasGroup", {
 		Name = "ZeeHoodNotice",
-		Position = UDim2.fromOffset(24, 176),
-		Size = UDim2.new(1, -(CARD_S + 24 + 28 + 10), 0, 104),
+		Position = noticeBase + UDim2.fromOffset(0, 14),
+		Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, NOTICE_H + 4),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+		ZIndex = 3,
+	}, root)
+
+	local glass = new("Frame", {
+		Name = "Glass",
+		Position = UDim2.fromOffset(2, 2),
+		Size = UDim2.new(1, -4, 1, -4),
 		BackgroundColor3 = T.SIDEBAR_BG,
 		BorderSizePixel = 0,
 		ZIndex = 3,
-	}, root)
-	corner(notice, 10)
-	stroke(notice, T.BORDER, 1, 0)
+	}, notice)
+	corner(glass, 12)
+	new("UIGradient", {
+		Rotation = 0,
+		Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.1),
+			NumberSequenceKeypoint.new(0.55, 0.38),
+			NumberSequenceKeypoint.new(1, 0.62),
+		}),
+	}, glass)
+	stroke(glass, T.ICON_HOVER, 1, 0.88)
 
-	local noticeText = label(notice, "Hey? are you on zee hood perchance, if you are turn this on before you get kicked..",
-		UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 38), Enum.Font.Gotham, 13, T.TEXT_COLOR)
+	-- round chip with an exclamation mark
+	local chip = new("Frame", {
+		Name = "Chip",
+		Position = UDim2.fromOffset(14, 14),
+		Size = UDim2.fromOffset(26, 26),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BackgroundTransparency = 0.2,
+		BorderSizePixel = 0,
+		ZIndex = 4,
+	}, glass)
+	corner(chip, 100)
+	local chipText = label(chip, "!", UDim2.fromOffset(0, 0), UDim2.fromScale(1, 1),
+		Enum.Font.GothamBold, 14, T.ICON_HOVER, Enum.TextXAlignment.Center)
+	chipText.ZIndex = 5
+
+	local noticeText = label(glass, "Hey? are you on zee hood perchance, if you are turn this on before you get kicked..",
+		UDim2.fromOffset(52, 12), UDim2.new(1, -92, 0, 38), Enum.Font.Gotham, 13, T.TEXT_COLOR)
 	noticeText.TextWrapped = true
 	noticeText.TextTruncate = Enum.TextTruncate.None
 	noticeText.TextYAlignment = Enum.TextYAlignment.Top
 	noticeText.ZIndex = 4
 
+	-- X (top right): closes the notification
+	local closeBtn = new("TextButton", {
+		Name = "NoticeClose",
+		AutoButtonColor = false,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -10, 0, 10),
+		Size = UDim2.fromOffset(22, 22),
+		BackgroundColor3 = T.HOVER_GREY,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Text = "",
+		ZIndex = 5,
+	}, glass)
+	corner(closeBtn, 6)
+	local closeBars = {}
+	local function closeBar(rot)
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(10, 2),
+			Rotation = rot,
+			BackgroundColor3 = T.ICON,
+			BorderSizePixel = 0,
+			ZIndex = 6,
+		}, closeBtn)
+		corner(f, 1)
+		closeBars[#closeBars + 1] = f
+	end
+	closeBar(45)
+	closeBar(-45)
+
 	local enableBtn = new("TextButton", {
 		Name = "EnableButton",
 		AutoButtonColor = false,
-		Position = UDim2.fromOffset(16, 62),
-		Size = UDim2.fromOffset(120, 30),
+		Position = UDim2.fromOffset(52, 60),
+		Size = UDim2.fromOffset(104, 28),
 		BackgroundColor3 = T.JOIN_BG,
 		BorderSizePixel = 0,
 		Font = Enum.Font.GothamMedium,
 		Text = "Enable",
 		TextSize = 13,
 		TextColor3 = T.BLACK,
-		ZIndex = 4,
-	}, notice)
+		ZIndex = 5,
+	}, glass)
 	corner(enableBtn, 8)
 
-	-- small line next to the button: what is happening / what went wrong
-	local enableNote = label(notice, "", UDim2.fromOffset(148, 62), UDim2.new(1, -164, 0, 30),
+	-- short status next to the button ("Running...", "Done", "Failed")
+	local enableNote = label(glass, "", UDim2.fromOffset(168, 60), UDim2.new(1, -184, 0, 28),
 		Enum.Font.Gotham, 11, T.DIM_TEXT)
 	enableNote.ZIndex = 4
+
+	-- the full error text, under the button (only visible after a failure)
+	local errorText = label(glass, "", UDim2.fromOffset(52, 98), UDim2.new(1, -68, 0, 40),
+		Enum.Font.Gotham, 11, T.HOVER_RED)
+	errorText.Name = "EnableError"
+	errorText.TextWrapped = true
+	errorText.TextTruncate = Enum.TextTruncate.None
+	errorText.TextYAlignment = Enum.TextYAlignment.Top
+	errorText.Visible = false
+	errorText.ZIndex = 4
+
+	local noticeInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local noticeOut = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+	local noticeGone = false
+
+	local function setNoticeHeight(h)
+		if noticeGone then
+			return
+		end
+		TweenService:Create(notice, noticeInfo, {
+			Size = UDim2.new(NOTICE_X.X.Scale, NOTICE_X.X.Offset, 0, h + 4),
+		}):Play()
+	end
+
+	-- slides down a little and fades out, then removes itself for good
+	local function closeNotice()
+		if noticeGone then
+			return
+		end
+		noticeGone = true
+		TweenService:Create(notice, noticeOut, {
+			Position = noticeBase + UDim2.fromOffset(0, 10),
+			GroupTransparency = 1,
+		}):Play()
+		task.delay(0.3, function()
+			notice:Destroy()
+		end)
+	end
+
+	-- fades in a moment after the page opened
+	task.delay(0.6, function()
+		if noticeGone then
+			return
+		end
+		TweenService:Create(notice, noticeInfo, { Position = noticeBase, GroupTransparency = 0 }):Play()
+	end)
+
+	-- X hover + click
+	closeBtn.MouseEnter:Connect(function()
+		TweenService:Create(closeBtn, TweenInfo.new(0.12), { BackgroundTransparency = 0.4 }):Play()
+		for i = 1, #closeBars do
+			TweenService:Create(closeBars[i], TweenInfo.new(0.12), { BackgroundColor3 = T.ICON_HOVER }):Play()
+		end
+	end)
+	closeBtn.MouseLeave:Connect(function()
+		TweenService:Create(closeBtn, TweenInfo.new(0.12), { BackgroundTransparency = 1 }):Play()
+		for i = 1, #closeBars do
+			TweenService:Create(closeBars[i], TweenInfo.new(0.12), { BackgroundColor3 = T.ICON }):Play()
+		end
+	end)
+	closeBtn.Activated:Connect(closeNotice)
 
 	-- states: "idle" (can press), "busy" (running), "done" (used up, never again), "failed" (can retry)
 	local enableState = "idle"
@@ -204,6 +347,9 @@ function HomePage.build(parent, T, H, opts)
 	local enableInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 	local function paintEnable()
+		if noticeGone then
+			return
+		end
 		local bg = T.JOIN_BG
 		local tc = T.BLACK
 		local txt = "Enable"
@@ -247,27 +393,38 @@ function HomePage.build(parent, T, H, opts)
 		enableState = "busy"
 		enableNote.Text = "Running..."
 		enableNote.TextColor3 = T.DIM_TEXT
+		errorText.Visible = false
+		setNoticeHeight(NOTICE_H)
 		paintEnable()
 		task.spawn(function()
 			local ok, err = pcall(opts.OnEnable)
-			if not enableBtn.Parent then
-				return
-			end
 			if ok then
 				enableState = "done"
-				enableNote.Text = "Done"
-				enableNote.TextColor3 = T.GREEN
+				if not noticeGone then
+					enableNote.Text = "Done"
+					enableNote.TextColor3 = T.GREEN
+				end
+				paintEnable()
+				-- the notification has done its job: it leaves by itself
+				if AUTO_CLOSE and AUTO_CLOSE > 0 then
+					task.delay(AUTO_CLOSE, closeNotice)
+				end
 			else
 				enableState = "failed"
 				local msg = tostring(err)
-				if #msg > 60 then
-					msg = string.sub(msg, 1, 57) .. "..."
+				if #msg > 220 then
+					msg = string.sub(msg, 1, 217) .. "..."
 				end
-				enableNote.Text = msg
-				enableNote.TextColor3 = T.HOVER_RED
 				warn("[Y1] Enable failed: " .. tostring(err))
+				if not noticeGone then
+					enableNote.Text = "Failed"
+					enableNote.TextColor3 = T.HOVER_RED
+					errorText.Text = msg
+					errorText.Visible = true
+					setNoticeHeight(NOTICE_H_ERR)
+				end
+				paintEnable()
 			end
-			paintEnable()
 		end)
 	end)
 
@@ -354,7 +511,7 @@ function HomePage.build(parent, T, H, opts)
 		TweenService:Create(nextScale, nextInfo, { Scale = 1 }):Play()
 	end)
 
-	return { Root = root, NextButton = nextBtn, EnableButton = enableBtn }
+	return { Root = root, NextButton = nextBtn, EnableButton = enableBtn, Notice = notice }
 end
 
 return HomePage
