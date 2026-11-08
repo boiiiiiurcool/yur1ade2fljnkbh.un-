@@ -1,14 +1,29 @@
--- extra.lua  (Y1 Misc tab > Extra page: BulletTracer, Zee Hood only)
+-- extra.lua  (Y1 Misc tab > Extra page: BulletTracer + HitSounds, Zee Hood only)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Your gun script makes a "BULLET_RAYS" part for every shot. This module watches for those and
--- leaves a tracer that fades out. Only YOUR shots get a tracer (a bullet that does not start close
--- to your character is ignored).
+-- BULLET TRACER
+--   Your gun script makes a "BULLET_RAYS" part for every shot. This module watches for those and
+--   leaves a tracer that fades out. Only YOUR shots get a tracer (a bullet that does not start close
+--   to your character is ignored).
 --
--- The page is one small Enable card (a switch, OFF every time the script starts, and three dots).
--- The dots open one settings pop-up: Color (+ opacity), Material, Fade Style, Thickness, Duration,
--- Rainbow (+ Speed). Click the dots again, or anywhere except the pop-up, to close it.
--- Material and Fade Style: click the button to go to the next choice.
+-- HIT SOUNDS
+--   Plays a sound effect for YOUR shots only (never for other people shooting).
+--   Sound Player Option:
+--     On Shot = plays every time you shoot.
+--     On Hit  = plays only when your shot actually hits another character (player / humanoid).
+--   It works by wrapping GunHandler.Shoot (the same function in the gun script you sent). Shoot returns
+--   the instance the bullet hit, so On Hit uses the exact same result the game uses. Only calls where
+--   Shooter == your character count. If GunHandler cannot be found, it falls back to watching the
+--   BULLET_RAYS parts and re-checking the bullet path with a raycast.
+--
+-- Each page card is a small Enable card (a switch, OFF every time the script starts, and three dots).
+-- The dots open one settings pop-up. Click the dots again, or anywhere except the pop-up, to close it.
+-- Tracer: Material and Fade Style: click the button to go to the next choice.
+-- Hit Sounds: Sound and Sound Player Option are real drop-down menus (they open a list next to the pop-up).
+--
+-- FIX: pop-ups no longer close when you click inside them near the bottom. The old check compared the
+-- mouse position (which includes the top bar offset) with the pop-up position (which may not), so the
+-- bottom strip of a pop-up counted as "outside". The check now tries every coordinate space.
 --
 -- Build signature: Extra.build(container, T, H, ctx) -> { Root = ..., Unload = fn }
 
@@ -20,6 +35,9 @@ function ExtraPage.build(parent, T, H, ctx)
 	local UserInputService = game:GetService("UserInputService")
 	local GuiService = game:GetService("GuiService")
 	local Debris = game:GetService("Debris")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local SoundService = game:GetService("SoundService")
+	local ContentProvider = game:GetService("ContentProvider")
 	local player = Players.LocalPlayer
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
@@ -27,6 +45,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	local SMOOTH = T.SMOOTH
 	local RADIUS = T.RADIUS
 
+	-- tracer settings
 	local S = {
 		enabled = false,
 		color = Color3.fromRGB(255, 220, 120),
@@ -37,6 +56,31 @@ function ExtraPage.build(parent, T, H, ctx)
 		easing = "Linear",
 		rainbow = false,
 		rainbowSpeed = 5,
+	}
+
+	-- hit sound settings
+	local SOUNDS = {
+		{ "Minecraft Bow", "135478009117226" },
+		{ "Undertale", "140721035016341" },
+		{ "Critical", "137392628136734" },
+		{ "Punch", "138208560796742" },
+		{ "Rock", "82708037443413" },
+		{ "DANG", "135602581462761" },
+		{ "Retro", "109681634329245" },
+		{ "Spear", "135278368445325" },
+		{ "Doom", "137176923000279" },
+	}
+	local SOUND_NAMES = {}
+	for i = 1, #SOUNDS do
+		SOUND_NAMES[i] = SOUNDS[i][1]
+	end
+	local MODES = { "On Shot", "On Hit" }
+
+	local HS = {
+		enabled = false,
+		soundIndex = 1,
+		mode = "On Hit",
+		volume = 1,
 	}
 
 	local OWN_RANGE = 15        -- a bullet has to start this close to your character to count as yours
@@ -58,14 +102,21 @@ function ExtraPage.build(parent, T, H, ctx)
 		return x >= p.X and x <= p.X + sz.X and y >= p.Y and y <= p.Y + sz.Y
 	end
 
+	-- true when the pointer is over obj. Mouse and touch positions can be shifted by the top bar
+	-- (GuiInset) compared with AbsolutePosition, so every possible space is tried. This is what
+	-- fixes pop-ups closing when you click near the bottom of them.
 	local function pointerOver(obj, input)
+		local inset = GuiService:GetGuiInset()
+		local ix = input.Position.X
+		local iy = input.Position.Y
 		if input.UserInputType == Enum.UserInputType.Touch then
-			local inset = GuiService:GetGuiInset()
-			return inRect(obj, input.Position.X, input.Position.Y)
-				or inRect(obj, input.Position.X + inset.X, input.Position.Y + inset.Y)
+			return inRect(obj, ix, iy) or inRect(obj, ix + inset.X, iy + inset.Y)
 		end
 		local m = UserInputService:GetMouseLocation()
 		return inRect(obj, m.X, m.Y)
+			or inRect(obj, m.X - inset.X, m.Y - inset.Y)
+			or inRect(obj, ix, iy)
+			or inRect(obj, ix + inset.X, iy + inset.Y)
 	end
 
 	local function pointerPos(input)
@@ -86,7 +137,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- root + the one card
+	-- root
 	---------------------------------------------------------------------
 	local root = new("Frame", {
 		Name = "ExtraRoot",
@@ -417,7 +468,6 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	-- a row with a title on the left and a button on the right; clicking the button goes to the next choice
-	-- (no drop-down list, so nothing gets cut off inside the pop-up)
 	local function cycleRow(c, y, title, options, startValue, onChange)
 		label(c, title, UDim2.fromOffset(16, y), UDim2.new(1, -150, 0, 28),
 			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
@@ -457,6 +507,127 @@ function ExtraPage.build(parent, T, H, ctx)
 			btn.Text = options[index]
 			onChange(options[index])
 		end)
+	end
+
+	-- a real drop-down: a row with a title and a button; clicking the button opens a list of choices in
+	-- its own little panel next to the settings pop-up (so nothing is cut off). Picking a choice closes
+	-- the list and calls onPick(index). Returns { frame = list panel, close = fn }.
+	local function dropdownRow(c, y, title, labelW, btnW, names, startIndex, onPick, besideFrame)
+		label(c, title, UDim2.fromOffset(16, y), UDim2.fromOffset(labelW, 28),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+
+		local btn = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -16, 0, y),
+			Size = UDim2.fromOffset(btnW, 28),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, c)
+		corner(btn, RADIUS + 2)
+
+		local current = startIndex
+		local nameLabel = label(btn, names[current], UDim2.fromOffset(10, 0), UDim2.new(1, -30, 1, 0),
+			Enum.Font.GothamMedium, 12, T.ICON_HOVER)
+		label(btn, "v", UDim2.new(1, -20, 0, 0), UDim2.fromOffset(12, 28),
+			Enum.Font.GothamBold, 11, T.DIM_TEXT, Enum.TextXAlignment.Center)
+
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+		end)
+
+		local optH = 26
+		local listW = math.max(btnW, 140)
+		local contentH = #names * optH + 8
+		local F = makeFloating("Dropdown" .. title, listW, contentH)
+		F.frame.ZIndex = 70
+
+		local sc = new("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = T.DIM_TEXT,
+			CanvasSize = UDim2.fromOffset(0, contentH),
+		}, F.frame)
+
+		local optButtons = {}
+		local function paintOptions()
+			for i = 1, #optButtons do
+				if i == current then
+					optButtons[i].BackgroundTransparency = 0
+				else
+					optButtons[i].BackgroundTransparency = 1
+				end
+			end
+		end
+
+		for i = 1, #names do
+			local ob = new("TextButton", {
+				AutoButtonColor = false,
+				Text = "",
+				Position = UDim2.fromOffset(4, 4 + (i - 1) * optH),
+				Size = UDim2.new(1, -8, 0, optH - 2),
+				BackgroundColor3 = T.HOVER_GREY,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, sc)
+			corner(ob, RADIUS)
+			label(ob, names[i], UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0),
+				Enum.Font.GothamMedium, 12, T.TEXT_COLOR)
+			optButtons[i] = ob
+
+			ob.MouseEnter:Connect(function()
+				ob.BackgroundTransparency = 0
+			end)
+			ob.MouseLeave:Connect(function()
+				if i == current then
+					ob.BackgroundTransparency = 0
+				else
+					ob.BackgroundTransparency = 1
+				end
+			end)
+			ob.Activated:Connect(function()
+				current = i
+				nameLabel.Text = names[i]
+				paintOptions()
+				F.close()
+				onPick(i)
+			end)
+		end
+		paintOptions()
+
+		local function openList()
+			local s = uiScale()
+			local rh = root.AbsoluteSize.Y / s
+			local h = math.min(contentH, math.max(60, rh - 8))
+			F.frame.Size = UDim2.fromOffset(listW, h)
+			sc.CanvasPosition = Vector2.new(0, 0)
+			F.open(placeNear(btn, listW, h, besideFrame))
+		end
+
+		btn.Activated:Connect(function()
+			if F.isOpen() then
+				F.close()
+			else
+				openList()
+			end
+		end)
+
+		-- clicking inside the list (or on its button) must never count as "outside"
+		popupList[#popupList + 1] = {
+			isOpen = function()
+				return F.isOpen()
+			end,
+			close = F.close,
+			hit = { F.frame, btn },
+		}
+
+		return { frame = F.frame, close = F.close }
 	end
 
 	---------------------------------------------------------------------
@@ -810,7 +981,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- THE ENABLE CARD (switch + three dots)
+	-- TRACER CARD (switch + three dots)   left half of the page
 	---------------------------------------------------------------------
 	local card = new("Frame", {
 		Name = "EnableCard",
@@ -848,7 +1019,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	local dots = makeDots(card, UDim2.new(1, -58, 0, 23))
 
 	---------------------------------------------------------------------
-	-- SETTINGS POP-UP (opens from the three dots)
+	-- TRACER SETTINGS POP-UP (opens from the three dots)
 	--   Color / Material / Fade Style / Thickness / Duration / Rainbow (+ Speed)
 	---------------------------------------------------------------------
 	local SW = 264
@@ -951,6 +1122,332 @@ function ExtraPage.build(parent, T, H, ctx)
 	}
 	-- the colour picker must not close when the colour square is clicked
 	table.insert(pickerEntry.hit, colorSwatch.btn)
+
+	---------------------------------------------------------------------
+	-- HIT SOUNDS: sound playing
+	---------------------------------------------------------------------
+	local lastPlay = 0
+
+	local function playHitSound(preview)
+		local now = os.clock()
+		if not preview and now - lastPlay < 0.05 then
+			return
+		end
+		lastPlay = now
+		local entry = SOUNDS[HS.soundIndex]
+		if not entry then
+			return
+		end
+		local snd = Instance.new("Sound")
+		snd.Name = "ExtraHitSound"
+		snd.SoundId = "rbxassetid://" .. entry[2]
+		snd.Volume = HS.volume
+		snd.Parent = SoundService
+		snd.Ended:Connect(function()
+			snd:Destroy()
+		end)
+		snd:Play()
+		Debris:AddItem(snd, 15)
+	end
+
+	local function preloadCurrent()
+		local entry = SOUNDS[HS.soundIndex]
+		if not entry then
+			return
+		end
+		task.spawn(function()
+			local snd = Instance.new("Sound")
+			snd.SoundId = "rbxassetid://" .. entry[2]
+			pcall(function()
+				ContentProvider:PreloadAsync({ snd })
+			end)
+			snd:Destroy()
+		end)
+	end
+
+	---------------------------------------------------------------------
+	-- HIT SOUNDS CARD (switch + three dots)   right half of the page
+	---------------------------------------------------------------------
+	local hsCard = new("Frame", {
+		Name = "HitSoundsCard",
+		Position = UDim2.new(0.5, 4, 0, 24),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, root)
+	corner(hsCard, RADIUS + 4)
+	stroke(hsCard, T.BORDER, 1, 0)
+
+	label(root, "HIT SOUNDS", UDim2.new(0.5, 6, 0, 6), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(hsCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local hsSub = label(hsCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	hsSub.RichText = true
+
+	local function refreshHsStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if HS.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font>'
+		end
+		hsSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+	end
+	refreshHsStatus()
+
+	makeSwitch(hsCard, HS.enabled, function(on)
+		HS.enabled = on
+		refreshHsStatus()
+		if on then
+			preloadCurrent()
+		end
+	end, 23)
+
+	local hsDots = makeDots(hsCard, UDim2.new(1, -58, 0, 23))
+
+	---------------------------------------------------------------------
+	-- HIT SOUNDS SETTINGS POP-UP
+	--   Sound (drop-down) / Sound Player Option (drop-down) / Volume
+	---------------------------------------------------------------------
+	local HSW = 320
+	local HSH = 166
+	local hsSettings = makeFloating("HitSoundSettings", HSW, HSH)
+	local hsPop = hsSettings.frame
+
+	label(hsPop, "Hit Sounds", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, hsPop)
+
+	local hsDropdowns = {}
+
+	hsDropdowns[#hsDropdowns + 1] = dropdownRow(hsPop, 50, "Sound", 150, 128, SOUND_NAMES,
+		HS.soundIndex, function(i)
+			HS.soundIndex = i
+			preloadCurrent()
+			playHitSound(true) -- preview the sound you just picked
+		end, hsPop)
+
+	local modeIndex = 2
+	for i = 1, #MODES do
+		if MODES[i] == HS.mode then
+			modeIndex = i
+		end
+	end
+	hsDropdowns[#hsDropdowns + 1] = dropdownRow(hsPop, 86, "Sound Player Option", 150, 128, MODES,
+		modeIndex, function(i)
+			HS.mode = MODES[i]
+		end, hsPop)
+
+	makeSlider(hsPop, 130, "Volume", 64, 0.1, 3, 0.1, HS.volume, "%.1f", function(v)
+		HS.volume = v
+	end)
+
+	local function openHs()
+		if hsSettings.isOpen() then
+			return
+		end
+		hsSettings.open(placeNear(hsDots.btn, HSW, HSH, nil))
+		hsDots.open = true
+		hsDots.paint()
+	end
+
+	local function closeHs()
+		hsSettings.close()
+		for i = 1, #hsDropdowns do
+			hsDropdowns[i].close()
+		end
+		hsDots.open = false
+		hsDots.paint()
+	end
+
+	hsDots.btn.Activated:Connect(function()
+		if hsSettings.isOpen() then
+			closeHs()
+		else
+			openHs()
+		end
+	end)
+
+	local hsHit = { hsPop, hsDots.btn }
+	for i = 1, #hsDropdowns do
+		hsHit[#hsHit + 1] = hsDropdowns[i].frame
+	end
+	popupList[#popupList + 1] = {
+		isOpen = function()
+			return hsSettings.isOpen()
+		end,
+		close = closeHs,
+		hit = hsHit,
+	}
+
+	---------------------------------------------------------------------
+	-- HIT SOUNDS: detecting YOUR shots / YOUR hits
+	---------------------------------------------------------------------
+	local hooked = false
+	local hookGH = nil
+	local hookOriginal = nil
+	local hookFn = nil
+
+	-- true when inst belongs to a living character that is not you
+	local function isEnemyHit(inst)
+		if typeof(inst) ~= "Instance" then
+			return false
+		end
+		local myChar = player.Character
+		if myChar and inst:IsDescendantOf(myChar) then
+			return false
+		end
+		local m = inst
+		while m and m ~= workspace and m ~= game do
+			if m:IsA("Model") then
+				local hum = m:FindFirstChildOfClass("Humanoid")
+				if hum then
+					return hum.Health > 0
+				end
+			end
+			m = m.Parent
+		end
+		return false
+	end
+
+	-- the params table passed to GunHandler.Shoot (it has a Shooter field)
+	local function findParams(...)
+		for i = 1, select("#", ...) do
+			local v = select(i, ...)
+			if type(v) == "table" and v.Shooter ~= nil then
+				return v
+			end
+		end
+		return nil
+	end
+
+	-- true when this Shoot call is a real shot fired by YOUR character
+	local function isMyShot(params)
+		local myChar = player.Character
+		if not myChar then
+			return false
+		end
+		if params.Shooter ~= myChar then
+			return false
+		end
+		if params.Replay == true or params.IsReflecting then
+			return false
+		end
+		return true
+	end
+
+	-- wrap GunHandler.Shoot (the gun script you sent). Done in the background so the page appears at once.
+	task.spawn(function()
+		local ok, gh = pcall(function()
+			local mods = ReplicatedStorage:WaitForChild("Modules", 10)
+			local m = mods:WaitForChild("GunHandler", 10)
+			return require(m)
+		end)
+		if not running then
+			return
+		end
+		if not ok or type(gh) ~= "table" or type(gh.Shoot) ~= "function" then
+			return -- the BULLET_RAYS fallback below will be used instead
+		end
+
+		local original = gh.Shoot
+		local function hook(...)
+			local params = findParams(...)
+			local mine = false
+			if running and HS.enabled and params ~= nil then
+				mine = isMyShot(params)
+			end
+
+			-- On Shot: play right away, before the gun script does its (slow) effects work
+			if mine and HS.mode == "On Shot" then
+				pcall(playHitSound, false)
+			end
+
+			-- Shoot returns: hit position, the instance that was hit, hit normal
+			local r1, r2, r3 = original(...)
+
+			-- On Hit: only when MY shot hit another character
+			if mine and HS.mode == "On Hit" and isEnemyHit(r2) then
+				pcall(playHitSound, false)
+			end
+
+			return r1, r2, r3
+		end
+
+		hookGH = gh
+		hookOriginal = original
+		hookFn = hook
+		gh.Shoot = hook
+		hooked = true
+	end)
+
+	-- fallback when GunHandler could not be wrapped: watch BULLET_RAYS parts and re-check the path
+	local function onBulletForSound(bulletPart)
+		task.wait()
+		if not running or not HS.enabled or hooked or not bulletPart.Parent then
+			return
+		end
+		local char = player.Character
+		if not char then
+			return
+		end
+
+		local mine = false
+		local owner = bulletPart:GetAttribute("OwnerCharacter")
+		if owner ~= nil then
+			mine = (owner == char.Name)
+		else
+			local rp = char:FindFirstChild("HumanoidRootPart")
+			if rp and (rp.Position - bulletPart.Position).Magnitude <= OWN_RANGE then
+				mine = true
+			end
+		end
+		if not mine then
+			return
+		end
+
+		if HS.mode == "On Shot" then
+			playHitSound(false)
+			return
+		end
+
+		-- On Hit: how long is the bullet, then raycast along it
+		local distance = 0
+		local kids = bulletPart:GetChildren()
+		for i = 1, #kids do
+			if kids[i]:IsA("Attachment") then
+				distance = math.max(distance, math.abs(kids[i].Position.Z))
+			end
+		end
+		if distance < 1 then
+			return
+		end
+		local rayParams = RaycastParams.new()
+		local exclude = { char }
+		local ign = workspace:FindFirstChild("Ignored")
+		if ign then
+			exclude[#exclude + 1] = ign
+		end
+		rayParams.FilterDescendantsInstances = exclude
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		rayParams.IgnoreWater = true
+		local res = workspace:Raycast(bulletPart.Position, bulletPart.CFrame.LookVector * (distance + 1), rayParams)
+		if res and isEnemyHit(res.Instance) then
+			playHitSound(false)
+		end
+	end
+
+	conns[#conns + 1] = workspace.DescendantAdded:Connect(function(d)
+		if running and HS.enabled and not hooked and d.Name == "BULLET_RAYS" and d:IsA("BasePart") then
+			task.spawn(onBulletForSound, d)
+		end
+	end)
 
 	---------------------------------------------------------------------
 	-- THE TRACER
@@ -1099,6 +1596,13 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 		running = false
 		S.enabled = false
+		HS.enabled = false
+		-- put GunHandler.Shoot back the way it was (only if nobody wrapped it after us)
+		if hookGH and hookFn and hookGH.Shoot == hookFn then
+			pcall(function()
+				hookGH.Shoot = hookOriginal
+			end)
+		end
 		for i = 1, #conns do
 			pcall(function()
 				conns[i]:Disconnect()
