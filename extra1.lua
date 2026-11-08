@@ -30,8 +30,7 @@ function Extra1Page.build(parent, T, H, ctx)
 
 	local ARMOR_TAG = "[Full Armor]"
 	local STIM_TAG = "[Stim]"
-	local COOLDOWN = 1.0     -- seconds before the same model can be bought again
-	local TICK = 0.2         -- how often the shop is checked
+	local COOLDOWN = 0.15    -- seconds before the same model can be bought again (lower = faster)
 
 	local OPTIONS = {
 		{ key = "armor", title = "Auto Buy Armor" },
@@ -322,10 +321,10 @@ function Extra1Page.build(parent, T, H, ctx)
 		end
 	end
 
-	task.spawn(function()
-		while running do
+	-- checked every frame so it reacts the moment you are in range
+	conns[#conns + 1] = game:GetService("RunService").Heartbeat:Connect(function()
+		if running then
 			pcall(step)
-			task.wait(TICK)
 		end
 	end)
 
