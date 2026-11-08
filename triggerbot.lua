@@ -18,7 +18,9 @@
 --                 Timing       Delay   = ms the crosshair has to stay on a target before it fires
 --                              Release = ms the fire button is held before it lets go (0 = hold until
 --                                        the crosshair leaves the target)
---                 FILTERS      Team Check  ON = never fires at players on your team
+--                 FILTERS      Team Check    ON = never fires at players on your team
+--                              Health Check  ON = never fires at players whose health is below the Min slider
+--                                            (in percent of their max health). Off every time the script starts.
 --   Right column  Distance     Min / Max studs (from your character) the target has to be between
 --                 Moving Targets   Hitbox = extra pixels around the crosshair (9 rays instead of 1)
 --                                  Lead   = ms ahead it predicts where a moving player will be
@@ -74,6 +76,8 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		minDist = 0,
 		maxDist = 1000,
 		teamCheck = true,
+		healthCheck = false,  -- off every time the script runs
+		minHealth = 20,       -- percent; used while Health Check is on
 		tolPx = 6,            -- hitbox grow in pixels (extra rays + extra on-screen size)
 		leadMs = 40,          -- how far ahead to predict moving targets
 		graceMs = 50,         -- keep the lock this long after the target flickers off
@@ -877,6 +881,23 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		S.teamCheck = on
 	end)
 
+	-- Health Check has a slider under it: players below that health (in percent) are skipped
+	do
+		local hc = place(1, 82)
+		label(hc, "Health Check", UDim2.fromOffset(14, 7), UDim2.new(1, -70, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		label(hc, "Skip low health targets", UDim2.fromOffset(14, 25), UDim2.new(1, -70, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		local hpApi = makeSlider(hc, 50, "Min", 28, 0, 100, 5, S.minHealth, "%d%%", function(v)
+			S.minHealth = v
+		end)
+		hpApi.dim(S.healthCheck)
+		makeSwitch(hc, S.healthCheck, function(on)
+			S.healthCheck = on
+			hpApi.dim(on)
+		end, 23)
+	end
+
 	-- right column
 	section(2, "RANGE")
 	rangeCard(2)
@@ -1065,6 +1086,18 @@ function TriggerbotPage.build(parent, T, H, ctx)
 		return false
 	end
 
+	-- Health Check: true when this player may be shot (always true while the check is off)
+	local function healthOk(hum)
+		if not S.healthCheck then
+			return true
+		end
+		local maxHp = hum.MaxHealth
+		if maxHp <= 0 then
+			maxHp = 100
+		end
+		return hum.Health / maxHp * 100 >= S.minHealth
+	end
+
 	-- returns true when the crosshair is on a valid, living, in-range enemy player
 	local function castHit(rayOrigin, rayDir, origin)
 		local dir = rayDir.Unit * (S.maxDist + 100)
@@ -1098,6 +1131,9 @@ function TriggerbotPage.build(parent, T, H, ctx)
 					exclude[#exclude + 1] = model
 				else
 					if S.teamCheck and plr.Team ~= nil and plr.Team == player.Team then
+						return false
+					end
+					if not healthOk(hum) then
 						return false
 					end
 					local d = (res.Position - origin).Magnitude
@@ -1196,7 +1232,7 @@ function TriggerbotPage.build(parent, T, H, ctx)
 					rootPart = char:FindFirstChild("HumanoidRootPart")
 				end
 				local teamBlocked = S.teamCheck and plr.Team ~= nil and plr.Team == player.Team
-				if hum and rootPart and hum.Health > 0 and not teamBlocked then
+				if hum and rootPart and hum.Health > 0 and not teamBlocked and healthOk(hum) then
 					local d = (rootPart.Position - origin).Magnitude
 					if d >= S.minDist and d <= S.maxDist then
 						local vel = rootPart.AssemblyLinearVelocity
