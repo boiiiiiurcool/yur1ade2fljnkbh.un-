@@ -216,12 +216,12 @@ function HomePage.build(parent, T, H, opts)
 	new("UIGradient", {
 		Rotation = 0,
 		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0.02),
-			NumberSequenceKeypoint.new(0.6, 0.1),
-			NumberSequenceKeypoint.new(1, 0.2),
+			NumberSequenceKeypoint.new(0, 0.25),
+			NumberSequenceKeypoint.new(0.55, 0.5),
+			NumberSequenceKeypoint.new(1, 0.72),
 		}),
 	}, glass)
-	stroke(glass, T.ICON_HOVER, 1, 0.8)
+	stroke(glass, T.ICON_HOVER, 1, 0.94)
 
 	-- text starts close to the left edge now that the icon chip is gone
 	local TEXT_X = 18
