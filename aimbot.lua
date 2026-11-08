@@ -65,7 +65,8 @@
 --
 -- SILENT page
 --   The warning screen lives in this file ("yur1 warning", a shield, a note, an "I accept any risk" box
---   and a Confirm button). Confirm looks disabled until the box is ticked, and then it does nothing yet.
+--   and a Confirm button). It sits on top of silent.lua's controls (hidden and faded out behind it); once
+--   the box is ticked and Confirm is pressed, the warning fades away and silent.lua fades in.
 --   The page content itself is its own module, silent.lua, which this file builds into the page.
 --
 -- TRIGGERBOT page
@@ -77,7 +78,8 @@
 --   <module>.build(container, T, H, ctx) for each one, inside a pcall, so a broken module cannot break the
 --   aimbot. ctx = { Settings = the aimbot settings table, Targeting = { refPoint, validTarget, acquire,
 --   bestPart, aimPosition, isVisible, originPos } }. If the module returns a table with an Unload function,
---   it is called when the window is unloaded. Both modules are empty for now.
+--   it is called when the window is unloaded. silent.lua uses this to run its own targeting + firing;
+--   triggerbot.lua is still empty for now.
 --
 -- The aimbot switches itself off and cleans up (including the FOV overlay) when the Y1 window is unloaded.
 
@@ -350,7 +352,9 @@ function AimbotPage.build(parent, T, H, opts)
 	local silP = { holder = makeHolder("Silent", false) }       -- the Silent page: the warning screen (here) + silent.lua
 	local trigP = { holder = makeHolder("Triggerbot", false) }  -- the Triggerbot page: triggerbot.lua only
 
-	-- a full size, transparent container on each of those two pages: the module is built into it
+	-- a full size, transparent container on each of those two pages: the module is built into it.
+	-- the Silent one is a CanvasGroup, starts hidden and faded out (the warning sits on top of it
+	-- until Confirm is pressed); the Triggerbot one is a plain frame, since it has no warning to hide behind.
 	local function makeContainer(holder, name)
 		return new("Frame", {
 			Name = name,
@@ -359,7 +363,14 @@ function AimbotPage.build(parent, T, H, opts)
 			BorderSizePixel = 0,
 		}, holder)
 	end
-	silP.box = makeContainer(silP.holder, "SilentModule")
+	silP.box = new("CanvasGroup", {
+		Name = "SilentModule",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		GroupTransparency = 1,
+		Visible = false,
+	}, silP.holder)
 	trigP.box = makeContainer(trigP.holder, "TriggerbotModule")
 
 	---------------------------------------------------------------------
@@ -2444,22 +2455,24 @@ function AimbotPage.build(parent, T, H, opts)
 	refreshStatus()
 
 	---------------------------------------------------------------------
-	-- SILENT PAGE: only a warning screen for now
+	-- SILENT PAGE: a warning screen, built on top of the silent.lua module (silP.box, built further
+	-- down this file)
 	--   "yur1 warning" / shield / note / "I accept any risk" box / Confirm button
-	-- Confirm looks disabled until the box is ticked. Once it is ticked it looks normal,
-	-- but it does nothing yet (add the action in confirm.Activated below).
+	-- Confirm looks disabled until the box is ticked. Once ticked and pressed, the warning fades out
+	-- and the silent.lua controls (hidden behind it until now) fade in.
 	---------------------------------------------------------------------
 	do
 		local GATE_W = 380
 		local GATE_H = 236
 
-		local gate = new("Frame", {
+		local gate = new("CanvasGroup", {
 			Name = "SilentWarning",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromOffset(GATE_W, GATE_H),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
+			GroupTransparency = 0,
 		}, silP.holder)
 
 		-- title
@@ -2653,7 +2666,14 @@ function AimbotPage.build(parent, T, H, opts)
 			if not accepted then
 				return
 			end
-			-- nothing happens yet
+			-- the warning fades out and is hidden; the silent.lua module (built into silP.box
+			-- further down) fades in behind it
+			TweenService:Create(gate, FAST, { GroupTransparency = 1 }):Play()
+			task.delay(FAST.Time + 0.02, function()
+				gate.Visible = false
+			end)
+			silP.box.Visible = true
+			TweenService:Create(silP.box, SMOOTH, { GroupTransparency = 0 }):Play()
 		end)
 	end
 
