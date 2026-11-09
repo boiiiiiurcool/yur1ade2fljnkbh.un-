@@ -28,6 +28,13 @@
 -- Pop-up: Visualize, Team Check, Knocked Check (BodyEffects["K.O"], Zee Hood), Size (slider 2-50 +
 -- typed box 1-100), Dynamic (smaller hitbox when they are close: Min Size + Full At).
 --
+-- ORBIT: a fourth small card (row 4, left). Enable switch + three dots.
+-- Set a keybind in the pop-up. Press it to start orbiting the player closest to your mouse
+-- (or the nearest player if nobody is on screen); press it again to stop. It also stops by itself
+-- when the target dies / leaves or you die.
+-- Pop-up: Keybind (click it, then press a key; Escape = none), Visualize (a ring showing the radius,
+-- around the target while orbiting, around you while you adjust it), Speed, Distance (radius, studs).
+--
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
 -- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
 
@@ -1303,15 +1310,359 @@ function AnimationPage.build(parent, T, H, ctx)
 		hit = { hbPop, hbDots.btn },
 	})
 
-	conns[#conns + 1] = RunService.Heartbeat:Connect(function()
-		if running and HB.enabled then
-			local txt = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - <font color="rgb(52,199,120)">'
-				.. tostring(activeCount) .. ' player(s)</font>'
-			if hbSub.Text ~= txt then
-				hbSub.Text = txt
+
+
+	---------------------------------------------------------------------
+	-- ORBIT (row 4, left)
+	---------------------------------------------------------------------
+	local OB = {
+		enabled = false,
+		key = nil,
+		visualize = false,
+		speed = 6,
+		dist = 12,
+		target = nil,
+		angle = 0,
+		listening = false,
+	}
+	local obRing = nil
+	local obAdorn = nil
+	local obName = ""
+
+	local obCard = new("Frame", {
+		Name = "OrbitCard",
+		Position = UDim2.fromOffset(2, 246),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, parent)
+	corner(obCard, RADIUS + 4)
+	stroke(obCard, T.BORDER, 1, 0)
+
+	local obCaption = label(parent, "ORBIT", UDim2.fromOffset(4, 228), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(obCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local obSub = label(obCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	obSub.RichText = true
+
+	local function refreshObStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if OB.target then
+			state = '<font color="rgb(52,199,120)">Orbiting</font>'
+		elseif OB.enabled then
+			state = '<font color="rgb(52,199,120)">Ready</font>'
+		end
+		local txt = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - ' .. state
+		if obSub.Text ~= txt then
+			obSub.Text = txt
+		end
+	end
+
+	local function hideRing()
+		if obRing then
+			pcall(function()
+				obRing:Destroy()
+			end)
+		end
+		obRing = nil
+		obAdorn = nil
+	end
+
+	local function stopOrbit()
+		OB.target = nil
+		refreshObStatus()
+	end
+
+	X.makeSwitch(obCard, false, function(on)
+		OB.enabled = on
+		if not on then
+			stopOrbit()
+		end
+		refreshObStatus()
+	end, 23)
+	refreshObStatus()
+
+	local obDots = X.makeDots(obCard, UDim2.new(1, -58, 0, 23))
+
+	local OBW = 290
+	local OBH = 200
+	local obF = X.makeFloating("OrbitSettings", OBW, OBH)
+	local obPop = obF.frame
+
+	label(obPop, "Orbit", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, obPop)
+
+	-- keybind
+	label(obPop, "Keybind", UDim2.fromOffset(16, 50), UDim2.new(1, -150, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local keyBtn = new("TextButton", {
+		AutoButtonColor = false,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, 50),
+		Size = UDim2.fromOffset(110, 28),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = T.ICON_HOVER,
+		Text = "None",
+	}, obPop)
+	corner(keyBtn, RADIUS + 2)
+	keyBtn.MouseEnter:Connect(function()
+		TweenService:Create(keyBtn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+	end)
+	keyBtn.MouseLeave:Connect(function()
+		TweenService:Create(keyBtn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+	end)
+	keyBtn.Activated:Connect(function()
+		OB.listening = true
+		keyBtn.Text = "Press a key..."
+	end)
+
+	label(obPop, "Visualize", UDim2.fromOffset(16, 84), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(obPop, false, function(on)
+		OB.visualize = on
+		if not on then
+			hideRing()
+		end
+	end, 98, 16)
+
+	makeSlider(obPop, 128, "Speed", 64, 1, 20, 1, OB.speed, "%d", function(v)
+		OB.speed = v
+	end)
+	makeSlider(obPop, 158, "Distance", 64, 3, 40, 1, OB.dist, "%d", function(v)
+		OB.dist = v
+	end)
+
+	local function openOb()
+		if obF.isOpen() then
+			return
+		end
+		obF.open(X.placeNear(obDots.btn, OBW, OBH, nil))
+		obDots.open = true
+		obDots.paint()
+	end
+
+	local function closeOb()
+		obF.close()
+		if OB.listening then
+			OB.listening = false
+			if OB.key then
+				keyBtn.Text = OB.key.Name
+			else
+				keyBtn.Text = "None"
+			end
+		end
+		obDots.open = false
+		obDots.paint()
+	end
+
+	obDots.btn.Activated:Connect(function()
+		if obF.isOpen() then
+			closeOb()
+		else
+			openOb()
+		end
+	end)
+
+	X.addPopup({
+		isOpen = function()
+			return obF.isOpen()
+		end,
+		close = closeOb,
+		hit = { obPop, obDots.btn },
+	})
+
+	-- the player closest to the mouse (on screen), else the nearest one in the world
+	local function pickTarget()
+		local char = player.Character
+		local mroot = nil
+		if char then
+			mroot = char:FindFirstChild("HumanoidRootPart")
+		end
+		if not mroot then
+			return nil
+		end
+		local cam = workspace.CurrentCamera
+		local mouse = UserInputService:GetMouseLocation()
+		local bestScreen = nil
+		local bestScreenD = math.huge
+		local bestWorld = nil
+		local bestWorldD = math.huge
+		local list = Players:GetPlayers()
+		for i = 1, #list do
+			local p = list[i]
+			if p ~= player and p.Character then
+				local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+				local hum = p.Character:FindFirstChildOfClass("Humanoid")
+				if hrp and hum and hum.Health > 0 then
+					local wd = (hrp.Position - mroot.Position).Magnitude
+					if wd < bestWorldD then
+						bestWorldD = wd
+						bestWorld = p
+					end
+					if cam then
+						local v, on = cam:WorldToViewportPoint(hrp.Position)
+						if on then
+							local sd = (Vector2.new(v.X, v.Y) - mouse).Magnitude
+							if sd < bestScreenD then
+								bestScreenD = sd
+								bestScreen = p
+							end
+						end
+					end
+				end
+			end
+		end
+		return bestScreen or bestWorld
+	end
+
+	local function startOrbit()
+		local p = pickTarget()
+		if not p then
+			return
+		end
+		local char = player.Character
+		local mroot = nil
+		if char then
+			mroot = char:FindFirstChild("HumanoidRootPart")
+		end
+		local thrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+		if not mroot or not thrp then
+			return
+		end
+		OB.target = p
+		obName = p.Name
+		local d = mroot.Position - thrp.Position
+		OB.angle = math.atan2(d.Z, d.X)
+		refreshObStatus()
+	end
+
+	conns[#conns + 1] = UserInputService.InputBegan:Connect(function(input, processed)
+		if not running then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+		if OB.listening then
+			OB.listening = false
+			if input.KeyCode == Enum.KeyCode.Escape then
+				OB.key = nil
+				keyBtn.Text = "None"
+			else
+				OB.key = input.KeyCode
+				keyBtn.Text = input.KeyCode.Name
+			end
+			return
+		end
+		if processed or not OB.enabled or not OB.key then
+			return
+		end
+		if input.KeyCode == OB.key then
+			if OB.target then
+				stopOrbit()
+			else
+				startOrbit()
 			end
 		end
 	end)
+
+	local function updateRing(center)
+		if not OB.visualize or not center then
+			hideRing()
+			return
+		end
+		if not obRing or not obRing.Parent then
+			hideRing()
+			obRing = Instance.new("Part")
+			obRing.Name = "OrbitRing"
+			obRing.Anchored = true
+			obRing.CanCollide = false
+			obRing.CanQuery = false
+			obRing.CanTouch = false
+			obRing.CastShadow = false
+			obRing.Transparency = 1
+			obRing.Size = Vector3.new(0.2, 0.2, 0.2)
+			obRing.Parent = workspace
+			obAdorn = Instance.new("CylinderHandleAdornment")
+			obAdorn.Name = "OrbitRingGfx"
+			obAdorn.Adornee = obRing
+			obAdorn.AlwaysOnTop = true
+			obAdorn.ZIndex = 1
+			obAdorn.Height = 0.12
+			obAdorn.Color3 = Color3.fromRGB(120, 200, 255)
+			obAdorn.Transparency = 0.3
+			obAdorn.CFrame = CFrame.Angles(math.pi / 2, 0, 0)
+			obAdorn.Parent = obRing
+		end
+		obRing.CFrame = CFrame.new(center - Vector3.new(0, 2.7, 0))
+		if obAdorn then
+			local r = OB.dist
+			if obAdorn.Radius ~= r then
+				pcall(function()
+					obAdorn.InnerRadius = 0
+					obAdorn.Radius = r
+					obAdorn.InnerRadius = math.max(r - 0.18, 0)
+				end)
+			end
+		end
+	end
+
+	conns[#conns + 1] = RunService.Heartbeat:Connect(function(dt)
+		if not running then
+			return
+		end
+		local char = player.Character
+		local mroot = nil
+		local mhum = nil
+		if char then
+			mroot = char:FindFirstChild("HumanoidRootPart")
+			mhum = char:FindFirstChildOfClass("Humanoid")
+		end
+
+		local center = nil
+		if OB.target then
+			local tchar = OB.target.Character
+			local thrp = nil
+			local thum = nil
+			if tchar then
+				thrp = tchar:FindFirstChild("HumanoidRootPart")
+				thum = tchar:FindFirstChildOfClass("Humanoid")
+			end
+			if not OB.enabled or not mroot or not mhum or mhum.Health <= 0
+				or not thrp or not thum or thum.Health <= 0 then
+				stopOrbit()
+			else
+				OB.angle = OB.angle + OB.speed * 0.5 * dt
+				local tp = thrp.Position
+				local pos = Vector3.new(tp.X + math.cos(OB.angle) * OB.dist, tp.Y, tp.Z + math.sin(OB.angle) * OB.dist)
+				mroot.CFrame = CFrame.lookAt(pos, Vector3.new(tp.X, pos.Y, tp.Z))
+				mroot.AssemblyLinearVelocity = Vector3.zero
+				mroot.AssemblyAngularVelocity = Vector3.zero
+				center = tp
+			end
+		elseif OB.enabled and mroot then
+			center = mroot.Position   -- preview of the radius around you
+		end
+		updateRing(center)
+	end)
+
+	local function orbitUnload()
+		OB.enabled = false
+		OB.target = nil
+		hideRing()
+	end
 
 	---------------------------------------------------------------------
 	-- unload: put the original animations back
@@ -1324,6 +1675,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		afkOn = false
 		running = false
 		pcall(hitboxUnload)
+		pcall(orbitUnload)
 		applyToken = applyToken + 1
 		runApply(true, false)
 		for i = 1, #conns do
@@ -1340,6 +1692,9 @@ function AnimationPage.build(parent, T, H, ctx)
 			hbCard:Destroy()
 			hbCaption:Destroy()
 			hbPop:Destroy()
+			obCard:Destroy()
+			obCaption:Destroy()
+			obPop:Destroy()
 		end)
 	end
 
