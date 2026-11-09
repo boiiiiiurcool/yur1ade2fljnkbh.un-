@@ -12,6 +12,15 @@
 --   Custom Exposure  Enable + three dots (Exposure slider).
 --   Custom Brightness Enable + three dots (Brightness slider).
 --   Custom Time      Enable + three dots (Time slider, shown as hh:mm).
+--   Color Correction Enable + colour square (tint) + three dots (Saturation, Contrast, Brightness).
+--   Bloom            Enable + three dots (Intensity, Size, Threshold).
+--   Sun Rays         Enable + three dots (Intensity, Spread).
+--   Blur / Depth of Field  Enable + three dots (Blur size, Depth of Field switch, Focus Distance, Amount).
+--   No Shadows       Enable only. Turns the world's shadows off (more FPS).
+--   X-Ray            Enable + three dots (Transparency). Makes the map see-through on YOUR screen only
+--                    (players and Terrain are left alone).
+--   Weather          Enable + three dots (Type: Rain / Snow / Wind, Amount, Wind). Particles that follow
+--                    your camera. Wind also pushes the world's wind (workspace.GlobalWind).
 -- The values are set again every frame, so games that keep changing the lighting cannot undo them.
 --
 -- Build signature: World.build(container, T, H, opts) -> { Root = ..., Unload = fn }
@@ -54,6 +63,40 @@ function WorldPage.build(parent, T, H, opts)
 			rows = { { t = "slider", key = "value", name = "Brightness", min = 0, max = 10, step = 0.1, fmt = "%.1f", value = 3 } } },
 		{ id = "time", title = "Custom Time", dots = true,
 			rows = { { t = "slider", key = "value", name = "Time", min = 0, max = 24, step = 0.1, time = true, value = 12 } } },
+		{ id = "colorcorr", title = "Color Correction", swatch = true, dots = true,
+			color = Color3.fromRGB(255, 255, 255),
+			rows = {
+				{ t = "slider", key = "sat", name = "Saturation", min = -1, max = 2, step = 0.05, fmt = "%.2f", value = 0 },
+				{ t = "slider", key = "con", name = "Contrast", min = -1, max = 1, step = 0.05, fmt = "%.2f", value = 0 },
+				{ t = "slider", key = "bri", name = "Brightness", min = -1, max = 1, step = 0.05, fmt = "%.2f", value = 0 },
+			} },
+		{ id = "bloom", title = "Bloom", dots = true,
+			rows = {
+				{ t = "slider", key = "inten", name = "Intensity", min = 0, max = 5, step = 0.1, fmt = "%.1f", value = 1 },
+				{ t = "slider", key = "size", name = "Size", min = 0, max = 56, step = 1, fmt = "%d", value = 24 },
+				{ t = "slider", key = "thresh", name = "Threshold", min = 0, max = 4, step = 0.1, fmt = "%.1f", value = 0.8 },
+			} },
+		{ id = "sunrays", title = "Sun Rays", dots = true,
+			rows = {
+				{ t = "slider", key = "inten", name = "Intensity", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 0.25 },
+				{ t = "slider", key = "spread", name = "Spread", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 1 },
+			} },
+		{ id = "blur", title = "Blur / Depth of Field", dots = true,
+			rows = {
+				{ t = "slider", key = "blur", name = "Blur", min = 0, max = 56, step = 1, fmt = "%d", value = 12 },
+				{ t = "toggle", key = "dof", name = "Depth of Field", value = false },
+				{ t = "slider", key = "focus", name = "Focus", min = 5, max = 300, step = 5, fmt = "%d", value = 30, needs = "dof" },
+				{ t = "slider", key = "amt", name = "Amount", min = 0, max = 100, step = 5, fmt = "%d%%", value = 60, needs = "dof" },
+			} },
+		{ id = "shadows", title = "No Shadows", dots = false },
+		{ id = "xray", title = "X-Ray", dots = true,
+			rows = { { t = "slider", key = "value", name = "Transparency", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 0.7 } } },
+		{ id = "weather", title = "Weather", dots = true,
+			rows = {
+				{ t = "cycle", key = "kind", name = "Type", options = { "Rain", "Snow", "Wind" }, value = "Rain" },
+				{ t = "slider", key = "amount", name = "Amount", min = 1, max = 100, step = 1, fmt = "%d", value = 50 },
+				{ t = "slider", key = "wind", name = "Wind", min = 0, max = 100, step = 1, fmt = "%d", value = 10 },
+			} },
 	}
 
 	local F = {}
@@ -609,7 +652,7 @@ function WorldPage.build(parent, T, H, opts)
 	---------------------------------------------------------------------
 	-- the cards (two columns)
 	---------------------------------------------------------------------
-	local ROW_STEP = 74
+	local ROW_STEP = 68
 	local refreshSub = nil
 	local openFor = nil
 	local closePop = nil
@@ -831,7 +874,7 @@ function WorldPage.build(parent, T, H, opts)
 		return S
 	end
 
-	local sliders = { makeSliderWidget(), makeSliderWidget() }
+	local sliders = { makeSliderWidget(), makeSliderWidget(), makeSliderWidget(), makeSliderWidget() }
 
 	-- the one switch row (Fog Glow)
 	local tg = { row = nil, f = nil }
@@ -862,6 +905,54 @@ function WorldPage.build(parent, T, H, opts)
 		end
 	end, 14, 16)
 
+	-- the one cycle row (Weather type): click the button to go to the next choice
+	local cyc = { row = nil, f = nil }
+	cyc.box = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 28),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, pop)
+	cyc.name = label(cyc.box, "", UDim2.fromOffset(16, 0), UDim2.new(1, -150, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	cyc.btn = new("TextButton", {
+		AutoButtonColor = false,
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, 0),
+		Size = UDim2.fromOffset(112, 28),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = T.ICON_HOVER,
+		Text = "",
+	}, cyc.box)
+	corner(cyc.btn, RADIUS + 2)
+	cyc.btn.MouseEnter:Connect(function()
+		TweenService:Create(cyc.btn, FAST, { BackgroundColor3 = T.HOVER_GREY }):Play()
+	end)
+	cyc.btn.MouseLeave:Connect(function()
+		TweenService:Create(cyc.btn, FAST, { BackgroundColor3 = T.CLUSTER_BG }):Play()
+	end)
+	cyc.btn.Activated:Connect(function()
+		if not cyc.row or not cyc.f then
+			return
+		end
+		local choices = cyc.row.options
+		local idx = 1
+		for i = 1, #choices do
+			if choices[i] == cyc.f.vals[cyc.row.key] then
+				idx = i
+			end
+		end
+		idx = idx + 1
+		if idx > #choices then
+			idx = 1
+		end
+		cyc.f.vals[cyc.row.key] = choices[idx]
+		cyc.btn.Text = choices[idx]
+	end)
+
 	local popEntry = nil
 
 	local function paintAllDots()
@@ -884,6 +975,8 @@ function WorldPage.build(parent, T, H, opts)
 		end
 		tg.box.Visible = false
 		tg.row = nil
+		cyc.box.Visible = false
+		cyc.row = nil
 
 		local y = 50
 		local si = 0
@@ -900,13 +993,21 @@ function WorldPage.build(parent, T, H, opts)
 				S.box.Visible = true
 				S.refresh()
 				y = y + 30
-			else
+			elseif row.t == "toggle" then
 				tg.f = f
 				tg.row = row
 				tg.name.Text = row.name
 				tg.switch.set(f.vals[row.key] == true)
 				tg.box.Position = UDim2.fromOffset(0, y)
 				tg.box.Visible = true
+				y = y + 34
+			else
+				cyc.f = f
+				cyc.row = row
+				cyc.name.Text = row.name
+				cyc.btn.Text = f.vals[row.key]
+				cyc.box.Position = UDim2.fromOffset(0, y)
+				cyc.box.Visible = true
 				y = y + 34
 			end
 		end
@@ -1023,6 +1124,212 @@ function WorldPage.build(parent, T, H, opts)
 		atmoOrig = {}
 	end
 
+	-- extra effects (each one only exists while its feature is on)
+	local ccE = nil
+	local bloomE = nil
+	local raysE = nil
+	local blurE = nil
+	local dofE = nil
+	local origShadows = nil
+	local origWind = nil
+
+	local EFFECT_NAMES = { "Y1ColorCorrection", "Y1Bloom", "Y1SunRays", "Y1Blur", "Y1DOF" }
+	for i = 1, #EFFECT_NAMES do
+		local old = Lighting:FindFirstChild(EFFECT_NAMES[i])
+		if old then
+			pcall(function()
+				old:Destroy()
+			end)
+		end
+	end
+	do
+		local cam0 = workspace.CurrentCamera
+		local oldW = cam0 and cam0:FindFirstChild("Y1Weather")
+		if oldW then
+			pcall(function()
+				oldW:Destroy()
+			end)
+		end
+	end
+
+	local function ensureEffect(ref, class, name)
+		if ref and ref.Parent == Lighting then
+			return ref
+		end
+		if ref then
+			pcall(function()
+				ref:Destroy()
+			end)
+		end
+		local e = Instance.new(class)
+		e.Name = name
+		e.Parent = Lighting
+		return e
+	end
+
+	local function dropEffect(ref)
+		if ref then
+			pcall(function()
+				ref:Destroy()
+			end)
+		end
+		return nil
+	end
+
+	-- X-RAY: LocalTransparencyModifier only changes what YOU see, never the real part
+	local xrayParts = setmetatable({}, { __mode = "k" })
+	local xrayOn = false
+	local xrayToken = 0
+	local xrayApplied = nil
+
+	local function isCharPart(p)
+		local m = p.Parent
+		while m and m ~= workspace do
+			if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then
+				return true
+			end
+			m = m.Parent
+		end
+		return false
+	end
+
+	local function xrayAdd(p)
+		if not p:IsA("BasePart") or p:IsA("Terrain") then
+			return
+		end
+		if p.Transparency >= 1 or string.sub(p.Name, 1, 2) == "Y1" then
+			return
+		end
+		if isCharPart(p) then
+			return
+		end
+		xrayParts[p] = true
+		p.LocalTransparencyModifier = xrayApplied or 0
+	end
+
+	local function xrayScan(token)
+		local list = workspace:GetDescendants()
+		local n = 0
+		for i = 1, #list do
+			if token ~= xrayToken or not xrayOn then
+				return
+			end
+			pcall(xrayAdd, list[i])
+			n = n + 1
+			if n % 400 == 0 then
+				task.wait()
+			end
+		end
+	end
+
+	conns[#conns + 1] = workspace.DescendantAdded:Connect(function(d)
+		if running and xrayOn then
+			pcall(xrayAdd, d)
+		end
+	end)
+
+	-- WEATHER: a see-through part that follows your camera and carries one particle emitter
+	local wPart = nil
+	local wEmitter = nil
+	local wKind = nil
+
+	local function weatherStop()
+		if wPart then
+			pcall(function()
+				wPart:Destroy()
+			end)
+		end
+		wPart = nil
+		wEmitter = nil
+		wKind = nil
+	end
+
+	local function weatherBuild(kind)
+		weatherStop()
+		local cam = workspace.CurrentCamera
+		if not cam then
+			return
+		end
+		local part = Instance.new("Part")
+		part.Name = "Y1Weather"
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanTouch = false
+		part.CanQuery = false
+		part.CastShadow = false
+		part.Transparency = 1
+		part.Size = Vector3.new(90, 1, 90)
+
+		local em = Instance.new("ParticleEmitter")
+		em.LightInfluence = 0
+		em.Rate = 0
+		if kind == "Rain" then
+			em.EmissionDirection = Enum.NormalId.Bottom
+			em.Speed = NumberRange.new(85, 100)
+			em.Lifetime = NumberRange.new(0.8, 0.9)
+			em.Size = NumberSequence.new(0.12)
+			em.Color = ColorSequence.new(Color3.fromRGB(190, 210, 235))
+			em.Transparency = NumberSequence.new(0.45)
+			em.LightEmission = 0.2
+			em.SpreadAngle = Vector2.new(2, 2)
+			pcall(function()
+				em.Orientation = Enum.ParticleOrientation.VelocityParallel
+				em.Squash = NumberSequence.new(-3)
+			end)
+		elseif kind == "Snow" then
+			em.EmissionDirection = Enum.NormalId.Bottom
+			em.Speed = NumberRange.new(6, 10)
+			em.Lifetime = NumberRange.new(6, 7)
+			em.Size = NumberSequence.new(0.3)
+			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+			em.Transparency = NumberSequence.new(0.2)
+			em.LightEmission = 0.6
+			em.SpreadAngle = Vector2.new(30, 30)
+			em.RotSpeed = NumberRange.new(-60, 60)
+		else
+			part.Size = Vector3.new(1, 50, 90)
+			em.EmissionDirection = Enum.NormalId.Right
+			em.Speed = NumberRange.new(50, 70)
+			em.Lifetime = NumberRange.new(1.4, 1.6)
+			em.Size = NumberSequence.new(0.15)
+			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+			em.Transparency = NumberSequence.new(0.6)
+			em.LightEmission = 0.3
+			em.SpreadAngle = Vector2.new(5, 5)
+			pcall(function()
+				em.Orientation = Enum.ParticleOrientation.VelocityParallel
+				em.Squash = NumberSequence.new(-3)
+			end)
+		end
+		em.Parent = part
+		part.CFrame = CFrame.new(cam.CFrame.Position)
+		part.Parent = cam
+		wPart = part
+		wEmitter = em
+		wKind = kind
+	end
+
+	local function weatherUpdate(amount, wind)
+		local cam = workspace.CurrentCamera
+		if not cam or not wPart or not wEmitter then
+			return
+		end
+		local cp = cam.CFrame.Position
+		if wKind == "Wind" then
+			wPart.CFrame = CFrame.new(cp + Vector3.new(-50, 8, 0))
+			wEmitter.Rate = amount * 2
+			wEmitter.Speed = NumberRange.new(20 + wind * 0.6, 30 + wind * 0.8)
+		else
+			wPart.CFrame = CFrame.new(cp + Vector3.new(0, 40, 0))
+			local per = 10
+			if wKind == "Snow" then
+				per = 4
+			end
+			wEmitter.Rate = amount * per
+			wEmitter.Acceleration = Vector3.new(wind * 0.5, 0, wind * 0.2)
+		end
+	end
+
 	local function step()
 		-- ambience
 		if F.ambience.enabled then
@@ -1118,6 +1425,130 @@ function WorldPage.build(parent, T, H, opts)
 			Lighting.ClockTime = origTime
 			origTime = nil
 		end
+
+		-- color correction
+		local cc = F.colorcorr
+		if cc.enabled then
+			ccE = ensureEffect(ccE, "ColorCorrectionEffect", "Y1ColorCorrection")
+			ccE.Saturation = cc.vals.sat
+			ccE.Contrast = cc.vals.con
+			ccE.Brightness = cc.vals.bri
+			ccE.TintColor = cc.color
+		elseif ccE then
+			ccE = dropEffect(ccE)
+		end
+
+		-- bloom
+		local bl = F.bloom
+		if bl.enabled then
+			bloomE = ensureEffect(bloomE, "BloomEffect", "Y1Bloom")
+			bloomE.Intensity = bl.vals.inten
+			bloomE.Size = bl.vals.size
+			bloomE.Threshold = bl.vals.thresh
+		elseif bloomE then
+			bloomE = dropEffect(bloomE)
+		end
+
+		-- sun rays
+		local sr = F.sunrays
+		if sr.enabled then
+			raysE = ensureEffect(raysE, "SunRaysEffect", "Y1SunRays")
+			raysE.Intensity = sr.vals.inten
+			raysE.Spread = sr.vals.spread
+		elseif raysE then
+			raysE = dropEffect(raysE)
+		end
+
+		-- blur + depth of field
+		local bd = F.blur
+		if bd.enabled then
+			blurE = ensureEffect(blurE, "BlurEffect", "Y1Blur")
+			blurE.Size = bd.vals.blur
+			if bd.vals.dof then
+				dofE = ensureEffect(dofE, "DepthOfFieldEffect", "Y1DOF")
+				dofE.FarIntensity = bd.vals.amt / 100
+				dofE.NearIntensity = 0
+				dofE.FocusDistance = bd.vals.focus
+				dofE.InFocusRadius = 20
+			elseif dofE then
+				dofE = dropEffect(dofE)
+			end
+		else
+			if blurE then
+				blurE = dropEffect(blurE)
+			end
+			if dofE then
+				dofE = dropEffect(dofE)
+			end
+		end
+
+		-- shadows off
+		if F.shadows.enabled then
+			if origShadows == nil then
+				origShadows = Lighting.GlobalShadows
+			end
+			Lighting.GlobalShadows = false
+		elseif origShadows ~= nil then
+			Lighting.GlobalShadows = origShadows
+			origShadows = nil
+		end
+
+		-- x-ray
+		local xr = F.xray
+		if xr.enabled then
+			local v = xr.vals.value
+			if not xrayOn then
+				xrayOn = true
+				xrayApplied = v
+				xrayToken = xrayToken + 1
+				task.spawn(xrayScan, xrayToken)
+			elseif v ~= xrayApplied then
+				xrayApplied = v
+				for part, _ in pairs(xrayParts) do
+					if part and part.Parent then
+						part.LocalTransparencyModifier = v
+					end
+				end
+			end
+		elseif xrayOn then
+			xrayOn = false
+			xrayToken = xrayToken + 1
+			for part, _ in pairs(xrayParts) do
+				if part and part.Parent then
+					pcall(function()
+						part.LocalTransparencyModifier = 0
+					end)
+				end
+			end
+			xrayParts = setmetatable({}, { __mode = "k" })
+			xrayApplied = nil
+		end
+
+		-- weather
+		local wt = F.weather
+		if wt.enabled then
+			local kind = wt.vals.kind
+			if wKind ~= kind or not wPart or wPart.Parent == nil then
+				weatherBuild(kind)
+			end
+			weatherUpdate(wt.vals.amount, wt.vals.wind)
+			pcall(function()
+				if origWind == nil then
+					origWind = workspace.GlobalWind
+				end
+				workspace.GlobalWind = Vector3.new(wt.vals.wind, 0, wt.vals.wind * 0.3)
+			end)
+		else
+			if wKind ~= nil then
+				weatherStop()
+			end
+			if origWind ~= nil then
+				pcall(function()
+					workspace.GlobalWind = origWind
+				end)
+				origWind = nil
+			end
+		end
 	end
 
 	conns[#conns + 1] = RunService.Heartbeat:Connect(function()
@@ -1139,6 +1570,7 @@ function WorldPage.build(parent, T, H, opts)
 		pcall(step)
 		removeOurAtmo()
 		restoreAtmos()
+		weatherStop()
 		running = false
 		for i = 1, #conns do
 			pcall(function()
