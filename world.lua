@@ -23,11 +23,13 @@
 --   X-Ray            Enable + three dots (Transparency). Makes the map see-through on YOUR screen only
 --                    (players and Terrain are left alone).
 --   Weather          Enable + three dots (Type: Rain / Storm / Snow / Blizzard / Dust, Amount, Distance, Wind,
---                    Mood, Splashes). A grid of emitters is spread over the map around your camera out to the
---                    Distance you pick. Every spot looks up at the sky first, so weather never falls through
---                    roofs or indoors, it lands on whatever is above you instead. Rain splashes where it lands,
---                    snow sways, Storm has lightning, Mood darkens and tints the picture, Wind pushes everything
---                    (and workspace.GlobalWind).
+--                    Mood, Splashes & Piles). The map around your camera is cut into a grid and every square looks
+--                    straight up at the sky first, so weather never falls through roofs or indoors, it lands on
+--                    whatever is above you instead. Rain / Storm / Dust are particle emitters in that grid (rain
+--                    splashes where it lands, Storm has lightning). Snow / Blizzard are real 3D flake parts that
+--                    travel with you (so they never need to "catch up"): snow drifts and spins, Blizzard flakes are
+--                    wind-driven streaks, and snow piles slowly build up on the ground around you. Mood darkens and
+--                    tints the picture, Wind pushes everything (and workspace.GlobalWind).
 -- The values are set again every frame, so games that keep changing the lighting cannot undo them.
 --
 -- Build signature: World.build(container, T, H, opts) -> { Root = ..., Unload = fn }
@@ -105,7 +107,7 @@ function WorldPage.build(parent, T, H, opts)
 				{ t = "slider", key = "range", name = "Distance", min = 40, max = 200, step = 10, fmt = "%d", value = 80 },
 				{ t = "slider", key = "wind", name = "Wind", min = 0, max = 100, step = 1, fmt = "%d", value = 10 },
 				{ t = "slider", key = "mood", name = "Mood", min = 0, max = 100, step = 5, fmt = "%d%%", value = 60 },
-				{ t = "toggle", key = "splash", name = "Splashes", value = true },
+				{ t = "toggle", key = "splash", name = "Splashes & Piles", value = true },
 			} },
 	}
 
@@ -1316,21 +1318,21 @@ function WorldPage.build(parent, T, H, opts)
 
 	---------------------------------------------------------------------
 	-- WEATHER
-	-- The world around the camera is cut into a grid of "cells". Every cell holds two invisible parts with
-	-- particle emitters on them (one in the sky, one on the ground) and every ~0.3 seconds each cell shoots a
-	-- ray straight down from high above to see what is really there (ground, a roof, a bridge ...).
-	--   * rain / snow start above that spot and END on it, so nothing falls through roofs or into buildings
-	--   * rain makes splashes where it lands, dust rolls along the ground
-	--   * cells are fixed to the world, so the weather stays put while you walk and fills the whole
-	--     Distance you pick (far cells get fewer but bigger particles so the distance still looks full)
-	-- Storm also throws lightning bolts far away (with a screen flash), Mood darkens/tints the picture.
+	-- The world around the camera is cut into a grid of "cells". Every ~0.3 seconds each cell shoots a ray
+	-- straight down from high above to see what is really there (ground, a roof, a bridge ...).
+	--   Rain / Storm / Dust: every cell holds invisible parts with particle emitters. Rain starts above that spot
+	--     and ENDS on it, so nothing falls through roofs or into buildings; rain splashes where it lands.
+	--   Snow / Blizzard: real 3D parts (a pool of flakes / wind streaks) that live in a box around YOU. They move
+	--     with the camera, so there is nothing to "catch up". A flake dies when it reaches the ground height of
+	--     the grid under it (so no snow indoors) and comes back at the top. On the ground, snow PILES grow over
+	--     time (flat ellipsoids half buried in the ground, much bigger for Blizzard).
+	-- Storm also throws lightning far away (with a screen flash), Mood darkens/tints the picture.
 	---------------------------------------------------------------------
 	local PlayersService = game:GetService("Players")
 	local TEX_SPARK = "rbxasset://textures/particles/sparkles_main.dds"
 	local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
 
-	-- kind: fall = streaks (rain), flake = soft flakes (snow), dust = grit + ground clouds
-	-- density = particles per second per square stud, speed = fall speed, drag/skyWind/gndWind = how wind pushes
+	-- kind: fall = streak particles (rain), flake = real flake parts (snow), dust = grit + ground clouds
 	local WCFG = {
 		Rain = {
 			kind = "fall", density = 0.26, speed = 85, maxFall = 200, drag = 0,
@@ -1343,14 +1345,18 @@ function WorldPage.build(parent, T, H, opts)
 			mood = 1.15, tint = Color3.fromRGB(115, 130, 165), lightning = true,
 		},
 		Snow = {
-			kind = "flake", density = 0.035, speed = 6.5, maxFall = 110, drag = 0.6,
-			baseWind = 4, windScale = 0.5, skyWind = 0.25, gndWind = 0,
-			mood = 0.35, tint = Color3.fromRGB(205, 215, 235), lightning = false,
+			kind = "flake", streak = false, lightning = false,
+			baseWind = 4, windScale = 0.5, hk = 0.5, turb = 1.4, flutter = 0.7,
+			flakeBase = 150, flakePer = 1250, flakeSize = 0.3, fallMin = 3.2, fallMax = 6.5,
+			pile = true, pileWMin = 3, pileWMax = 6, pileHMin = 0.12, pileHMax = 0.32, pileT = 70,
+			mood = 0.35, tint = Color3.fromRGB(205, 215, 235),
 		},
 		Blizzard = {
-			kind = "flake", density = 0.08, speed = 14, maxFall = 120, drag = 0.5,
-			baseWind = 55, windScale = 1.0, skyWind = 0.12, gndWind = 0,
-			mood = 0.95, tint = Color3.fromRGB(185, 200, 228), lightning = false,
+			kind = "flake", streak = true, lightning = false,
+			baseWind = 55, windScale = 1.0, hk = 0.55, turb = 6, flutter = 2,
+			flakeBase = 300, flakePer = 2700, flakeSize = 0.2, flakeLen = 1.9, fallMin = 7, fallMax = 15,
+			pile = true, pileWMin = 3.5, pileWMax = 7.5, pileHMin = 0.7, pileHMax = 1.7, pileT = 30,
+			mood = 0.95, tint = Color3.fromRGB(185, 200, 228),
 		},
 		Dust = {
 			kind = "dust", density = 0.03, puff = 0.004, speed = 1, maxFall = 10, drag = 1.5,
@@ -1364,6 +1370,7 @@ function WorldPage.build(parent, T, H, opts)
 		folder = nil,
 		cells = {},
 		list = {},
+		ground = {},        -- numeric cell key -> height of the first solid thing under the sky there
 		ptr = 1,
 		cs = 0,
 		pix = nil,
@@ -1378,7 +1385,28 @@ function WorldPage.build(parent, T, H, opts)
 		moodNow = 0,
 		flash = 0,
 		nextBolt = 0,
+		snowT = 0,          -- seconds of snow so far (piles grow with it)
+		pileApplied = 0.12, -- how grown the piles currently are (0..1)
 	}
+
+	-- the flake pool (parallel arrays, one entry per flake part)
+	local FL_ARRAYS = { "parts", "cfs", "alive", "ever", "disc", "x", "y", "z", "vy", "ph", "f1", "f2", "r1", "r2", "a1", "a2" }
+	local FL = { n = 0, R = 40 }
+	for k = 1, #FL_ARRAYS do
+		FL[FL_ARRAYS[k]] = {}
+	end
+	local PARKED = CFrame.new(0, -5000, 0)
+
+	local function flakeReset()
+		FL.n = 0
+		for k = 1, #FL_ARRAYS do
+			FL[FL_ARRAYS[k]] = {}
+		end
+	end
+
+	local function gkey(ix, iz)
+		return (ix + 30000) * 60000 + (iz + 30000)
+	end
 
 	local function makePart(name)
 		local p = Instance.new("Part")
@@ -1394,7 +1422,7 @@ function WorldPage.build(parent, T, H, opts)
 		return p
 	end
 
-	-- the emitter that lives in the sky part of a cell
+	-- the emitter that lives in the sky part of a cell (rain / dust)
 	local function buildSky(cfg)
 		local em = Instance.new("ParticleEmitter")
 		em.Name = "Sky"
@@ -1421,21 +1449,6 @@ function WorldPage.build(parent, T, H, opts)
 				em.Orientation = Enum.ParticleOrientation.VelocityParallel
 				em.Squash = NumberSequence.new(-3)
 			end)
-		elseif cfg.kind == "flake" then
-			-- snow: soft flakes that fade in at the top and out at the bottom and slowly spin
-			em.Texture = TEX_SMOKE
-			em.Speed = NumberRange.new(cfg.speed * 0.7, cfg.speed * 1.3)
-			em.SpreadAngle = Vector2.new(12, 12)
-			em.Color = ColorSequence.new(Color3.fromRGB(246, 249, 255))
-			em.Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 1),
-				NumberSequenceKeypoint.new(0.05, 0.2),
-				NumberSequenceKeypoint.new(0.92, 0.2),
-				NumberSequenceKeypoint.new(1, 1),
-			})
-			em.LightEmission = 0.35
-			em.Rotation = NumberRange.new(0, 360)
-			em.RotSpeed = NumberRange.new(-45, 45)
 		else
 			-- dust: grit floating in a box just above the ground
 			em.Texture = TEX_SPARK
@@ -1460,7 +1473,7 @@ function WorldPage.build(parent, T, H, opts)
 		return em
 	end
 
-	-- the emitter on the ground part of a cell: rain splashes / dust clouds (snow has none)
+	-- the emitter on the ground part of a cell: rain splashes / dust clouds
 	local function buildGround(cfg)
 		local em = Instance.new("ParticleEmitter")
 		em.Name = "Ground"
@@ -1486,7 +1499,7 @@ function WorldPage.build(parent, T, H, opts)
 			})
 			em.LightEmission = 0.25
 			em.LightInfluence = 0.6
-		elseif cfg.kind == "dust" then
+		else
 			em.Texture = TEX_SMOKE
 			em.Speed = NumberRange.new(0.3, 1.5)
 			em.SpreadAngle = Vector2.new(40, 40)
@@ -1515,8 +1528,6 @@ function WorldPage.build(parent, T, H, opts)
 		local s
 		if cfg.kind == "fall" then
 			s = 0.5 * mul
-		elseif cfg.kind == "flake" then
-			s = 0.3 * mul
 		else
 			s = 0.45 * mul
 		end
@@ -1531,24 +1542,51 @@ function WorldPage.build(parent, T, H, opts)
 		local c = {
 			ix = ix,
 			iz = iz,
+			gk = gkey(ix, iz),
 			x = (ix + 0.5) * cs,
 			z = (iz + 0.5) * cs,
 			t = -10,
 			dist = 0,
 			mul = nil,
 			ph = math.random() * 6.28,
+			piles = nil,
 		}
-		c.sky = makePart("Sky")
-		c.skyEm = buildSky(cfg)
-		c.skyEm.Parent = c.sky
-		c.gnd = makePart("Ground")
-		c.gndEm = buildGround(cfg)
-		if c.gndEm then
+		if cfg.kind ~= "flake" then
+			c.sky = makePart("Sky")
+			c.skyEm = buildSky(cfg)
+			c.skyEm.Parent = c.sky
+			c.gnd = makePart("Ground")
+			c.gndEm = buildGround(cfg)
 			c.gndEm.Parent = c.gnd
+			c.sky.Parent = W.folder
+			c.gnd.Parent = W.folder
 		end
-		c.sky.Parent = W.folder
-		c.gnd.Parent = W.folder
 		return c
+	end
+
+	local function clearPiles(c)
+		if c.piles then
+			local list = c.piles
+			c.piles = nil
+			for i = 1, #list do
+				pcall(function()
+					list[i].part:Destroy()
+				end)
+			end
+		end
+	end
+
+	local function destroyCell(c)
+		clearPiles(c)
+		pcall(function()
+			if c.sky then
+				c.sky:Destroy()
+			end
+			if c.gnd then
+				c.gnd:Destroy()
+			end
+		end)
+		W.ground[c.gk] = nil
 	end
 
 	local function clearCells()
@@ -1560,9 +1598,13 @@ function WorldPage.build(parent, T, H, opts)
 		W.folder = nil
 		W.cells = {}
 		W.list = {}
+		W.ground = {}
 		W.ptr = 1
 		W.pix = nil
 		W.pn = nil
+		W.snowT = 0
+		W.pileApplied = 0.12
+		flakeReset()
 	end
 
 	-- keep a cell on every grid square within range of the camera (cells are fixed to the world)
@@ -1593,10 +1635,7 @@ function WorldPage.build(parent, T, H, opts)
 		end
 		for key, c in pairs(W.cells) do
 			if not want[key] then
-				pcall(function()
-					c.sky:Destroy()
-					c.gnd:Destroy()
-				end)
+				destroyCell(c)
 				W.cells[key] = nil
 			end
 		end
@@ -1612,16 +1651,17 @@ function WorldPage.build(parent, T, H, opts)
 	end
 
 	-- ray straight down from high above: what is the first solid thing at (x, z)? (nil = nothing there)
-	-- invisible parts are skipped, and so are players' characters
+	-- invisible parts are skipped, and so are players' characters. Returns the height and the surface normal.
 	local function findGround(x, z, camY)
 		local params = W.params
 		if not params then
-			return nil
+			return nil, nil
 		end
 		local origin = Vector3.new(x, camY + 220, z)
 		local down = Vector3.new(0, -700, 0)
 		local extra = nil
 		local result = nil
+		local normal = nil
 		for _ = 1, 4 do
 			local res = workspace:Raycast(origin, down, params)
 			if not res then
@@ -1641,13 +1681,97 @@ function WorldPage.build(parent, T, H, opts)
 				params.FilterDescendantsInstances = list
 			else
 				result = res.Position.Y
+				normal = res.Normal
 				break
 			end
 		end
 		if extra then
 			params.FilterDescendantsInstances = W.baseList
 		end
-		return result
+		return result, normal
+	end
+
+	---------------------------------------------------------------------
+	-- SNOW PILES: flat ellipsoids half buried in the ground (one big drift + two small ones leaning on it)
+	---------------------------------------------------------------------
+	local function makeMound(x, y, z, l, h, w, yaw)
+		local p = Instance.new("Part")
+		p.Name = "Pile"
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanTouch = false
+		p.CanQuery = false
+		p.CastShadow = false
+		p.Color = Color3.fromRGB(240, 245, 252)
+		local okMat = pcall(function()
+			p.Material = Enum.Material.Snow
+		end)
+		if not okMat then
+			p.Material = Enum.Material.SmoothPlastic
+		end
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Sphere
+		mesh.Parent = p
+		p.Size = Vector3.new(0.05, 0.05, 0.05)
+		p.CFrame = CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
+		p.Parent = W.folder
+		local g = W.pileApplied
+		TweenService:Create(p, TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = Vector3.new(l * g, h * g, w * g),
+		}):Play()
+		return { part = p, l = l, h = h, w = w }
+	end
+
+	local function pileCell(c, cfg, camY)
+		local cs = W.cs
+		local count = math.clamp(math.floor(cs * cs / 70), 1, 5)
+		local made = {}
+		for _ = 1, count do
+			local px = c.x + (math.random() - 0.5) * cs * 0.85
+			local pz = c.z + (math.random() - 0.5) * cs * 0.85
+			local py, nrm = findGround(px, pz, camY)
+			if py and nrm and nrm.Y > 0.75 then
+				local w = cfg.pileWMin + math.random() * (cfg.pileWMax - cfg.pileWMin)
+				local h = cfg.pileHMin + math.random() * (cfg.pileHMax - cfg.pileHMin)
+				local yaw = -0.28 + (math.random() - 0.5) * 0.7   -- drifts lie roughly along the wind
+				local sets = {
+					{ 0, 0, 1 },
+					{ (math.random() - 0.5) * w * 0.9, (math.random() - 0.5) * w * 0.9, 0.6 },
+					{ (math.random() - 0.5) * w * 0.9, (math.random() - 0.5) * w * 0.9, 0.5 },
+				}
+				for s = 1, #sets do
+					local o = sets[s]
+					local sc = o[3]
+					made[#made + 1] = makeMound(px + o[1], py - 0.05 * h, pz + o[2], w * 1.7 * sc, h * 2 * sc, w * sc, yaw)
+				end
+			end
+		end
+		c.piles = made
+	end
+
+	-- piles grow with the time the snow has been falling (quicker in a Blizzard)
+	local function pileGrow(cfg, v, dt)
+		if not v.splash then
+			return
+		end
+		W.snowT = W.snowT + dt
+		local g = 0.12 + 0.88 * (1 - math.exp(-W.snowT / cfg.pileT))
+		if g - W.pileApplied >= 0.04 then
+			W.pileApplied = g
+			for i = 1, #W.list do
+				local c = W.list[i]
+				if c.piles then
+					for k = 1, #c.piles do
+						local m = c.piles[k]
+						pcall(function()
+							TweenService:Create(m.part, TweenInfo.new(0.8), {
+								Size = Vector3.new(m.l * g, m.h * g, m.w * g),
+							}):Play()
+						end)
+					end
+				end
+			end
+		end
 	end
 
 	local function refreshCell(c, cfg, v, camPos, now)
@@ -1658,11 +1782,23 @@ function WorldPage.build(parent, T, H, opts)
 		c.dist = dist
 
 		local gy = findGround(c.x, c.z, camPos.Y)
+		W.ground[c.gk] = gy
+
+		if cfg.kind == "flake" then
+			-- snow: this cell only supplies ground height for the flakes (+ the piles)
+			if cfg.pile and v.splash then
+				if gy and not c.piles and dist <= 65 then
+					pileCell(c, cfg, camPos.Y)
+				end
+			elseif c.piles then
+				clearPiles(c)
+			end
+			return
+		end
+
 		if not gy then
 			c.skyEm.Rate = 0
-			if c.gndEm then
-				c.gndEm.Rate = 0
-			end
+			c.gndEm.Rate = 0
 			return
 		end
 
@@ -1692,46 +1828,262 @@ function WorldPage.build(parent, T, H, opts)
 			applySizes(c, cfg, mul)
 		end
 
-		if c.gndEm then
-			local gRate = 0
-			if cfg.kind == "fall" then
-				if v.splash and dist < 80 then
-					gRate = rate * 0.6
-				end
-			elseif cfg.kind == "dust" then
-				gRate = cfg.puff * amt * cs * cs * thin
+		local gRate = 0
+		if cfg.kind == "fall" then
+			if v.splash and dist < 80 then
+				gRate = rate * 0.6
 			end
-			if gRate > 0 then
-				c.gnd.Size = Vector3.new(cs, 0.1, cs)
-				c.gnd.CFrame = CFrame.new(c.x, gy + 0.15, c.z)
-			end
-			c.gndEm.Rate = gRate
+		else
+			gRate = cfg.puff * amt * cs * cs * thin
 		end
+		if gRate > 0 then
+			c.gnd.Size = Vector3.new(cs, 0.1, cs)
+			c.gnd.CFrame = CFrame.new(c.x, gy + 0.15, c.z)
+		end
+		c.gndEm.Rate = gRate
 	end
 
-	-- wind (with slow gusts) and snow sway, pushed into every emitter ten times a second
+	-- wind (with slow gusts), pushed into every particle emitter ten times a second (rain / dust only)
 	local function applyWind(cfg, v, now)
+		if cfg.kind == "flake" then
+			return
+		end
 		local gust = 0.8 + 0.2 * math.sin(now * 0.6) + 0.12 * math.sin(now * 1.7 + 1.3)
 		local mag = (cfg.baseWind + v.wind * cfg.windScale) * gust
 		local wx = 0.96 * mag
 		local wz = 0.28 * mag
-		local fallA = 0
-		if cfg.kind == "flake" then
-			fallA = -cfg.drag * cfg.speed   -- keeps the flakes falling at their speed while drag acts on the wind
-		end
 		for i = 1, #W.list do
 			local c = W.list[i]
-			local ax = wx * cfg.skyWind
-			local az = wz * cfg.skyWind
-			if cfg.kind == "flake" then
-				ax = ax + math.sin(now * 0.8 + c.ph) * 2.5
-				az = az + math.cos(now * 0.6 + c.ph * 1.3) * 2.5
-			end
-			c.skyEm.Acceleration = Vector3.new(ax, fallA, az)
-			if cfg.gndWind > 0 and c.gndEm then
+			c.skyEm.Acceleration = Vector3.new(wx * cfg.skyWind, 0, wz * cfg.skyWind)
+			if cfg.gndWind > 0 then
 				c.gndEm.Acceleration = Vector3.new(wx * cfg.gndWind, 0, wz * cfg.gndWind)
 			end
 		end
+	end
+
+	---------------------------------------------------------------------
+	-- SNOW FLAKES: a pool of real parts in a box around the camera
+	---------------------------------------------------------------------
+	-- ground height at (x, z), blended between the four nearest grid cells (nil = nothing there)
+	local function groundAt(x, z)
+		local cs = W.cs
+		local G = W.ground
+		local fx = x / cs - 0.5
+		local fz = z / cs - 0.5
+		local ix = math.floor(fx)
+		local iz = math.floor(fz)
+		local tx = fx - ix
+		local tz = fz - iz
+		local k00 = (ix + 30000) * 60000 + iz + 30000
+		local g00 = G[k00]
+		local g10 = G[k00 + 60000]
+		local g01 = G[k00 + 1]
+		local g11 = G[k00 + 60001]
+		if g00 and g10 and g01 and g11 then
+			local a = g00 + (g10 - g00) * tx
+			local b = g01 + (g11 - g01) * tx
+			return a + (b - a) * tz
+		end
+		return g00 or g10 or g01 or g11
+	end
+
+	local function flakeGrow(cfg, want)
+		local made = 0
+		while FL.n < want and made < 150 do
+			local p = Instance.new("Part")
+			p.Name = "Flake"
+			p.Anchored = true
+			p.CanCollide = false
+			p.CanTouch = false
+			p.CanQuery = false
+			p.CastShadow = false
+			p.Material = Enum.Material.Neon
+			p.Color = Color3.fromRGB(232, 240, 252)
+			p.Transparency = 0.2
+			local disc = false
+			if cfg.streak then
+				p.Shape = Enum.PartType.Block
+			elseif math.random() < 0.6 then
+				disc = true
+				p.Shape = Enum.PartType.Cylinder   -- a thin flat flake that tumbles
+			else
+				p.Shape = Enum.PartType.Ball
+			end
+			p.Size = Vector3.new(0.2, 0.2, 0.2)
+			p.CFrame = PARKED
+			p.Parent = W.folder
+			local i = FL.n + 1
+			FL.n = i
+			FL.parts[i] = p
+			FL.cfs[i] = PARKED
+			FL.alive[i] = false
+			FL.disc[i] = disc
+			FL.x[i] = 0
+			FL.y[i] = 0
+			FL.z[i] = 0
+			FL.vy[i] = 0
+			FL.ph[i] = 0
+			FL.f1[i] = 1
+			FL.f2[i] = 1
+			FL.r1[i] = 0
+			FL.r2[i] = 0
+			FL.a1[i] = 0
+			FL.a2[i] = 0
+			made = made + 1
+		end
+		while FL.n > want do
+			local i = FL.n
+			local part = FL.parts[i]
+			pcall(function()
+				part:Destroy()
+			end)
+			for k = 1, #FL_ARRAYS do
+				FL[FL_ARRAYS[k]][i] = nil
+			end
+			FL.n = i - 1
+		end
+	end
+
+	-- put flake i at a fresh place: anywhere in the box the first time, at the top afterwards
+	local function placeFlake(i, camPos, cfg)
+		local ang = math.random() * 6.2832
+		local r = FL.R * math.random() ^ 0.75   -- more flakes close to you than far away
+		local x = camPos.X + math.cos(ang) * r
+		local z = camPos.Z + math.sin(ang) * r
+		local gy = groundAt(x, z)
+		if not gy then
+			return false
+		end
+		local top = camPos.Y + 30
+		local bottom = math.max(gy, camPos.Y - 22)
+		if top - bottom < 3 then
+			return false
+		end
+		local y
+		if FL.ever[i] == nil then
+			y = bottom + 0.5 + math.random() * (top - bottom - 1)
+		else
+			y = top - math.random() * 5
+		end
+		FL.ever[i] = true
+		FL.x[i] = x
+		FL.y[i] = y
+		FL.z[i] = z
+		FL.vy[i] = cfg.fallMin + math.random() * (cfg.fallMax - cfg.fallMin)
+		FL.ph[i] = math.random() * 6.28
+		FL.f1[i] = 0.6 + math.random()
+		FL.f2[i] = 0.5 + math.random()
+		FL.r1[i] = (math.random() - 0.5) * 4
+		FL.r2[i] = (math.random() - 0.5) * 4
+		FL.a1[i] = math.random() * 6.28
+		FL.a2[i] = math.random() * 6.28
+
+		-- looks: nearer flakes are smaller, far ones bigger so they still read as snow
+		local part = FL.parts[i]
+		local s = cfg.flakeSize * (0.7 + math.random() * 0.8) * (1 + r / 45)
+		if cfg.streak then
+			part.Size = Vector3.new(s, s, cfg.flakeLen * (0.7 + math.random() * 0.9) * (1 + r / 80))
+			part.Transparency = 0.25 + math.random() * 0.4
+		elseif FL.disc[i] then
+			part.Size = Vector3.new(s * 0.12, s, s)
+			part.Transparency = 0.05 + math.random() * 0.3
+		else
+			part.Size = Vector3.new(s, s, s)
+			part.Transparency = 0.05 + math.random() * 0.3
+		end
+		FL.cfs[i] = CFrame.new(x, y, z)
+		FL.alive[i] = true
+		return true
+	end
+
+	local function flakeStep(dt, camPos, cfg, v, now)
+		local want = math.floor(cfg.flakeBase + v.amount / 100 * cfg.flakePer)
+		FL.R = math.clamp(v.range * 0.45, 28, 45)
+		flakeGrow(cfg, want)
+
+		local gust = 0.8 + 0.2 * math.sin(now * 0.6) + 0.12 * math.sin(now * 1.7 + 1.3)
+		local mag = (cfg.baseWind + v.wind * cfg.windScale) * gust * cfg.hk
+		local wx = 0.96 * mag
+		local wz = 0.28 * mag
+		local turb = cfg.turb
+		local flutter = cfg.flutter
+		local camX = camPos.X
+		local camY = camPos.Y
+		local camZ = camPos.Z
+		local R = FL.R
+		local R2 = R * R
+		local far2 = (R * 2.5) * (R * 2.5)
+
+		-- wind streaks all point along the same average direction of travel
+		local rotCF = nil
+		if cfg.streak then
+			rotCF = CFrame.lookAt(Vector3.new(0, 0, 0), Vector3.new(wx, -(cfg.fallMin + cfg.fallMax) * 0.5, wz))
+		end
+
+		local xs = FL.x
+		local ys = FL.y
+		local zs = FL.z
+		local vys = FL.vy
+		local phs = FL.ph
+		local f1s = FL.f1
+		local f2s = FL.f2
+		local r1s = FL.r1
+		local r2s = FL.r2
+		local a1s = FL.a1
+		local a2s = FL.a2
+		local alive = FL.alive
+		local cfs = FL.cfs
+		local disc = FL.disc
+
+		local budget = 140   -- how many parked flakes may be put back per frame
+		for i = 1, FL.n do
+			if alive[i] then
+				local ph = phs[i]
+				local x = xs[i] + (wx + math.sin(now * f1s[i] + ph) * turb) * dt
+				local z = zs[i] + (wz + math.cos(now * f2s[i] + ph) * turb) * dt
+				local y = ys[i] - (vys[i] + math.sin(now * 1.7 + ph) * flutter) * dt
+				local dx = x - camX
+				local dz = z - camZ
+				local d2 = dx * dx + dz * dz
+				local gone = false
+				if d2 > far2 then
+					-- camera jumped (teleport): start this flake over somewhere inside the box
+					FL.ever[i] = nil
+					gone = true
+				elseif d2 > R2 then
+					-- left the box: reappear on the opposite side (that is the side you are moving towards)
+					local a = math.atan2(dz, dx) + 3.1416 + (math.random() - 0.5) * 1.2
+					local rr = R * (0.85 + math.random() * 0.15)
+					x = camX + math.cos(a) * rr
+					z = camZ + math.sin(a) * rr
+				end
+				if not gone then
+					local gy = groundAt(x, z)
+					if gy == nil or y <= gy + 0.2 or y < camY - 22 then
+						gone = true
+					end
+				end
+				if gone then
+					alive[i] = false
+					cfs[i] = PARKED
+				else
+					xs[i] = x
+					ys[i] = y
+					zs[i] = z
+					if rotCF then
+						cfs[i] = CFrame.new(x, y, z) * rotCF
+					elseif disc[i] then
+						cfs[i] = CFrame.new(x, y, z) * CFrame.Angles(a1s[i] + now * r1s[i], a2s[i] + now * r2s[i], 0)
+					else
+						cfs[i] = CFrame.new(x, y, z)
+					end
+				end
+			elseif budget > 0 then
+				budget = budget - 1
+				placeFlake(i, camPos, cfg)
+			end
+		end
+		workspace:BulkMoveTo(FL.parts, FL.cfs, Enum.BulkMoveMode.FireCFrameChanged)
 	end
 
 	-- MOOD: a colour correction that fades in (darker, less colour, tinted) and flashes with lightning
@@ -1937,6 +2289,11 @@ function WorldPage.build(parent, T, H, opts)
 		if now - W.windT >= 0.1 then
 			W.windT = now
 			applyWind(cfg, v, now)
+		end
+
+		if cfg.kind == "flake" then
+			pileGrow(cfg, v, dt)
+			flakeStep(dt, camPos, cfg, v, now)
 		end
 
 		moodTick(cfg, v, dt)
