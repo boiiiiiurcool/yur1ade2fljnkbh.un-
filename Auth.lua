@@ -31,6 +31,8 @@ function Auth.new(opts)
 	local guiName = opts.Name or "Y1Auth"
 	local title = opts.Title or "yur1"
 	local API = opts.ApiUrl or ""
+	-- optional: full URLs per endpoint, for when register / login do not share one base url
+	local EP = opts.Endpoints or {}
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
@@ -158,7 +160,7 @@ function Auth.new(opts)
 		end
 		local okSend, res = pcall(function()
 			return req({
-				Url = API .. path,
+				Url = EP[path] or (API .. path),
 				Method = "POST",
 				Headers = { ["Content-Type"] = "application/json" },
 				Body = HttpService:JSONEncode(data),
