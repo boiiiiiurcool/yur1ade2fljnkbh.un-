@@ -1329,7 +1329,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	}
 	local obRadius = -1
 	local obRing = nil
-	local obAdorn = nil
+	local obDashes = {}
 	local obName = ""
 
 	local obCard = new("Frame", {
@@ -1371,7 +1371,8 @@ function AnimationPage.build(parent, T, H, ctx)
 			end)
 		end
 		obRing = nil
-		obAdorn = nil
+		obDashes = {}
+		obRadius = -1
 	end
 
 	local function stopOrbit()
@@ -1604,54 +1605,44 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end)
 
-	-- dashed circle (a wireframe made of short line pieces) lying flat at hip height
-	local function buildDashes(r)
-		obAdorn:Clear()
-		local count = math.clamp(math.floor(r * 1.6), 20, 140)
-		local step = (math.pi * 2) / count
-		for i = 0, count - 1 do
-			local a0 = i * step
-			local a1 = a0 + step * 0.55
-			obAdorn:AddLine(Vector3.new(math.cos(a0) * r, 0, math.sin(a0) * r),
-				Vector3.new(math.cos(a1) * r, 0, math.sin(a1) * r))
-		end
-	end
-
+	-- dashed circle made of real thin neon parts lying flat at hip height
+	-- (real parts always render, unlike adornments, and are moved every frame to follow the target)
 	local function updateRing(center)
 		if not OB.visualize or not center then
 			hideRing()
-			obRadius = -1
 			return
 		end
-		if not obRing or not obRing.Parent then
+		local r = OB.dist
+		local count = math.clamp(math.floor(r * 1.6), 20, 140)
+		if not obRing or not obRing.Parent or obRadius ~= r then
 			hideRing()
-			obRadius = -1
-			obRing = Instance.new("Part")
+			obRadius = r
+			obRing = Instance.new("Folder")
 			obRing.Name = "OrbitRing"
-			obRing.Anchored = true
-			obRing.CanCollide = false
-			obRing.CanQuery = false
-			obRing.CanTouch = false
-			obRing.CastShadow = false
-			obRing.Transparency = 1
-			obRing.Size = Vector3.new(0.2, 0.2, 0.2)
 			obRing.Parent = workspace
-			obAdorn = Instance.new("WireframeHandleAdornment")
-			obAdorn.Name = "OrbitRingGfx"
-			obAdorn.Adornee = obRing
-			obAdorn.AlwaysOnTop = true
-			obAdorn.ZIndex = 1
-			obAdorn.Color3 = Color3.fromRGB(165, 220, 255)
-			obAdorn.Transparency = 0
-			pcall(function()
-				obAdorn.Thickness = 3
-			end)
-			obAdorn.Parent = obRing
+			local arc = (math.pi * 2 * r) / count
+			for i = 1, count do
+				local d = Instance.new("Part")
+				d.Name = "Dash"
+				d.Anchored = true
+				d.CanCollide = false
+				d.CanQuery = false
+				d.CanTouch = false
+				d.CastShadow = false
+				d.Material = Enum.Material.Neon
+				d.Color = Color3.fromRGB(165, 220, 255)
+				d.Transparency = 0.15
+				d.Size = Vector3.new(0.3, 0.3, math.max(arc * 0.55, 0.6))
+				d.Parent = obRing
+				obDashes[i] = d
+			end
 		end
-		obRing.CFrame = CFrame.new(center)
-		if obAdorn and obRadius ~= OB.dist then
-			obRadius = OB.dist
-			buildDashes(OB.dist)
+		local step = (math.pi * 2) / count
+		for i = 1, #obDashes do
+			local a = (i - 1) * step
+			local pos = center + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
+			local tangent = Vector3.new(-math.sin(a), 0, math.cos(a))
+			obDashes[i].CFrame = CFrame.lookAt(pos, pos + tangent)
 		end
 	end
 
