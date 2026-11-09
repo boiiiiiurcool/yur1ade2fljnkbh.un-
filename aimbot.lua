@@ -22,7 +22,9 @@
 --                                             hit part; a wall or any other model in the way = not visible)
 --                              Health Check   skips players whose health is below the Min slider (in percent).
 --                                             Dead players are always skipped.
---                              All three are off every time the script starts.
+--                              Knocked Check  skips players who are knocked out. ZEE HOOD ONLY: it reads the
+--                                             K.O bool at BodyEffects["K.O"]; in other games it does nothing.
+--                              All of them are off every time the script starts.
 --   Right column  Distance     Min / Max (on top)
 --                 Prediction / Smoothness   X / Y  0-20
 --                 FOV          a small row: a colour square (the outline colour, click it for the colour
@@ -157,6 +159,7 @@ function AimbotPage.build(parent, T, H, opts)
 		visCheck = false,
 		healthCheck = false,
 		minHealth = 20,         -- percent; used while Health Check is on
+		knockedCheck = false,   -- off every time the script runs (Zee Hood only)
 		-- FOV
 		fovOn = false,          -- off every time the script runs
 		fovFilled = false,
@@ -1177,7 +1180,31 @@ function AimbotPage.build(parent, T, H, opts)
 		return cam.CFrame.Position
 	end
 
-	-- every check that does not need a raycast: alive, team, health, distance
+	-- Knocked Check (ZEE HOOD ONLY): true when this character is knocked out.
+	-- The game keeps a bool at <character>.BodyEffects["K.O"] (the characters live in workspace.Players).
+	-- In other games the value is never found, so this just returns false.
+	local function isKnocked(char)
+		local be = char:FindFirstChild("BodyEffects")
+		if be == nil then
+			local folder = workspace:FindFirstChild("Players")
+			local model = nil
+			if folder then
+				model = folder:FindFirstChild(char.Name)
+			end
+			if model then
+				be = model:FindFirstChild("BodyEffects")
+			end
+		end
+		if be then
+			local ko = be:FindFirstChild("K.O")
+			if ko and ko:IsA("BoolValue") then
+				return ko.Value
+			end
+		end
+		return false
+	end
+
+	-- every check that does not need a raycast: alive, team, health, knocked, distance
 	local function validTarget(plr, origin, cfg)
 		if plr.Parent == nil then
 			return false
@@ -1203,6 +1230,10 @@ function AimbotPage.build(parent, T, H, opts)
 			if hum.Health / maxHp * 100 < cfg.minHealth then
 				return false
 			end
+		end
+		-- Knocked Check: skip players who are knocked out (Zee Hood only)
+		if cfg.knockedCheck and isKnocked(char) then
+			return false
 		end
 		local rootPart = char:FindFirstChild("HumanoidRootPart")
 		if rootPart == nil then
@@ -2279,6 +2310,13 @@ function AimbotPage.build(parent, T, H, opts)
 			lockSpent = false
 		end, 23)
 	end
+
+	-- Knocked Check: skips players who are knocked out (Zee Hood only)
+	filterCard(aimP, 1, "Knocked Check", "Zee Hood only - skips K.O players", S.knockedCheck, function(on)
+		S.knockedCheck = on
+		locked = nil
+		lockSpent = false
+	end)
 
 	-- right column, top: Distance
 	aimP.section(2, "RANGE")
