@@ -57,6 +57,11 @@
 --              Camera = the camera turns so the target moves to the SCREEN MIDDLE
 --   Mode       Hold = on while the key is held, Toggle = press to switch on / off
 --
+--   Target Lock  When on, the aimbot locks onto ONE player and keeps that player for as long as the key is
+--                held (Hold) or until it is toggled off (Toggle). If that player dies, leaves range or goes
+--                behind a wall (Visible Check) the aimbot does NOT jump to someone else: let go of the key
+--                and press it again to lock onto a new player.
+--
 --   How the cursor mover works (so it does not swing across the screen): the cursor shows its new
 --   position a frame or two after it was moved, so a move is only sent after the last one has shown up.
 --   It never asks for more than half of the remaining distance at once, never more than 200 pixels in
@@ -172,6 +177,7 @@ function AimbotPage.build(parent, T, H, opts)
 
 	local active = false
 	local locked = nil
+	local lockSpent = false   -- Target Lock: the locked player is gone; wait until the key is released before locking anyone new
 	local listening = nil
 	local running = true
 	local conns = {}
@@ -231,9 +237,9 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	-- true when the pointer of this input is over a gui object.
-	-- Mouse: GetMouseLocation is in the same screen space as AbsolutePosition (the window gui
-	-- ignores the top inset), so no inset maths is needed. Touch: the input position may or may not
-	-- include the top inset on a given device, so both readings are tried.
+	-- The screen position of a click can include the top inset or not, depending on the device and on
+	-- the gui, so BOTH readings are tried (for the mouse as well as for touch). Using only one of them
+	-- made the bottom strip of a pop-up (the Target Lock switch) count as "outside" and closed it.
 	local function inRect(obj, x, y)
 		local p = obj.AbsolutePosition
 		local sz = obj.AbsoluteSize
@@ -241,13 +247,14 @@ function AimbotPage.build(parent, T, H, opts)
 	end
 
 	local function pointerOver(obj, input)
+		local inset = GuiService:GetGuiInset()
 		if input.UserInputType == Enum.UserInputType.Touch then
-			local inset = GuiService:GetGuiInset()
 			return inRect(obj, input.Position.X, input.Position.Y)
 				or inRect(obj, input.Position.X + inset.X, input.Position.Y + inset.Y)
 		end
 		local m = UserInputService:GetMouseLocation()
 		return inRect(obj, m.X, m.Y)
+			or inRect(obj, m.X - inset.X, m.Y - inset.Y)
 	end
 
 	-- where the pointer of this input is, in the same screen space as AbsolutePosition
@@ -2209,13 +2216,16 @@ function AimbotPage.build(parent, T, H, opts)
 		end
 	end
 
+	-- every time the aimbot turns on or off the lock is cleared. Releasing the key (Hold) or toggling
+	-- off (Toggle) is the ONLY thing that lets Target Lock pick a new player.
 	setActive = function(v)
 		if not S.enabled then
 			v = false
 		end
 		active = v
+		locked = nil
+		lockSpent = false
 		if not v then
-			locked = nil
 			resetCursor()
 		end
 		refreshStatus()
@@ -2233,6 +2243,7 @@ function AimbotPage.build(parent, T, H, opts)
 	dropdownCard(aimP, 1, "Hit Part", PART_OPTIONS, S.part, function(v)
 		S.part = v
 		locked = nil
+		lockSpent = false
 	end)
 
 	-- left column: the filters
@@ -2241,11 +2252,13 @@ function AimbotPage.build(parent, T, H, opts)
 	filterCard(aimP, 1, "Team Check", "Skip your teammates", S.teamCheck, function(on)
 		S.teamCheck = on
 		locked = nil
+		lockSpent = false
 	end)
 
 	filterCard(aimP, 1, "Visible Check", "Skip targets behind walls", S.visCheck, function(on)
 		S.visCheck = on
 		locked = nil
+		lockSpent = false
 	end)
 
 	-- Health Check has a slider under it: players below that health (in percent) are skipped
@@ -2263,6 +2276,7 @@ function AimbotPage.build(parent, T, H, opts)
 			S.healthCheck = on
 			hpApi.dim(on)
 			locked = nil
+			lockSpent = false
 		end, 23)
 	end
 
@@ -2391,6 +2405,7 @@ function AimbotPage.build(parent, T, H, opts)
 	makeSwitch(popup, S.lockOn, function(on)
 		S.lockOn = on
 		locked = nil
+		lockSpent = false
 	end, 228, 16)
 
 	-- open / close the settings panel
@@ -2721,8 +2736,16 @@ function AimbotPage.build(parent, T, H, opts)
 
 		-- pick the target
 		if S.lockOn then
+			-- TARGET LOCK: once a player was locked this press, the aimbot never switches to another one.
+			-- If the locked player dies / leaves range / etc. it just stops, until the key is released
+			-- (Hold) or the aimbot is toggled off (Toggle): setActive(false) clears lockSpent.
+			if lockSpent then
+				return
+			end
 			if locked and not validTarget(locked, origin, S) then
 				locked = nil
+				lockSpent = true
+				return
 			end
 			if locked == nil then
 				locked = acquire(cam, ref, origin, S, nil)
@@ -2731,6 +2754,11 @@ function AimbotPage.build(parent, T, H, opts)
 			locked = acquire(cam, ref, origin, S, nil)
 		end
 		if locked == nil or locked.Character == nil then
+			if S.lockOn and locked ~= nil then
+				-- the locked player has no character any more
+				locked = nil
+				lockSpent = true
+			end
 			return
 		end
 
@@ -2739,9 +2767,11 @@ function AimbotPage.build(parent, T, H, opts)
 			return
 		end
 
-		-- a locked target that walked behind a wall is let go (Visible Check)
+		-- a locked target that walked behind a wall is let go (Visible Check). It is NOT replaced by
+		-- another player: release the key and press it again to lock onto someone new.
 		if S.lockOn and S.visCheck and not isVisible(cam, part, locked.Character) then
 			locked = nil
+			lockSpent = true
 			return
 		end
 
@@ -3102,6 +3132,7 @@ function AimbotPage.build(parent, T, H, opts)
 		running = false
 		active = false
 		locked = nil
+		lockSpent = false
 		listening = nil
 		for i = 1, #subHandles do
 			local h = subHandles[i]
