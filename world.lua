@@ -22,8 +22,12 @@
 --                    moment the game switches shadows back on.
 --   X-Ray            Enable + three dots (Transparency). Makes the map see-through on YOUR screen only
 --                    (players and Terrain are left alone).
---   Weather          Enable + three dots (Type: Rain / Snow / Wind, Amount, Wind). Particles that follow
---                    your camera. Wind also pushes the world's wind (workspace.GlobalWind).
+--   Weather          Enable + three dots (Type: Rain / Storm / Snow / Blizzard / Dust, Amount, Distance, Wind,
+--                    Mood, Splashes). A grid of emitters is spread over the map around your camera out to the
+--                    Distance you pick. Every spot looks up at the sky first, so weather never falls through
+--                    roofs or indoors, it lands on whatever is above you instead. Rain splashes where it lands,
+--                    snow sways, Storm has lightning, Mood darkens and tints the picture, Wind pushes everything
+--                    (and workspace.GlobalWind).
 -- The values are set again every frame, so games that keep changing the lighting cannot undo them.
 --
 -- Build signature: World.build(container, T, H, opts) -> { Root = ..., Unload = fn }
@@ -96,9 +100,12 @@ function WorldPage.build(parent, T, H, opts)
 			rows = { { t = "slider", key = "value", name = "Transparency", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 0.7 } } },
 		{ id = "weather", title = "Weather", dots = true,
 			rows = {
-				{ t = "cycle", key = "kind", name = "Type", options = { "Rain", "Snow", "Wind" }, value = "Rain" },
+				{ t = "cycle", key = "kind", name = "Type", options = { "Rain", "Storm", "Snow", "Blizzard", "Dust" }, value = "Rain" },
 				{ t = "slider", key = "amount", name = "Amount", min = 1, max = 100, step = 1, fmt = "%d", value = 50 },
+				{ t = "slider", key = "range", name = "Distance", min = 40, max = 200, step = 10, fmt = "%d", value = 80 },
 				{ t = "slider", key = "wind", name = "Wind", min = 0, max = 100, step = 1, fmt = "%d", value = 10 },
+				{ t = "slider", key = "mood", name = "Mood", min = 0, max = 100, step = 5, fmt = "%d%%", value = 60 },
+				{ t = "toggle", key = "splash", name = "Splashes", value = true },
 			} },
 	}
 
@@ -1162,7 +1169,7 @@ function WorldPage.build(parent, T, H, opts)
 	local origWind = nil
 	local raysSaved = nil   -- the game's own SunRaysEffect we are controlling: { inst, en, inten, spread }
 
-	local EFFECT_NAMES = { "Y1ColorCorrection", "Y1Bloom", "Y1SunRays", "Y1Blur", "Y1DOF" }
+	local EFFECT_NAMES = { "Y1ColorCorrection", "Y1Bloom", "Y1SunRays", "Y1Blur", "Y1DOF", "Y1WeatherMood" }
 	for i = 1, #EFFECT_NAMES do
 		local old = Lighting:FindFirstChild(EFFECT_NAMES[i])
 		if old then
@@ -1307,117 +1314,636 @@ function WorldPage.build(parent, T, H, opts)
 		end
 	end)
 
-	-- WEATHER: a see-through part that follows your camera and carries one particle emitter
-	local wPart = nil
-	local wEmitter = nil
-	local wKind = nil
+	---------------------------------------------------------------------
+	-- WEATHER
+	-- The world around the camera is cut into a grid of "cells". Every cell holds two invisible parts with
+	-- particle emitters on them (one in the sky, one on the ground) and every ~0.3 seconds each cell shoots a
+	-- ray straight down from high above to see what is really there (ground, a roof, a bridge ...).
+	--   * rain / snow start above that spot and END on it, so nothing falls through roofs or into buildings
+	--   * rain makes splashes where it lands, dust rolls along the ground
+	--   * cells are fixed to the world, so the weather stays put while you walk and fills the whole
+	--     Distance you pick (far cells get fewer but bigger particles so the distance still looks full)
+	-- Storm also throws lightning bolts far away (with a screen flash), Mood darkens/tints the picture.
+	---------------------------------------------------------------------
+	local PlayersService = game:GetService("Players")
+	local TEX_SPARK = "rbxasset://textures/particles/sparkles_main.dds"
+	local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
 
-	local function weatherStop()
-		if wPart then
-			pcall(function()
-				wPart:Destroy()
-			end)
-		end
-		wPart = nil
-		wEmitter = nil
-		wKind = nil
+	-- kind: fall = streaks (rain), flake = soft flakes (snow), dust = grit + ground clouds
+	-- density = particles per second per square stud, speed = fall speed, drag/skyWind/gndWind = how wind pushes
+	local WCFG = {
+		Rain = {
+			kind = "fall", density = 0.26, speed = 85, maxFall = 200, drag = 0,
+			baseWind = 0, windScale = 1.0, skyWind = 1.0, gndWind = 0,
+			mood = 0.7, tint = Color3.fromRGB(150, 168, 195), lightning = false,
+		},
+		Storm = {
+			kind = "fall", density = 0.4, speed = 105, maxFall = 220, drag = 0,
+			baseWind = 35, windScale = 1.0, skyWind = 1.0, gndWind = 0,
+			mood = 1.15, tint = Color3.fromRGB(115, 130, 165), lightning = true,
+		},
+		Snow = {
+			kind = "flake", density = 0.035, speed = 6.5, maxFall = 110, drag = 0.6,
+			baseWind = 4, windScale = 0.5, skyWind = 0.25, gndWind = 0,
+			mood = 0.35, tint = Color3.fromRGB(205, 215, 235), lightning = false,
+		},
+		Blizzard = {
+			kind = "flake", density = 0.08, speed = 14, maxFall = 120, drag = 0.5,
+			baseWind = 55, windScale = 1.0, skyWind = 0.12, gndWind = 0,
+			mood = 0.95, tint = Color3.fromRGB(185, 200, 228), lightning = false,
+		},
+		Dust = {
+			kind = "dust", density = 0.03, puff = 0.004, speed = 1, maxFall = 10, drag = 1.5,
+			baseWind = 40, windScale = 0.9, skyWind = 0.6, gndWind = 0.5,
+			mood = 0.6, tint = Color3.fromRGB(215, 185, 140), lightning = false,
+		},
+	}
+
+	local W = {
+		kind = nil,
+		folder = nil,
+		cells = {},
+		list = {},
+		ptr = 1,
+		cs = 0,
+		pix = nil,
+		piz = nil,
+		pn = nil,
+		params = nil,
+		baseList = {},
+		baseT = -10,
+		last = os.clock(),
+		windT = 0,
+		cc = nil,
+		moodNow = 0,
+		flash = 0,
+		nextBolt = 0,
+	}
+
+	local function makePart(name)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanTouch = false
+		p.CanQuery = false
+		p.CastShadow = false
+		p.Transparency = 1
+		p.Size = Vector3.new(1, 1, 1)
+		p.Position = Vector3.new(0, -5000, 0)
+		return p
 	end
 
-	local function weatherBuild(kind)
-		weatherStop()
+	-- the emitter that lives in the sky part of a cell
+	local function buildSky(cfg)
+		local em = Instance.new("ParticleEmitter")
+		em.Name = "Sky"
+		em.Rate = 0
+		em.Enabled = true
+		em.LockedToPart = false
+		em.LightInfluence = 0.5
+		em.EmissionDirection = Enum.NormalId.Bottom
+		em.Acceleration = Vector3.new(0, 0, 0)
+		em.Drag = cfg.drag
+		if cfg.kind == "fall" then
+			-- rain: thin streaks that follow their direction of travel (negative Squash + VelocityParallel)
+			em.Texture = TEX_SPARK
+			em.Speed = NumberRange.new(cfg.speed * 0.92, cfg.speed * 1.08)
+			em.SpreadAngle = Vector2.new(1.5, 1.5)
+			em.Color = ColorSequence.new(Color3.fromRGB(205, 218, 240))
+			em.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.06, 0.45),
+				NumberSequenceKeypoint.new(1, 0.45),
+			})
+			em.LightEmission = 0.15
+			pcall(function()
+				em.Orientation = Enum.ParticleOrientation.VelocityParallel
+				em.Squash = NumberSequence.new(-3)
+			end)
+		elseif cfg.kind == "flake" then
+			-- snow: soft flakes that fade in at the top and out at the bottom and slowly spin
+			em.Texture = TEX_SMOKE
+			em.Speed = NumberRange.new(cfg.speed * 0.7, cfg.speed * 1.3)
+			em.SpreadAngle = Vector2.new(12, 12)
+			em.Color = ColorSequence.new(Color3.fromRGB(246, 249, 255))
+			em.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.05, 0.2),
+				NumberSequenceKeypoint.new(0.92, 0.2),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			em.LightEmission = 0.35
+			em.Rotation = NumberRange.new(0, 360)
+			em.RotSpeed = NumberRange.new(-45, 45)
+		else
+			-- dust: grit floating in a box just above the ground
+			em.Texture = TEX_SPARK
+			em.EmissionDirection = Enum.NormalId.Top
+			em.Speed = NumberRange.new(0.3, 2)
+			em.SpreadAngle = Vector2.new(180, 180)
+			em.Color = ColorSequence.new(Color3.fromRGB(214, 190, 150))
+			em.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.15, 0.35),
+				NumberSequenceKeypoint.new(0.85, 0.4),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			em.LightEmission = 0
+			em.Rotation = NumberRange.new(0, 360)
+			em.RotSpeed = NumberRange.new(-90, 90)
+			pcall(function()
+				em.Shape = Enum.ParticleEmitterShape.Box
+				em.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+			end)
+		end
+		return em
+	end
+
+	-- the emitter on the ground part of a cell: rain splashes / dust clouds (snow has none)
+	local function buildGround(cfg)
+		local em = Instance.new("ParticleEmitter")
+		em.Name = "Ground"
+		em.Rate = 0
+		em.Enabled = true
+		em.LockedToPart = false
+		em.EmissionDirection = Enum.NormalId.Top
+		if cfg.kind == "fall" then
+			em.Texture = TEX_SPARK
+			em.Speed = NumberRange.new(0.5, 2.5)
+			em.SpreadAngle = Vector2.new(70, 70)
+			em.Lifetime = NumberRange.new(0.18, 0.32)
+			em.Drag = 0
+			em.Acceleration = Vector3.new(0, -12, 0)
+			em.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.1, 0.04),
+				NumberSequenceKeypoint.new(1, 0.45, 0.12),
+			})
+			em.Color = ColorSequence.new(Color3.fromRGB(225, 235, 250))
+			em.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.3),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			em.LightEmission = 0.25
+			em.LightInfluence = 0.6
+		elseif cfg.kind == "dust" then
+			em.Texture = TEX_SMOKE
+			em.Speed = NumberRange.new(0.3, 1.5)
+			em.SpreadAngle = Vector2.new(40, 40)
+			em.Lifetime = NumberRange.new(3.5, 5.5)
+			em.Drag = cfg.drag + 0.5
+			em.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 4, 1.5),
+				NumberSequenceKeypoint.new(1, 11, 3),
+			})
+			em.Color = ColorSequence.new(Color3.fromRGB(205, 178, 135))
+			em.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.2, 0.84),
+				NumberSequenceKeypoint.new(0.75, 0.9),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			em.Rotation = NumberRange.new(0, 360)
+			em.RotSpeed = NumberRange.new(-15, 15)
+			em.LightInfluence = 0.8
+		end
+		return em
+	end
+
+	-- particle size grows with distance so far weather does not turn into invisible specks
+	local function applySizes(c, cfg, mul)
+		local s
+		if cfg.kind == "fall" then
+			s = 0.5 * mul
+		elseif cfg.kind == "flake" then
+			s = 0.3 * mul
+		else
+			s = 0.45 * mul
+		end
+		c.skyEm.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, s, s * 0.35),
+			NumberSequenceKeypoint.new(1, s, s * 0.35),
+		})
+	end
+
+	local function newCell(ix, iz, cfg)
+		local cs = W.cs
+		local c = {
+			ix = ix,
+			iz = iz,
+			x = (ix + 0.5) * cs,
+			z = (iz + 0.5) * cs,
+			t = -10,
+			dist = 0,
+			mul = nil,
+			ph = math.random() * 6.28,
+		}
+		c.sky = makePart("Sky")
+		c.skyEm = buildSky(cfg)
+		c.skyEm.Parent = c.sky
+		c.gnd = makePart("Ground")
+		c.gndEm = buildGround(cfg)
+		if c.gndEm then
+			c.gndEm.Parent = c.gnd
+		end
+		c.sky.Parent = W.folder
+		c.gnd.Parent = W.folder
+		return c
+	end
+
+	local function clearCells()
+		if W.folder then
+			pcall(function()
+				W.folder:Destroy()
+			end)
+		end
+		W.folder = nil
+		W.cells = {}
+		W.list = {}
+		W.ptr = 1
+		W.pix = nil
+		W.pn = nil
+	end
+
+	-- keep a cell on every grid square within range of the camera (cells are fixed to the world)
+	local function syncCells(camPos, n, cfg)
+		local cs = W.cs
+		local pix = math.floor(camPos.X / cs)
+		local piz = math.floor(camPos.Z / cs)
+		if pix == W.pix and piz == W.piz and n == W.pn then
+			return
+		end
+		W.pix = pix
+		W.piz = piz
+		W.pn = n
+
+		local want = {}
+		for dx = -n, n do
+			for dz = -n, n do
+				if dx * dx + dz * dz <= n * n + n then
+					local ix = pix + dx
+					local iz = piz + dz
+					local key = ix .. "," .. iz
+					want[key] = true
+					if not W.cells[key] then
+						W.cells[key] = newCell(ix, iz, cfg)
+					end
+				end
+			end
+		end
+		for key, c in pairs(W.cells) do
+			if not want[key] then
+				pcall(function()
+					c.sky:Destroy()
+					c.gnd:Destroy()
+				end)
+				W.cells[key] = nil
+			end
+		end
+
+		local list = {}
+		for _, c in pairs(W.cells) do
+			list[#list + 1] = c
+		end
+		W.list = list
+		if W.ptr > #list then
+			W.ptr = 1
+		end
+	end
+
+	-- ray straight down from high above: what is the first solid thing at (x, z)? (nil = nothing there)
+	-- invisible parts are skipped, and so are players' characters
+	local function findGround(x, z, camY)
+		local params = W.params
+		if not params then
+			return nil
+		end
+		local origin = Vector3.new(x, camY + 220, z)
+		local down = Vector3.new(0, -700, 0)
+		local extra = nil
+		local result = nil
+		for _ = 1, 4 do
+			local res = workspace:Raycast(origin, down, params)
+			if not res then
+				break
+			end
+			local inst = res.Instance
+			if inst ~= workspace.Terrain and inst.Transparency >= 0.95 then
+				extra = extra or {}
+				extra[#extra + 1] = inst
+				local list = {}
+				for i = 1, #W.baseList do
+					list[i] = W.baseList[i]
+				end
+				for i = 1, #extra do
+					list[#list + 1] = extra[i]
+				end
+				params.FilterDescendantsInstances = list
+			else
+				result = res.Position.Y
+				break
+			end
+		end
+		if extra then
+			params.FilterDescendantsInstances = W.baseList
+		end
+		return result
+	end
+
+	local function refreshCell(c, cfg, v, camPos, now)
+		c.t = now
+		local dx = c.x - camPos.X
+		local dz = c.z - camPos.Z
+		local dist = math.sqrt(dx * dx + dz * dz)
+		c.dist = dist
+
+		local gy = findGround(c.x, c.z, camPos.Y)
+		if not gy then
+			c.skyEm.Rate = 0
+			if c.gndEm then
+				c.gndEm.Rate = 0
+			end
+			return
+		end
+
+		local cs = W.cs
+		local thin = math.clamp(55 / math.max(dist, 1), 0.2, 1)   -- far cells get fewer particles
+		local amt = v.amount / 50
+		local rate = cfg.density * amt * cs * cs * thin
+
+		if cfg.kind == "dust" then
+			c.sky.Size = Vector3.new(cs, 8, cs)
+			c.sky.CFrame = CFrame.new(c.x, gy + 4, c.z)
+			c.skyEm.Lifetime = NumberRange.new(3.5, 6)
+		else
+			-- starts above the camera, ends exactly on whatever the ray hit
+			local top = math.max(gy + 25, camPos.Y + 50)
+			top = math.min(top, gy + cfg.maxFall)
+			local life = (top - gy) / cfg.speed
+			c.sky.Size = Vector3.new(cs, 0.2, cs)
+			c.sky.CFrame = CFrame.new(c.x, top, c.z)
+			c.skyEm.Lifetime = NumberRange.new(life * 0.97, life)
+		end
+		c.skyEm.Rate = rate
+
+		local mul = 1 + dist / 90
+		if c.mul == nil or math.abs(c.mul - mul) > 0.2 then
+			c.mul = mul
+			applySizes(c, cfg, mul)
+		end
+
+		if c.gndEm then
+			local gRate = 0
+			if cfg.kind == "fall" then
+				if v.splash and dist < 80 then
+					gRate = rate * 0.6
+				end
+			elseif cfg.kind == "dust" then
+				gRate = cfg.puff * amt * cs * cs * thin
+			end
+			if gRate > 0 then
+				c.gnd.Size = Vector3.new(cs, 0.1, cs)
+				c.gnd.CFrame = CFrame.new(c.x, gy + 0.15, c.z)
+			end
+			c.gndEm.Rate = gRate
+		end
+	end
+
+	-- wind (with slow gusts) and snow sway, pushed into every emitter ten times a second
+	local function applyWind(cfg, v, now)
+		local gust = 0.8 + 0.2 * math.sin(now * 0.6) + 0.12 * math.sin(now * 1.7 + 1.3)
+		local mag = (cfg.baseWind + v.wind * cfg.windScale) * gust
+		local wx = 0.96 * mag
+		local wz = 0.28 * mag
+		local fallA = 0
+		if cfg.kind == "flake" then
+			fallA = -cfg.drag * cfg.speed   -- keeps the flakes falling at their speed while drag acts on the wind
+		end
+		for i = 1, #W.list do
+			local c = W.list[i]
+			local ax = wx * cfg.skyWind
+			local az = wz * cfg.skyWind
+			if cfg.kind == "flake" then
+				ax = ax + math.sin(now * 0.8 + c.ph) * 2.5
+				az = az + math.cos(now * 0.6 + c.ph * 1.3) * 2.5
+			end
+			c.skyEm.Acceleration = Vector3.new(ax, fallA, az)
+			if cfg.gndWind > 0 and c.gndEm then
+				c.gndEm.Acceleration = Vector3.new(wx * cfg.gndWind, 0, wz * cfg.gndWind)
+			end
+		end
+	end
+
+	-- MOOD: a colour correction that fades in (darker, less colour, tinted) and flashes with lightning
+	local function moodTick(cfg, v, dt)
+		local target = math.clamp(v.mood / 100 * cfg.mood, 0, 1.4)
+		W.moodNow = W.moodNow + (target - W.moodNow) * math.min(1, dt * 1.5)
+		local m = W.moodNow
+		local fl = W.flash
+		W.flash = math.max(0, W.flash - dt * 3.5)
+		if m < 0.01 and fl < 0.01 then
+			if W.cc then
+				W.cc.Enabled = false
+			end
+			return
+		end
+		W.cc = ensureEffect(W.cc, "ColorCorrectionEffect", "Y1WeatherMood")
+		W.cc.Enabled = true
+		W.cc.Saturation = -0.3 * m
+		W.cc.Brightness = -0.12 * m + fl * 0.3
+		W.cc.Contrast = 0.08 * m + fl * 0.15
+		W.cc.TintColor = Color3.new(1, 1, 1):Lerp(cfg.tint, math.clamp(m, 0, 1) * 0.55)
+	end
+
+	-- LIGHTNING (Storm): a jagged bolt far away, with a flicker and a flash of the whole screen
+	local function spawnBolt(cam, camPos)
+		if not W.folder then
+			return
+		end
+		local look = cam.CFrame.LookVector
+		local bearing = math.atan2(look.X, look.Z)
+		if math.random() < 0.3 then
+			bearing = math.random() * 6.2832
+		else
+			bearing = bearing + (math.random() - 0.5) * 2.0
+		end
+		local dist = 160 + math.random() * 260
+		local bx = camPos.X + math.sin(bearing) * dist
+		local bz = camPos.Z + math.cos(bearing) * dist
+		local gy = findGround(bx, bz, camPos.Y) or (camPos.Y - 8)
+		local topY = math.max(camPos.Y, gy) + 300
+
+		local pts = { Vector3.new(bx, topY, bz) }
+		local x = bx
+		local z = bz
+		local N = 14
+		for i = 1, N - 1 do
+			x = x + (math.random() - 0.5) * 38
+			z = z + (math.random() - 0.5) * 38
+			pts[#pts + 1] = Vector3.new(x, topY + (gy - topY) * (i / N), z)
+		end
+		pts[#pts + 1] = Vector3.new(x, gy, z)
+
+		local bolt = Instance.new("Folder")
+		bolt.Name = "Bolt"
+		bolt.Parent = W.folder
+		local parts = {}
+		local thick = 0.6 + dist / 110
+
+		local function seg(a, b, th)
+			local len = (b - a).Magnitude
+			if len < 0.5 then
+				return
+			end
+			local p = makePart("Seg")
+			p.Material = Enum.Material.Neon
+			p.Color = Color3.fromRGB(222, 234, 255)
+			p.Transparency = 0
+			p.Size = Vector3.new(th, th, len)
+			p.CFrame = CFrame.lookAt((a + b) / 2, b)
+			p.Parent = bolt
+			parts[#parts + 1] = p
+		end
+
+		for i = 1, #pts - 1 do
+			seg(pts[i], pts[i + 1], thick)
+			if i > 3 and i < #pts - 2 and math.random() < 0.3 then
+				local a = pts[i]
+				for _ = 1, 3 do
+					local b = a + Vector3.new((math.random() - 0.5) * 40, -(10 + math.random() * 22), (math.random() - 0.5) * 40)
+					seg(a, b, thick * 0.55)
+					a = b
+				end
+			end
+		end
+
+		local power = math.clamp(1.3 - dist / 380, 0.35, 1)
+		W.flash = power
+		task.delay(0.17, function()
+			W.flash = math.max(W.flash, power * 0.75)
+		end)
+		task.spawn(function()
+			task.wait(0.07)
+			for i = 1, #parts do
+				pcall(function()
+					parts[i].Transparency = 0.7
+				end)
+			end
+			task.wait(0.06)
+			for i = 1, #parts do
+				pcall(function()
+					parts[i].Transparency = 0
+				end)
+			end
+			task.wait(0.12)
+			for i = 1, #parts do
+				pcall(function()
+					TweenService:Create(parts[i], TweenInfo.new(0.3), { Transparency = 1 }):Play()
+				end)
+			end
+			task.wait(0.4)
+			pcall(function()
+				bolt:Destroy()
+			end)
+		end)
+	end
+
+	local function weatherStop()
+		if W.folder or W.cc or W.kind then
+			clearCells()
+			W.kind = nil
+			W.cs = 0
+			W.params = nil
+			W.moodNow = 0
+			W.flash = 0
+			if W.cc then
+				pcall(function()
+					W.cc:Destroy()
+				end)
+				W.cc = nil
+			end
+		end
+	end
+
+	-- runs every frame while Weather is on
+	local function weatherTick(v)
 		local cam = workspace.CurrentCamera
 		if not cam then
 			return
 		end
-		local part = Instance.new("Part")
-		part.Name = "Y1Weather"
-		part.Anchored = true
-		part.CanCollide = false
-		part.CanTouch = false
-		part.CanQuery = false
-		part.CastShadow = false
-		part.Transparency = 1
-		part.Size = Vector3.new(70, 1, 70)
+		local now = os.clock()
+		local dt = math.clamp(now - W.last, 0, 0.1)
+		W.last = now
+		local cfg = WCFG[v.kind] or WCFG.Rain
 
-		local em = Instance.new("ParticleEmitter")
-		em.Name = "Y1WeatherEmitter"
-		em.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-		em.LightInfluence = 0
-		em.Enabled = true
-		em.Rate = 0
-		if kind == "Rain" then
-			em.EmissionDirection = Enum.NormalId.Bottom
-			em.Speed = NumberRange.new(70, 90)
-			em.Lifetime = NumberRange.new(0.9, 1.0)
-			em.Size = NumberSequence.new(0.35)
-			em.Color = ColorSequence.new(Color3.fromRGB(205, 225, 255))
-			em.Transparency = NumberSequence.new(0.15)
-			em.LightEmission = 0.8
-			em.SpreadAngle = Vector2.new(1, 1)
-			pcall(function()
-				em.Orientation = Enum.ParticleOrientation.VelocityParallel
-			end)
-		elseif kind == "Snow" then
-			em.EmissionDirection = Enum.NormalId.Bottom
-			em.Speed = NumberRange.new(4, 7)
-			em.Lifetime = NumberRange.new(7, 8)
-			em.Size = NumberSequence.new(0.45)
-			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-			em.Transparency = NumberSequence.new(0.1)
-			em.LightEmission = 0.7
-			em.SpreadAngle = Vector2.new(25, 25)
-			em.RotSpeed = NumberRange.new(-60, 60)
-		else
-			part.Size = Vector3.new(1, 50, 70)
-			em.EmissionDirection = Enum.NormalId.Right
-			em.Speed = NumberRange.new(45, 60)
-			em.Lifetime = NumberRange.new(1.6, 1.8)
-			em.Size = NumberSequence.new(0.3)
-			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-			em.Transparency = NumberSequence.new(0.35)
-			em.LightEmission = 0.5
-			em.SpreadAngle = Vector2.new(4, 4)
-			pcall(function()
-				em.Orientation = Enum.ParticleOrientation.VelocityParallel
-			end)
+		-- a new type, a new grid size or a new camera starts the grid over
+		local cs = math.clamp(math.floor(v.range / 8 + 0.5), 12, 28)
+		if W.kind ~= v.kind or cs ~= W.cs or (W.folder and W.folder.Parent ~= cam) then
+			clearCells()
+			W.kind = v.kind
+			W.cs = cs
+			W.nextBolt = now + 3 + math.random() * 3
 		end
-		em.Parent = part
-		part.CFrame = CFrame.new(cam.CFrame.Position)
-		part.Parent = cam
-		wPart = part
-		wEmitter = em
-		wKind = kind
-	end
+		if not W.folder then
+			local f = Instance.new("Folder")
+			f.Name = "Y1Weather"
+			f.Parent = cam
+			W.folder = f
+		end
 
-	-- keeps the weather box on top of the camera (runs every frame before drawing, so it never lags behind)
-	local function weatherFollow()
-		local cam = workspace.CurrentCamera
-		if not cam or not wPart or not wPart.Parent then
-			return
-		end
-		local cp = cam.CFrame.Position
-		if wKind == "Wind" then
-			wPart.CFrame = CFrame.new(cp + Vector3.new(-45, 8, 0))
-		else
-			wPart.CFrame = CFrame.new(cp + Vector3.new(0, 30, 0))
-		end
-	end
+		local camPos = cam.CFrame.Position
 
-	local function weatherUpdate(amount, wind)
-		if not wPart or not wEmitter then
-			return
-		end
-		weatherFollow()
-		if wKind == "Wind" then
-			wEmitter.Rate = amount * 3
-			wEmitter.Speed = NumberRange.new(20 + wind * 0.6, 30 + wind * 0.8)
-		else
-			local per = 18
-			if wKind == "Snow" then
-				per = 6
+		-- what the downward rays ignore (refreshed once a second): our own parts, the camera and every character
+		if not W.params or now - W.baseT > 1 then
+			W.baseT = now
+			local list = { W.folder, cam }
+			local plist = PlayersService:GetPlayers()
+			for i = 1, #plist do
+				local ch = plist[i].Character
+				if ch then
+					list[#list + 1] = ch
+				end
 			end
-			wEmitter.Rate = amount * per
-			wEmitter.Acceleration = Vector3.new(wind * 0.5, 0, wind * 0.2)
+			W.baseList = list
+			local params = RaycastParams.new()
+			params.FilterType = Enum.RaycastFilterType.Exclude
+			params.IgnoreWater = true
+			params.FilterDescendantsInstances = list
+			W.params = params
+		end
+
+		syncCells(camPos, math.ceil(v.range / cs), cfg)
+
+		-- re-check a handful of cells per frame (nearest cells are re-checked most often)
+		local count = #W.list
+		if count > 0 then
+			local budget = 28
+			for _ = 1, count do
+				if W.ptr > count then
+					W.ptr = 1
+				end
+				local c = W.list[W.ptr]
+				W.ptr = W.ptr + 1
+				if now - c.t >= 0.25 + c.dist / 160 then
+					refreshCell(c, cfg, v, camPos, now)
+					budget = budget - 1
+					if budget <= 0 then
+						break
+					end
+				end
+			end
+		end
+
+		if now - W.windT >= 0.1 then
+			W.windT = now
+			applyWind(cfg, v, now)
+		end
+
+		moodTick(cfg, v, dt)
+
+		if cfg.lightning and now >= W.nextBolt then
+			W.nextBolt = now + 5 + math.random() * 11
+			pcall(spawnBolt, cam, camPos)
 		end
 	end
 
@@ -1635,14 +2161,9 @@ function WorldPage.build(parent, T, H, opts)
 	end
 
 	local function stepD()
-		-- weather
 		local wt = F.weather
 		if wt.enabled then
-			local kind = wt.vals.kind
-			if wKind ~= kind or not wPart or wPart.Parent ~= workspace.CurrentCamera then
-				weatherBuild(kind)
-			end
-			weatherUpdate(wt.vals.amount, wt.vals.wind)
+			weatherTick(wt.vals)
 			pcall(function()
 				if origWind == nil then
 					origWind = workspace.GlobalWind
@@ -1650,9 +2171,7 @@ function WorldPage.build(parent, T, H, opts)
 				workspace.GlobalWind = Vector3.new(wt.vals.wind, 0, wt.vals.wind * 0.3)
 			end)
 		else
-			if wKind ~= nil then
-				weatherStop()
-			end
+			weatherStop()
 			if origWind ~= nil then
 				pcall(function()
 					workspace.GlobalWind = origWind
@@ -1676,11 +2195,10 @@ function WorldPage.build(parent, T, H, opts)
 		end
 	end)
 
-	-- right before each frame is drawn: keep shadows off and keep the weather box on the camera
+	-- right before each frame is drawn: keep shadows off
 	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
 		if running then
 			pcall(applyShadows)
-			pcall(weatherFollow)
 		end
 	end)
 
