@@ -8,7 +8,7 @@
 --   Executor info: which executor is running (if it can be detected), its version, and a feature
 --                  support line: Xeno and Solara say "Some features might not be supported due to
 --                  sunc and unc", every other executor says "Features are supported"
---   Credits      : who made yur1 + Discord symbol
+--   Credits      : who made yur1 + a shout out + Discord symbol
 --
 --   local InfoPage = <this file>
 --   InfoPage.build(parentFrame, themeTable, helperTable, {
@@ -36,12 +36,14 @@ function InfoPage.build(parent, T, H, opts)
 	local RIGHT = Enum.TextXAlignment.Right
 	local WARN = Color3.fromRGB(255, 190, 90)   -- amber for the "some features" warning
 
+	local CREDITS_H = 98   -- the credits card is a bit taller now (it has the shout out line too)
+
 	local root = new("ScrollingFrame", {
 		Name = "InfoRoot",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		CanvasSize = UDim2.new(0, 0, 0, 618),
+		CanvasSize = UDim2.new(0, 0, 0, 526 + CREDITS_H + 16),
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		ScrollBarThickness = 3,
 		ScrollBarImageColor3 = T.HOVER_GREY,
@@ -225,10 +227,11 @@ function InfoPage.build(parent, T, H, opts)
 	-- CREDITS
 	---------------------------------------------------------------------
 	section("Credits", 502)
-	local cred = card(526, 76)
+	local cred = card(526, CREDITS_H)
 
-	-- text on the left
-	local credText = label(cred, "<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord",
+	-- text on the left: who made it, then the shout out on its own line
+	local credText = label(cred,
+		"<b>reruinz</b> made all of yur1 alone, for any issues dm <b>reruinz</b> on discord\nShout out to my boy <b>myendingss</b>",
 		UDim2.fromOffset(18, 10), UDim2.new(1, -206, 1, -20), Enum.Font.GothamMedium, 13, T.TEXT_COLOR, LEFT)
 	credText.RichText = true
 	credText.TextWrapped = true
