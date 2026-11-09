@@ -1,7 +1,7 @@
 -- world.lua  (Y1 World tab)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Five cards, two per row. Every switch is OFF each time the script starts, and turning one off
+-- Twelve cards, two per row (the page scrolls). Every switch is OFF each time the script starts, and turning one off
 -- (or unloading) puts back the value the game had.
 --   Ambience         Enable + colour square. Sets the ambient light (Ambient and OutdoorAmbient).
 --   Custom Fog       Enable + colour square + three dots.
@@ -14,9 +14,12 @@
 --   Custom Time      Enable + three dots (Time slider, shown as hh:mm).
 --   Color Correction Enable + colour square (tint) + three dots (Saturation, Contrast, Brightness).
 --   Bloom            Enable + three dots (Intensity, Size, Threshold).
---   Sun Rays         Enable + three dots (Intensity, Spread).
+--   Sun Rays         Enable + three dots (Intensity, Spread). Takes over the game's own SunRaysEffect when it
+--                    has one (so the two do not fight), otherwise makes its own. Rays only show while the sun is
+--                    in front of you and it is daytime (use Custom Time to set noon).
 --   Blur / Depth of Field  Enable + three dots (Blur size, Depth of Field switch, Focus Distance, Amount).
---   No Shadows       Enable only. Turns the world's shadows off (more FPS).
+--   No Shadows       Enable only. Turns the world's shadows off (more FPS). It is forced every frame and the
+--                    moment the game switches shadows back on.
 --   X-Ray            Enable + three dots (Transparency). Makes the map see-through on YOUR screen only
 --                    (players and Terrain are left alone).
 --   Weather          Enable + three dots (Type: Rain / Snow / Wind, Amount, Wind). Particles that follow
@@ -78,7 +81,7 @@ function WorldPage.build(parent, T, H, opts)
 			} },
 		{ id = "sunrays", title = "Sun Rays", dots = true,
 			rows = {
-				{ t = "slider", key = "inten", name = "Intensity", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 0.25 },
+				{ t = "slider", key = "inten", name = "Intensity", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 0.5 },
 				{ t = "slider", key = "spread", name = "Spread", min = 0, max = 1, step = 0.05, fmt = "%.2f", value = 1 },
 			} },
 		{ id = "blur", title = "Blur / Depth of Field", dots = true,
@@ -168,6 +171,19 @@ function WorldPage.build(parent, T, H, opts)
 		Size = UDim2.fromOffset(100, 100),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
+	}, root)
+
+	-- the cards live in a scrolling frame so the lower rows (Sun Rays, No Shadows, X-Ray, Weather) are
+	-- always reachable, however tall the window is
+	local scroll = new("ScrollingFrame", {
+		Name = "WorldScroll",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = T.DIM_TEXT,
+		CanvasSize = UDim2.fromOffset(0, 600),
+		ScrollingDirection = Enum.ScrollingDirection.Y,
 	}, root)
 
 	local function uiScale()
@@ -686,11 +702,11 @@ function WorldPage.build(parent, T, H, opts)
 			Size = UDim2.new(0.5, -6, 0, 46),
 			BackgroundColor3 = T.SIDEBAR_BG,
 			BorderSizePixel = 0,
-		}, root)
+		}, scroll)
 		corner(card, RADIUS + 4)
 		stroke(card, T.BORDER, 1, 0)
 
-		label(root, string.upper(d.title), capPos, UDim2.new(0.5, -10, 0, 14),
+		label(scroll, string.upper(d.title), capPos, UDim2.new(0.5, -10, 0, 14),
 			Enum.Font.GothamMedium, 11, T.DIM_TEXT)
 
 		label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
@@ -740,6 +756,8 @@ function WorldPage.build(parent, T, H, opts)
 			table.insert(pickerEntry.hit, f.swatch.btn)
 		end
 	end
+
+	scroll.CanvasSize = UDim2.fromOffset(0, 24 + math.ceil(#DEFS / 2) * ROW_STEP + 8)
 
 	refreshSub = function(f)
 		f.sub.Text = subText(f)
@@ -1068,6 +1086,16 @@ function WorldPage.build(parent, T, H, opts)
 		end
 	end)
 
+	-- scrolling the page closes any open pop-up (it would stay behind while the cards move)
+	conns[#conns + 1] = scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		if P.isOpen() then
+			closePop()
+		end
+		if picker.isOpen() then
+			picker.close()
+		end
+	end)
+
 	-- leaving this page (or the tab) closes the pop-ups
 	do
 		local a = parent
@@ -1132,6 +1160,7 @@ function WorldPage.build(parent, T, H, opts)
 	local dofE = nil
 	local origShadows = nil
 	local origWind = nil
+	local raysSaved = nil   -- the game's own SunRaysEffect we are controlling: { inst, en, inten, spread }
 
 	local EFFECT_NAMES = { "Y1ColorCorrection", "Y1Bloom", "Y1SunRays", "Y1Blur", "Y1DOF" }
 	for i = 1, #EFFECT_NAMES do
@@ -1174,6 +1203,56 @@ function WorldPage.build(parent, T, H, opts)
 			end)
 		end
 		return nil
+	end
+
+	-- SUN RAYS: use the game's own SunRaysEffect when there is one (two of them would fight each other)
+	local function findGameRays()
+		local kids = Lighting:GetChildren()
+		for i = 1, #kids do
+			if kids[i]:IsA("SunRaysEffect") and kids[i].Name ~= "Y1SunRays" then
+				return kids[i]
+			end
+		end
+		local cam = workspace.CurrentCamera
+		if cam then
+			local ck = cam:GetChildren()
+			for i = 1, #ck do
+				if ck[i]:IsA("SunRaysEffect") then
+					return ck[i]
+				end
+			end
+		end
+		return nil
+	end
+
+	local function restoreRays()
+		if raysSaved then
+			local r = raysSaved
+			raysSaved = nil
+			if r.inst and r.inst.Parent then
+				pcall(function()
+					r.inst.Enabled = r.en
+					r.inst.Intensity = r.inten
+					r.inst.Spread = r.spread
+				end)
+			end
+		end
+	end
+
+	-- NO SHADOWS: runs every frame (RenderStepped, so it wins over the game) and instantly whenever
+	-- the game changes GlobalShadows back
+	local function applyShadows()
+		if F.shadows.enabled then
+			if origShadows == nil then
+				origShadows = Lighting.GlobalShadows
+			end
+			if Lighting.GlobalShadows ~= false then
+				Lighting.GlobalShadows = false
+			end
+		elseif origShadows ~= nil then
+			Lighting.GlobalShadows = origShadows
+			origShadows = nil
+		end
 	end
 
 	-- X-RAY: LocalTransparencyModifier only changes what YOU see, never the real part
@@ -1258,47 +1337,48 @@ function WorldPage.build(parent, T, H, opts)
 		part.CanQuery = false
 		part.CastShadow = false
 		part.Transparency = 1
-		part.Size = Vector3.new(90, 1, 90)
+		part.Size = Vector3.new(70, 1, 70)
 
 		local em = Instance.new("ParticleEmitter")
+		em.Name = "Y1WeatherEmitter"
+		em.Texture = "rbxasset://textures/particles/sparkles_main.dds"
 		em.LightInfluence = 0
+		em.Enabled = true
 		em.Rate = 0
 		if kind == "Rain" then
 			em.EmissionDirection = Enum.NormalId.Bottom
-			em.Speed = NumberRange.new(85, 100)
-			em.Lifetime = NumberRange.new(0.8, 0.9)
-			em.Size = NumberSequence.new(0.12)
-			em.Color = ColorSequence.new(Color3.fromRGB(190, 210, 235))
-			em.Transparency = NumberSequence.new(0.45)
-			em.LightEmission = 0.2
-			em.SpreadAngle = Vector2.new(2, 2)
+			em.Speed = NumberRange.new(70, 90)
+			em.Lifetime = NumberRange.new(0.9, 1.0)
+			em.Size = NumberSequence.new(0.35)
+			em.Color = ColorSequence.new(Color3.fromRGB(205, 225, 255))
+			em.Transparency = NumberSequence.new(0.15)
+			em.LightEmission = 0.8
+			em.SpreadAngle = Vector2.new(1, 1)
 			pcall(function()
 				em.Orientation = Enum.ParticleOrientation.VelocityParallel
-				em.Squash = NumberSequence.new(-3)
 			end)
 		elseif kind == "Snow" then
 			em.EmissionDirection = Enum.NormalId.Bottom
-			em.Speed = NumberRange.new(6, 10)
-			em.Lifetime = NumberRange.new(6, 7)
-			em.Size = NumberSequence.new(0.3)
+			em.Speed = NumberRange.new(4, 7)
+			em.Lifetime = NumberRange.new(7, 8)
+			em.Size = NumberSequence.new(0.45)
 			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-			em.Transparency = NumberSequence.new(0.2)
-			em.LightEmission = 0.6
-			em.SpreadAngle = Vector2.new(30, 30)
+			em.Transparency = NumberSequence.new(0.1)
+			em.LightEmission = 0.7
+			em.SpreadAngle = Vector2.new(25, 25)
 			em.RotSpeed = NumberRange.new(-60, 60)
 		else
-			part.Size = Vector3.new(1, 50, 90)
+			part.Size = Vector3.new(1, 50, 70)
 			em.EmissionDirection = Enum.NormalId.Right
-			em.Speed = NumberRange.new(50, 70)
-			em.Lifetime = NumberRange.new(1.4, 1.6)
-			em.Size = NumberSequence.new(0.15)
+			em.Speed = NumberRange.new(45, 60)
+			em.Lifetime = NumberRange.new(1.6, 1.8)
+			em.Size = NumberSequence.new(0.3)
 			em.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-			em.Transparency = NumberSequence.new(0.6)
-			em.LightEmission = 0.3
-			em.SpreadAngle = Vector2.new(5, 5)
+			em.Transparency = NumberSequence.new(0.35)
+			em.LightEmission = 0.5
+			em.SpreadAngle = Vector2.new(4, 4)
 			pcall(function()
 				em.Orientation = Enum.ParticleOrientation.VelocityParallel
-				em.Squash = NumberSequence.new(-3)
 			end)
 		end
 		em.Parent = part
@@ -1309,28 +1389,39 @@ function WorldPage.build(parent, T, H, opts)
 		wKind = kind
 	end
 
-	local function weatherUpdate(amount, wind)
+	-- keeps the weather box on top of the camera (runs every frame before drawing, so it never lags behind)
+	local function weatherFollow()
 		local cam = workspace.CurrentCamera
-		if not cam or not wPart or not wEmitter then
+		if not cam or not wPart or not wPart.Parent then
 			return
 		end
 		local cp = cam.CFrame.Position
 		if wKind == "Wind" then
-			wPart.CFrame = CFrame.new(cp + Vector3.new(-50, 8, 0))
-			wEmitter.Rate = amount * 2
+			wPart.CFrame = CFrame.new(cp + Vector3.new(-45, 8, 0))
+		else
+			wPart.CFrame = CFrame.new(cp + Vector3.new(0, 30, 0))
+		end
+	end
+
+	local function weatherUpdate(amount, wind)
+		if not wPart or not wEmitter then
+			return
+		end
+		weatherFollow()
+		if wKind == "Wind" then
+			wEmitter.Rate = amount * 3
 			wEmitter.Speed = NumberRange.new(20 + wind * 0.6, 30 + wind * 0.8)
 		else
-			wPart.CFrame = CFrame.new(cp + Vector3.new(0, 40, 0))
-			local per = 10
+			local per = 18
 			if wKind == "Snow" then
-				per = 4
+				per = 6
 			end
 			wEmitter.Rate = amount * per
 			wEmitter.Acceleration = Vector3.new(wind * 0.5, 0, wind * 0.2)
 		end
 	end
 
-	local function step()
+	local function stepA()
 		-- ambience
 		if F.ambience.enabled then
 			if origAmb == nil then
@@ -1426,6 +1517,9 @@ function WorldPage.build(parent, T, H, opts)
 			origTime = nil
 		end
 
+	end
+
+	local function stepB()
 		-- color correction
 		local cc = F.colorcorr
 		if cc.enabled then
@@ -1449,14 +1543,33 @@ function WorldPage.build(parent, T, H, opts)
 			bloomE = dropEffect(bloomE)
 		end
 
-		-- sun rays
+		-- sun rays: take over the game's own SunRaysEffect when it has one, otherwise make our own
 		local sr = F.sunrays
 		if sr.enabled then
-			raysE = ensureEffect(raysE, "SunRaysEffect", "Y1SunRays")
-			raysE.Intensity = sr.vals.inten
-			raysE.Spread = sr.vals.spread
-		elseif raysE then
-			raysE = dropEffect(raysE)
+			local g = findGameRays()
+			if g then
+				if raysSaved == nil or raysSaved.inst ~= g then
+					restoreRays()
+					raysSaved = { inst = g, en = g.Enabled, inten = g.Intensity, spread = g.Spread }
+				end
+				g.Enabled = true
+				g.Intensity = sr.vals.inten
+				g.Spread = sr.vals.spread
+				if raysE then
+					raysE = dropEffect(raysE)
+				end
+			else
+				restoreRays()
+				raysE = ensureEffect(raysE, "SunRaysEffect", "Y1SunRays")
+				raysE.Enabled = true
+				raysE.Intensity = sr.vals.inten
+				raysE.Spread = sr.vals.spread
+			end
+		else
+			restoreRays()
+			if raysE then
+				raysE = dropEffect(raysE)
+			end
 		end
 
 		-- blur + depth of field
@@ -1482,16 +1595,11 @@ function WorldPage.build(parent, T, H, opts)
 			end
 		end
 
+	end
+
+	local function stepC()
 		-- shadows off
-		if F.shadows.enabled then
-			if origShadows == nil then
-				origShadows = Lighting.GlobalShadows
-			end
-			Lighting.GlobalShadows = false
-		elseif origShadows ~= nil then
-			Lighting.GlobalShadows = origShadows
-			origShadows = nil
-		end
+		applyShadows()
 
 		-- x-ray
 		local xr = F.xray
@@ -1524,11 +1632,14 @@ function WorldPage.build(parent, T, H, opts)
 			xrayApplied = nil
 		end
 
+	end
+
+	local function stepD()
 		-- weather
 		local wt = F.weather
 		if wt.enabled then
 			local kind = wt.vals.kind
-			if wKind ~= kind or not wPart or wPart.Parent == nil then
+			if wKind ~= kind or not wPart or wPart.Parent ~= workspace.CurrentCamera then
 				weatherBuild(kind)
 			end
 			weatherUpdate(wt.vals.amount, wt.vals.wind)
@@ -1551,9 +1662,32 @@ function WorldPage.build(parent, T, H, opts)
 		end
 	end
 
+	-- every section runs on its own, so an error in one can never stop the others
+	local function step()
+		pcall(stepA)
+		pcall(stepB)
+		pcall(stepC)
+		pcall(stepD)
+	end
+
 	conns[#conns + 1] = RunService.Heartbeat:Connect(function()
 		if running then
-			pcall(step)
+			step()
+		end
+	end)
+
+	-- right before each frame is drawn: keep shadows off and keep the weather box on the camera
+	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
+		if running then
+			pcall(applyShadows)
+			pcall(weatherFollow)
+		end
+	end)
+
+	-- the instant the game switches shadows back on, switch them off again
+	conns[#conns + 1] = Lighting:GetPropertyChangedSignal("GlobalShadows"):Connect(function()
+		if running then
+			pcall(applyShadows)
 		end
 	end)
 
