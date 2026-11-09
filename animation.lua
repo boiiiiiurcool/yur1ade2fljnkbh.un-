@@ -22,6 +22,12 @@
 -- ANTI AFK: a second small card (Enable switch only, no dots) on the third row, left side. While it is on,
 -- the game's idle kick is blocked by sending a fake click when Roblox says you went idle.
 --
+-- HITBOX EXPANDER: a third small card on the right side of the third row (next to Anti AFK).
+-- Enable switch + three dots. Makes every other player's real HumanoidRootPart bigger on YOUR client
+-- (never Massless; CanCollide forced off before every physics step; everything restored when turned off).
+-- Pop-up: Visualize, Team Check, Knocked Check (BodyEffects["K.O"], Zee Hood), Size (slider 2-50 +
+-- typed box 1-100), Dynamic (smaller hitbox when they are close: Min Size + Full At).
+--
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
 -- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
 
@@ -30,6 +36,8 @@ local AnimationPage = {}
 function AnimationPage.build(parent, T, H, ctx)
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
+	local UserInputService = game:GetService("UserInputService")
+	local RunService = game:GetService("RunService")
 	local player = Players.LocalPlayer
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
@@ -726,6 +734,586 @@ function AnimationPage.build(parent, T, H, ctx)
 	end)
 
 	---------------------------------------------------------------------
+	-- HITBOX EXPANDER logic
+	---------------------------------------------------------------------
+	local HB = {
+		enabled = false,
+		visualize = false,
+		teamCheck = false,
+		knockedCheck = false,
+		dynamic = false,
+		dynMin = 2,
+		dynFar = 60,
+		size = 8,
+	}
+	local DYN_NEAR = 4
+	local FILL_COLOR = Color3.fromRGB(120, 200, 255)
+	local FILL_ALPHA = 0.86
+	local LINE_COLOR = Color3.fromRGB(165, 220, 255)
+	local DASHES = 8
+	local DASH_FILL = 0.55
+
+	local records = {}   -- [player] = { part, size, transparency, canCollide, box, wire }
+	local activeCount = 0
+
+	local function teamSkip(p)
+		if not HB.teamCheck then
+			return false
+		end
+		if p.Team ~= nil and player.Team ~= nil and p.Team == player.Team then
+			return true
+		end
+		return false
+	end
+
+	-- Zee Hood: the K.O bool lives at <character>.BodyEffects["K.O"] (characters are in workspace.Players)
+	local function isKnocked(char)
+		local be = char:FindFirstChild("BodyEffects")
+		if be == nil then
+			local folder = workspace:FindFirstChild("Players")
+			local model = nil
+			if folder then
+				model = folder:FindFirstChild(char.Name)
+			end
+			if model then
+				be = model:FindFirstChild("BodyEffects")
+			end
+		end
+		if be then
+			local ko = be:FindFirstChild("K.O")
+			if ko and ko:IsA("BoolValue") then
+				return ko.Value
+			end
+		end
+		return false
+	end
+
+	local function sizeFor(d)
+		local sz = HB.size
+		if not HB.dynamic then
+			return sz
+		end
+		local lo = math.min(HB.dynMin, sz)
+		local far = math.max(HB.dynFar, DYN_NEAR + 1)
+		local v = sz
+		if d >= far then
+			v = sz
+		elseif d <= DYN_NEAR then
+			v = lo
+		else
+			v = lo + (sz - lo) * (d - DYN_NEAR) / (far - DYN_NEAR)
+		end
+		return math.floor(v * 10 + 0.5) / 10
+	end
+
+	local function killVisual(r)
+		if r.box then
+			pcall(function()
+				r.box:Destroy()
+			end)
+			r.box = nil
+		end
+		if r.wire then
+			pcall(function()
+				r.wire:Destroy()
+			end)
+			r.wire = nil
+		end
+	end
+
+	local function release(p)
+		local r = records[p]
+		if not r then
+			return
+		end
+		records[p] = nil
+		killVisual(r)
+		local part = r.part
+		if part and part.Parent then
+			pcall(function()
+				part.Size = r.size
+				part.Transparency = r.transparency
+				part.CanCollide = r.canCollide
+			end)
+		end
+	end
+
+	local function releaseAll()
+		local list = {}
+		for p, _ in pairs(records) do
+			list[#list + 1] = p
+		end
+		for i = 1, #list do
+			release(list[i])
+		end
+	end
+
+	local function buildDashes(wire, size)
+		wire:Clear()
+		local h = size / 2
+		local period = size / DASHES
+		local dash = period * DASH_FILL
+		for axis = 1, 3 do
+			for sa = -1, 1, 2 do
+				for sb = -1, 1, 2 do
+					for i = 0, DASHES - 1 do
+						local t0 = -h + i * period
+						local t1 = t0 + dash
+						local a = nil
+						local b = nil
+						if axis == 1 then
+							a = Vector3.new(t0, sa * h, sb * h)
+							b = Vector3.new(t1, sa * h, sb * h)
+						elseif axis == 2 then
+							a = Vector3.new(sa * h, t0, sb * h)
+							b = Vector3.new(sa * h, t1, sb * h)
+						else
+							a = Vector3.new(sa * h, sb * h, t0)
+							b = Vector3.new(sa * h, sb * h, t1)
+						end
+						wire:AddLine(a, b)
+					end
+				end
+			end
+		end
+	end
+
+	local function makeVisual(r, part, want, sz)
+		local box = Instance.new("BoxHandleAdornment")
+		box.Name = "HitboxFill"
+		box.Adornee = part
+		box.AlwaysOnTop = true
+		box.ZIndex = 1
+		box.Color3 = FILL_COLOR
+		box.Transparency = FILL_ALPHA
+		box.Size = want
+		box.Parent = part
+		r.box = box
+
+		local wire = Instance.new("WireframeHandleAdornment")
+		wire.Name = "HitboxDashes"
+		wire.Adornee = part
+		wire.AlwaysOnTop = true
+		wire.ZIndex = 2
+		wire.Color3 = LINE_COLOR
+		wire.Transparency = 0
+		wire.Parent = part
+		r.wire = wire
+
+		-- dashes are built once at size 1 and scaled (cheap); without Scale they are redrawn at real size
+		local okScale = pcall(function()
+			wire.Scale = Vector3.new(sz, sz, sz)
+		end)
+		r.scaleOK = okScale
+		if okScale then
+			buildDashes(wire, 1)
+		else
+			buildDashes(wire, sz)
+			r.dashSize = sz
+			r.dashTime = os.clock()
+		end
+	end
+
+	local function applyHitbox(p, origin)
+		local char = p.Character
+		local part = nil
+		local hum = nil
+		if char then
+			part = char:FindFirstChild("HumanoidRootPart")
+			hum = char:FindFirstChildOfClass("Humanoid")
+		end
+		if not part or not part:IsA("BasePart") or not hum or hum.Health <= 0 or teamSkip(p)
+			or (HB.knockedCheck and isKnocked(char)) then
+			release(p)
+			return
+		end
+
+		local r = records[p]
+		if r and r.part ~= part then
+			release(p)
+			r = nil
+		end
+		if not r then
+			r = {
+				part = part,
+				size = part.Size,
+				transparency = part.Transparency,
+				canCollide = part.CanCollide,
+			}
+			records[p] = r
+		end
+
+		local sz = sizeFor((part.Position - origin).Magnitude)
+		local want = Vector3.new(sz, sz, sz)
+		if (part.Size - want).Magnitude > 0.05 then
+			part.Size = want
+		end
+		if part.CanCollide then
+			part.CanCollide = false
+		end
+
+		if HB.visualize then
+			if not r.box or r.box.Parent ~= part or not r.wire or r.wire.Parent ~= part then
+				killVisual(r)
+				makeVisual(r, part, want, sz)
+			else
+				if (r.box.Size - want).Magnitude > 0.05 then
+					r.box.Size = want
+				end
+				if r.scaleOK then
+					local sc = r.wire.Scale
+					if math.abs(sc.X - sz) > 0.01 then
+						r.wire.Scale = Vector3.new(sz, sz, sz)
+					end
+				elseif r.dashSize ~= sz and os.clock() - (r.dashTime or 0) > 0.1 then
+					r.dashSize = sz
+					r.dashTime = os.clock()
+					buildDashes(r.wire, sz)
+				end
+			end
+		else
+			killVisual(r)
+		end
+	end
+
+	-- the game turns CanCollide back on during physics, so it is switched off again before every step
+	local function noCollide()
+		for _, r in pairs(records) do
+			local part = r.part
+			if part and part.Parent and part.CanCollide then
+				part.CanCollide = false
+			end
+		end
+	end
+
+	conns[#conns + 1] = RunService.Heartbeat:Connect(function()
+		if not running then
+			return
+		end
+		if not HB.enabled then
+			if next(records) ~= nil then
+				releaseAll()
+			end
+			activeCount = 0
+			return
+		end
+		local mine = player.Character
+		local mroot = nil
+		if mine then
+			mroot = mine:FindFirstChild("HumanoidRootPart")
+		end
+		local cam = workspace.CurrentCamera
+		local origin = Vector3.new(0, 0, 0)
+		if mroot then
+			origin = mroot.Position
+		elseif cam then
+			origin = cam.CFrame.Position
+		end
+		local list = Players:GetPlayers()
+		for i = 1, #list do
+			local p = list[i]
+			if p ~= player then
+				pcall(applyHitbox, p, origin)
+			end
+		end
+		local n = 0
+		for _, _ in pairs(records) do
+			n = n + 1
+		end
+		activeCount = n
+	end)
+
+	conns[#conns + 1] = RunService.Stepped:Connect(function()
+		if running and HB.enabled then
+			noCollide()
+		end
+	end)
+
+	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
+		if running and HB.enabled then
+			noCollide()
+		end
+	end)
+
+	conns[#conns + 1] = Players.PlayerRemoving:Connect(function(p)
+		release(p)
+	end)
+
+	local function hitboxUnload()
+		HB.enabled = false
+		releaseAll()
+	end
+
+
+	---------------------------------------------------------------------
+	-- HITBOX EXPANDER (third row, right side)
+	---------------------------------------------------------------------
+	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue)
+		label(c, name, UDim2.fromOffset(16, y), UDim2.fromOffset(labelW, 20),
+			Enum.Font.GothamMedium, 12, T.ICON)
+		local valueLabel = label(c, "", UDim2.new(1, -60, 0, y), UDim2.fromOffset(46, 20),
+			Enum.Font.GothamMedium, 12, T.TEXT_COLOR, Enum.TextXAlignment.Right)
+		local x0 = 16 + labelW + 6
+
+		local track = new("Frame", {
+			Position = UDim2.fromOffset(x0, y + 7),
+			Size = UDim2.new(1, -(x0 + 68), 0, 6),
+			BackgroundColor3 = T.CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, c)
+		corner(track, 3)
+		local fill = new("Frame", {
+			Size = UDim2.new(0, 0, 1, 0),
+			BackgroundColor3 = T.ICON_HOVER,
+			BorderSizePixel = 0,
+		}, track)
+		corner(fill, 3)
+		local knob = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0, 0, 0.5, 0),
+			Size = UDim2.fromOffset(12, 12),
+			BackgroundColor3 = T.ICON_HOVER,
+			BorderSizePixel = 0,
+		}, track)
+		corner(knob, 100)
+		local hitBtn = new("TextButton", {
+			AutoButtonColor = false,
+			Text = "",
+			Position = UDim2.fromOffset(x0, y),
+			Size = UDim2.new(1, -(x0 + 68), 0, 20),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, c)
+
+		local value = startValue
+		local dragging = false
+		local function refresh()
+			local f = math.clamp((value - minV) / (maxV - minV), 0, 1)
+			fill.Size = UDim2.new(f, 0, 1, 0)
+			knob.Position = UDim2.new(f, 0, 0.5, 0)
+			valueLabel.Text = string.format(fmt, value)
+		end
+		refresh()
+
+		local function setFromX(px)
+			local w = hitBtn.AbsoluteSize.X
+			if w <= 0 then
+				return
+			end
+			local f = math.clamp((px - hitBtn.AbsolutePosition.X) / w, 0, 1)
+			value = minV + math.floor(f * (maxV - minV) / stepV + 0.5) * stepV
+			value = math.clamp(value, minV, maxV)
+			setValue(value)
+			refresh()
+		end
+
+		hitBtn.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				setFromX(input.Position.X)
+			end
+		end)
+		conns[#conns + 1] = UserInputService.InputChanged:Connect(function(input)
+			if not dragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				setFromX(input.Position.X)
+			end
+		end)
+		conns[#conns + 1] = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+			end
+		end)
+
+		local api = {}
+		function api.set(v)
+			value = v
+			refresh()
+		end
+		function api.dim(on)
+			local colr = T.DIM_TEXT
+			if on then
+				colr = T.ICON_HOVER
+			end
+			TweenService:Create(fill, FAST, { BackgroundColor3 = colr }):Play()
+		end
+		return api
+	end
+
+	local hbCard = new("Frame", {
+		Name = "HitboxCard",
+		Position = UDim2.new(0.5, 4, 0, 172),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, parent)
+	corner(hbCard, RADIUS + 4)
+	stroke(hbCard, T.BORDER, 1, 0)
+
+	local hbCaption = label(parent, "HITBOX EXPANDER", UDim2.new(0.5, 6, 0, 154), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(hbCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local hbSub = label(hbCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	hbSub.RichText = true
+
+	local function refreshHbStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if HB.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font>'
+		end
+		hbSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - ' .. state
+	end
+	refreshHbStatus()
+
+	X.makeSwitch(hbCard, false, function(on)
+		HB.enabled = on
+		refreshHbStatus()
+	end, 23)
+
+	local hbDots = X.makeDots(hbCard, UDim2.new(1, -58, 0, 23))
+
+	local HBW = 290
+	local HBH = 330
+	local hbF = X.makeFloating("HitboxSettings", HBW, HBH)
+	local hbPop = hbF.frame
+
+	label(hbPop, "Hitbox Expander", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, hbPop)
+
+	label(hbPop, "Visualize", UDim2.fromOffset(16, 50), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(hbPop, false, function(on)
+		HB.visualize = on
+	end, 64, 16)
+
+	label(hbPop, "Team Check", UDim2.fromOffset(16, 84), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(hbPop, false, function(on)
+		HB.teamCheck = on
+	end, 98, 16)
+
+	label(hbPop, "Knocked Check", UDim2.fromOffset(16, 118), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(hbPop, false, function(on)
+		HB.knockedCheck = on
+	end, 132, 16)
+
+	local sizeBox = nil
+	local sizeApi = makeSlider(hbPop, 156, "Size", 64, 2, 50, 1, HB.size, "%d", function(v)
+		HB.size = v
+		if sizeBox then
+			sizeBox.Text = tostring(v)
+		end
+	end)
+
+	label(hbPop, "Exact Size", UDim2.fromOffset(16, 184), UDim2.new(1, -110, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local sizeBoxFrame = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -16, 0, 187),
+		Size = UDim2.fromOffset(64, 22),
+		BackgroundColor3 = T.CLUSTER_BG,
+		BorderSizePixel = 0,
+	}, hbPop)
+	corner(sizeBoxFrame, 5)
+	sizeBox = new("TextBox", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Text = tostring(HB.size),
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = T.TEXT_COLOR,
+	}, sizeBoxFrame)
+	sizeBox.FocusLost:Connect(function()
+		local n = tonumber(sizeBox.Text)
+		if n then
+			HB.size = math.clamp(math.floor(n + 0.5), 1, 100)
+		end
+		sizeBox.Text = tostring(HB.size)
+		sizeApi.set(HB.size)
+	end)
+
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 218),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, hbPop)
+
+	label(hbPop, "Dynamic", UDim2.fromOffset(16, 224), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local minApi = makeSlider(hbPop, 258, "Min Size", 64, 1, 50, 1, HB.dynMin, "%d", function(v)
+		HB.dynMin = v
+	end)
+	local farApi = makeSlider(hbPop, 288, "Full At", 64, 10, 300, 5, HB.dynFar, "%d", function(v)
+		HB.dynFar = v
+	end)
+	minApi.dim(false)
+	farApi.dim(false)
+	X.makeSwitch(hbPop, false, function(on)
+		HB.dynamic = on
+		minApi.dim(on)
+		farApi.dim(on)
+	end, 238, 16)
+
+	local function openHb()
+		if hbF.isOpen() then
+			return
+		end
+		hbF.open(X.placeNear(hbDots.btn, HBW, HBH, nil))
+		hbDots.open = true
+		hbDots.paint()
+	end
+
+	local function closeHb()
+		hbF.close()
+		hbDots.open = false
+		hbDots.paint()
+	end
+
+	hbDots.btn.Activated:Connect(function()
+		if hbF.isOpen() then
+			closeHb()
+		else
+			openHb()
+		end
+	end)
+
+	X.addPopup({
+		isOpen = function()
+			return hbF.isOpen()
+		end,
+		close = closeHb,
+		hit = { hbPop, hbDots.btn },
+	})
+
+	conns[#conns + 1] = RunService.Heartbeat:Connect(function()
+		if running and HB.enabled then
+			local txt = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - <font color="rgb(52,199,120)">'
+				.. tostring(activeCount) .. ' player(s)</font>'
+			if hbSub.Text ~= txt then
+				hbSub.Text = txt
+			end
+		end
+	end)
+
+	---------------------------------------------------------------------
 	-- unload: put the original animations back
 	---------------------------------------------------------------------
 	local function unload()
@@ -735,6 +1323,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		enabled = false
 		afkOn = false
 		running = false
+		pcall(hitboxUnload)
 		applyToken = applyToken + 1
 		runApply(true, false)
 		for i = 1, #conns do
@@ -748,6 +1337,9 @@ function AnimationPage.build(parent, T, H, ctx)
 			caption:Destroy()
 			afkCard:Destroy()
 			afkCaption:Destroy()
+			hbCard:Destroy()
+			hbCaption:Destroy()
+			hbPop:Destroy()
 		end)
 	end
 
