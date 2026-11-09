@@ -1176,7 +1176,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		if HB.enabled then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		hbSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - ' .. state
+		hbSub.Text = state
 	end
 	refreshHbStatus()
 
@@ -1324,7 +1324,10 @@ function AnimationPage.build(parent, T, H, ctx)
 		target = nil,
 		angle = 0,
 		listening = false,
+		teamCheck = false,
+		knockedCheck = false,
 	}
+	local obRadius = -1
 	local obRing = nil
 	local obAdorn = nil
 	local obName = ""
@@ -1355,7 +1358,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		elseif OB.enabled then
 			state = '<font color="rgb(52,199,120)">Ready</font>'
 		end
-		local txt = '<font color="rgb(230,230,234)"><b>Zee Hood</b></font> - ' .. state
+		local txt = state
 		if obSub.Text ~= txt then
 			obSub.Text = txt
 		end
@@ -1388,7 +1391,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	local obDots = X.makeDots(obCard, UDim2.new(1, -58, 0, 23))
 
 	local OBW = 290
-	local OBH = 200
+	local OBH = 262
 	local obF = X.makeFloating("OrbitSettings", OBW, OBH)
 	local obPop = obF.frame
 
@@ -1437,10 +1440,22 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end, 98, 16)
 
-	makeSlider(obPop, 128, "Speed", 64, 1, 20, 1, OB.speed, "%d", function(v)
+	label(obPop, "Team Check", UDim2.fromOffset(16, 118), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(obPop, false, function(on)
+		OB.teamCheck = on
+	end, 132, 16)
+
+	label(obPop, "Knocked Check", UDim2.fromOffset(16, 152), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(obPop, false, function(on)
+		OB.knockedCheck = on
+	end, 166, 16)
+
+	makeSlider(obPop, 196, "Speed", 64, 1, 100, 1, OB.speed, "%d", function(v)
 		OB.speed = v
 	end)
-	makeSlider(obPop, 158, "Distance", 64, 3, 40, 1, OB.dist, "%d", function(v)
+	makeSlider(obPop, 226, "Distance", 64, 3, 200, 1, OB.dist, "%d", function(v)
 		OB.dist = v
 	end)
 
@@ -1483,6 +1498,17 @@ function AnimationPage.build(parent, T, H, ctx)
 		hit = { obPop, obDots.btn },
 	})
 
+	-- true when this player must not be orbited (Team Check / Knocked Check)
+	local function obSkip(p)
+		if OB.teamCheck and p.Team ~= nil and player.Team ~= nil and p.Team == player.Team then
+			return true
+		end
+		if OB.knockedCheck and p.Character and isKnocked(p.Character) then
+			return true
+		end
+		return false
+	end
+
 	-- the player closest to the mouse (on screen), else the nearest one in the world
 	local function pickTarget()
 		local char = player.Character
@@ -1502,7 +1528,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		local list = Players:GetPlayers()
 		for i = 1, #list do
 			local p = list[i]
-			if p ~= player and p.Character then
+			if p ~= player and p.Character and not obSkip(p) then
 				local hrp = p.Character:FindFirstChild("HumanoidRootPart")
 				local hum = p.Character:FindFirstChildOfClass("Humanoid")
 				if hrp and hum and hum.Health > 0 then
@@ -1578,13 +1604,28 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end)
 
+	-- dashed circle (a wireframe made of short line pieces) lying flat at hip height
+	local function buildDashes(r)
+		obAdorn:Clear()
+		local count = math.clamp(math.floor(r * 1.6), 20, 140)
+		local step = (math.pi * 2) / count
+		for i = 0, count - 1 do
+			local a0 = i * step
+			local a1 = a0 + step * 0.55
+			obAdorn:AddLine(Vector3.new(math.cos(a0) * r, 0, math.sin(a0) * r),
+				Vector3.new(math.cos(a1) * r, 0, math.sin(a1) * r))
+		end
+	end
+
 	local function updateRing(center)
 		if not OB.visualize or not center then
 			hideRing()
+			obRadius = -1
 			return
 		end
 		if not obRing or not obRing.Parent then
 			hideRing()
+			obRadius = -1
 			obRing = Instance.new("Part")
 			obRing.Name = "OrbitRing"
 			obRing.Anchored = true
@@ -1595,27 +1636,22 @@ function AnimationPage.build(parent, T, H, ctx)
 			obRing.Transparency = 1
 			obRing.Size = Vector3.new(0.2, 0.2, 0.2)
 			obRing.Parent = workspace
-			obAdorn = Instance.new("CylinderHandleAdornment")
+			obAdorn = Instance.new("WireframeHandleAdornment")
 			obAdorn.Name = "OrbitRingGfx"
 			obAdorn.Adornee = obRing
 			obAdorn.AlwaysOnTop = true
 			obAdorn.ZIndex = 1
-			obAdorn.Height = 0.12
-			obAdorn.Color3 = Color3.fromRGB(120, 200, 255)
-			obAdorn.Transparency = 0.3
-			obAdorn.CFrame = CFrame.Angles(math.pi / 2, 0, 0)
+			obAdorn.Color3 = Color3.fromRGB(165, 220, 255)
+			obAdorn.Transparency = 0
+			pcall(function()
+				obAdorn.Thickness = 3
+			end)
 			obAdorn.Parent = obRing
 		end
-		obRing.CFrame = CFrame.new(center - Vector3.new(0, 2.7, 0))
-		if obAdorn then
-			local r = OB.dist
-			if obAdorn.Radius ~= r then
-				pcall(function()
-					obAdorn.InnerRadius = 0
-					obAdorn.Radius = r
-					obAdorn.InnerRadius = math.max(r - 0.18, 0)
-				end)
-			end
+		obRing.CFrame = CFrame.new(center)
+		if obAdorn and obRadius ~= OB.dist then
+			obRadius = OB.dist
+			buildDashes(OB.dist)
 		end
 	end
 
@@ -1641,7 +1677,7 @@ function AnimationPage.build(parent, T, H, ctx)
 				thum = tchar:FindFirstChildOfClass("Humanoid")
 			end
 			if not OB.enabled or not mroot or not mhum or mhum.Health <= 0
-				or not thrp or not thum or thum.Health <= 0 then
+				or not thrp or not thum or thum.Health <= 0 or obSkip(OB.target) then
 				stopOrbit()
 			else
 				OB.angle = OB.angle + OB.speed * 0.5 * dt
@@ -1650,10 +1686,8 @@ function AnimationPage.build(parent, T, H, ctx)
 				mroot.CFrame = CFrame.lookAt(pos, Vector3.new(tp.X, pos.Y, tp.Z))
 				mroot.AssemblyLinearVelocity = Vector3.zero
 				mroot.AssemblyAngularVelocity = Vector3.zero
-				center = tp
+				center = tp - Vector3.new(0, 1, 0)   -- hip height
 			end
-		elseif OB.enabled and mroot then
-			center = mroot.Position   -- preview of the radius around you
 		end
 		updateRing(center)
 	end)
