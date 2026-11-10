@@ -377,23 +377,13 @@ function Auth.new(opts)
 	}, panel)
 
 	local facts = {
-		"One key, one account",
-		"Locked to your device",
-		"Checked by the server",
+		"You deserve the best from us",
+		"Dont crack this",
+		"Powered by reruinz server auth",
 	}
 	for i = 1, #facts do
-		local fy = 172 + (i - 1) * 28
-		local dot = new("Frame", {
-			Position = UDim2.fromOffset(22, fy + 7),
-			Size = UDim2.fromOffset(6, 6),
-			BackgroundColor3 = GOOD,
-			BackgroundTransparency = 0.25,
-			BorderSizePixel = 0,
-			ZIndex = 3,
-		}, panel)
-		corner(dot, 3)
-		local ft = label(panel, facts[i], UDim2.fromOffset(38, fy), UDim2.new(1, -48, 0, 20),
-			Enum.Font.GothamMedium, 12, DIM_TEXT)
+		local ft = label(panel, facts[i], UDim2.fromOffset(18, 168 + (i - 1) * 28), UDim2.new(1, -36, 0, 20),
+			Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 		ft.ZIndex = 3
 	end
 
