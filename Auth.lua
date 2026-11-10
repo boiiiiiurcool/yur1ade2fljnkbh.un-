@@ -1,7 +1,8 @@
 -- Auth.lua  (key + account creation page, then login page; runs BEFORE Welcome.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same look as Welcome.lua / ui.lua. Two pages in one small window:
+-- Same look as Welcome.lua / ui.lua. Layout: a side panel on the left (logo + short facts) and the form
+-- on the right with a two-tab switch (Create account | Log in) on top. Two pages in one window:
 --   KEY page    Key + Username + Password -> "Create account"
 --               The server checks the key (it must exist, be unused and not revoked), makes the account
 --               and marks the key as used. Then the window goes to the LOGIN page.
@@ -70,6 +71,7 @@ function Auth.new(opts)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
 
 	local RADIUS = 4
+	local PANEL_BG = Color3.fromRGB(17, 17, 19)
 
 	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local SMOOTH = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -185,8 +187,8 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 340
-	local WIN_H = 350
+	local WIN_W = 560
+	local WIN_H = 360
 	local BAR_H = 34
 
 	local gui = new("ScreenGui", {
@@ -204,53 +206,6 @@ function Auth.new(opts)
 			local vp = cam.ViewportSize
 			fitScale = math.min(1, (vp.X - 24) / WIN_W, (vp.Y - 24) / WIN_H)
 			fitScale = math.max(0.5, fitScale)
-		end
-	end
-
-	-- SOFT SHADOW (sits behind the window, in the ScreenGui: the window is a CanvasGroup, which would clip it).
-	-- Seven rounded layers, each a little bigger and a little fainter at the edge, lowered a few pixels, so
-	-- the window looks lifted off the game like the notification on the Home page. Layers are tweened
-	-- together with the window (intro / leave), scale included.
-	local SHADOW_LAYERS = 7
-	local SHADOW_STEP = 6        -- px each layer grows per side
-	local SHADOW_BASE = 0.93     -- transparency of one layer (they stack, so the middle is darker)
-	local shadowHolder = new("Frame", {
-		Name = "Shadow",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(WIN_W, WIN_H),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 0,
-	}, gui)
-	local shadowScale = new("UIScale", { Scale = fitScale * 0.92 }, shadowHolder)
-	local shadowLayers = {}
-	for i = 1, SHADOW_LAYERS do
-		local e = i * SHADOW_STEP
-		local layer = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0.5, 10),
-			Size = UDim2.new(1, e * 2, 1, e * 2),
-			BackgroundColor3 = Color3.new(0, 0, 0),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ZIndex = 0,
-		}, shadowHolder)
-		corner(layer, RADIUS + e)
-		shadowLayers[i] = layer
-	end
-
-	-- fades the shadow in (1) or out (0) with the same timing as the window
-	local function shadowTo(visible, info, scale)
-		for i = 1, #shadowLayers do
-			local t = 1
-			if visible then
-				t = SHADOW_BASE
-			end
-			TweenService:Create(shadowLayers[i], info, { BackgroundTransparency = t }):Play()
-		end
-		if scale then
-			TweenService:Create(shadowScale, info, { Scale = scale }):Play()
 		end
 	end
 
@@ -283,40 +238,6 @@ function Auth.new(opts)
 				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
 			}),
 		}, backdrop)
-
-		-- soft light falling from the top edge
-		local topGlow = new("Frame", {
-			Name = "TopGlow",
-			Size = UDim2.new(1, 0, 0, 150),
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BorderSizePixel = 0,
-			ZIndex = 1,
-		}, window)
-		corner(topGlow, RADIUS)
-		new("UIGradient", {
-			Rotation = 90,
-			Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0.93),
-				NumberSequenceKeypoint.new(1, 1),
-			}),
-		}, topGlow)
-
-		-- thin bright line along the top edge that fades out toward both sides
-		local topLine = new("Frame", {
-			Name = "TopLine",
-			Position = UDim2.fromOffset(20, 1),
-			Size = UDim2.new(1, -40, 0, 1),
-			BackgroundColor3 = ICON_HOVER,
-			BorderSizePixel = 0,
-			ZIndex = 21,
-		}, window)
-		new("UIGradient", {
-			Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 1),
-				NumberSequenceKeypoint.new(0.5, 0.78),
-				NumberSequenceKeypoint.new(1, 1),
-			}),
-		}, topLine)
 
 		local outline = new("Frame", {
 			Name = "Outline",
@@ -407,25 +328,31 @@ function Auth.new(opts)
 		end)
 	end
 
-	local content = new("Frame", {
-		Name = "Content",
-		Position = UDim2.fromOffset(6, BAR_H),
-		Size = UDim2.new(1, -12, 1, -(BAR_H + 6)),
-		BackgroundTransparency = 1,
+	-- LEFT: side panel with the logo, what the page is for, and three short facts
+	local PANEL_W = 190
+	local panel = new("Frame", {
+		Name = "Panel",
+		Position = UDim2.fromOffset(6, 6),
+		Size = UDim2.new(0, PANEL_W, 1, -12),
+		BackgroundColor3 = PANEL_BG,
+		BorderSizePixel = 0,
+		ZIndex = 2,
 	}, window)
+	corner(panel, RADIUS + 2)
+	stroke(panel, BORDER, 1, 0)
 
-	-- title with the same soft gradient as the welcome screen
 	local titleLabel = new("TextLabel", {
 		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, -8),
-		Size = UDim2.new(1, 0, 0, 50),
+		Position = UDim2.fromOffset(0, 34),
+		Size = UDim2.new(1, 0, 0, 48),
 		Font = Enum.Font.GothamBlack,
 		Text = title,
 		TextSize = 38,
 		TextColor3 = Color3.new(1, 1, 1),
 		TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Center,
-	}, content)
+		ZIndex = 3,
+	}, panel)
 	new("UIGradient", {
 		Rotation = 90,
 		Color = ColorSequence.new({
@@ -434,20 +361,98 @@ function Auth.new(opts)
 		}),
 	}, titleLabel)
 
-	local subtitle = label(content, "", UDim2.fromOffset(0, 40), UDim2.new(1, 0, 0, 16),
-		Enum.Font.GothamMedium, 13, ICON, Enum.TextXAlignment.Center)
+	local subtitle = label(panel, "", UDim2.fromOffset(18, 90), UDim2.new(1, -36, 0, 36),
+		Enum.Font.Gotham, 12, ICON, Enum.TextXAlignment.Center)
+	subtitle.TextWrapped = true
+	subtitle.TextTruncate = Enum.TextTruncate.None
+	subtitle.TextYAlignment = Enum.TextYAlignment.Top
+	subtitle.ZIndex = 3
 
-	-- the message line (errors in red, good news in green)
+	new("Frame", {
+		Position = UDim2.fromOffset(28, 150),
+		Size = UDim2.new(1, -56, 0, 1),
+		BackgroundColor3 = BORDER,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, panel)
+
+	local facts = {
+		"One key, one account",
+		"Locked to your device",
+		"Checked by the server",
+	}
+	for i = 1, #facts do
+		local fy = 172 + (i - 1) * 28
+		local dot = new("Frame", {
+			Position = UDim2.fromOffset(22, fy + 7),
+			Size = UDim2.fromOffset(6, 6),
+			BackgroundColor3 = GOOD,
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, panel)
+		corner(dot, 3)
+		local ft = label(panel, facts[i], UDim2.fromOffset(38, fy), UDim2.new(1, -48, 0, 20),
+			Enum.Font.GothamMedium, 12, DIM_TEXT)
+		ft.ZIndex = 3
+	end
+
+	-- RIGHT: the form
+	local content = new("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(PANEL_W + 6 + 18, BAR_H),
+		Size = UDim2.new(1, -(PANEL_W + 6 + 18 + 18), 1, -(BAR_H + 18)),
+		BackgroundTransparency = 1,
+	}, window)
+
+	-- two-tab switch: a light pill slides between "Create account" and "Log in"
+	local tabs = new("Frame", {
+		Name = "Tabs",
+		Position = UDim2.fromOffset(0, 6),
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundColor3 = CLUSTER_BG,
+		BorderSizePixel = 0,
+	}, content)
+	corner(tabs, 10)
+
+	local indicator = new("Frame", {
+		Position = UDim2.new(0, 3, 0, 3),
+		Size = UDim2.new(0.5, -4, 1, -6),
+		BackgroundColor3 = JOIN_BG,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, tabs)
+	corner(indicator, 8)
+
+	local function makeTab(xScale, text)
+		local b = new("TextButton", {
+			AutoButtonColor = false,
+			Position = UDim2.fromScale(xScale, 0),
+			Size = UDim2.fromScale(0.5, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			Text = text,
+			TextSize = 13,
+			TextColor3 = ICON,
+			ZIndex = 3,
+		}, tabs)
+		return b
+	end
+	local tabKey = makeTab(0, "Create account")
+	local tabLogin = makeTab(0.5, "Log in")
+
+	-- the message line (errors in red, good news in green); it sits under the button of each page
 	local statusLine = new("TextLabel", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -20, 0, 30),
+		Size = UDim2.new(1, 0, 0, 30),
 		Font = Enum.Font.Gotham,
 		Text = "",
 		TextColor3 = HOVER_RED,
 		TextSize = 12,
 		TextWrapped = true,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		TextYAlignment = Enum.TextYAlignment.Center,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
 	}, content)
 
 	local function setStatus(text, good)
@@ -462,12 +467,15 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- CONTROLS
 	---------------------------------------------------------------------
-	-- a text field. masked = shows * instead of the text (the real text is kept in f.real)
-	local function makeField(parent, y, placeholder, masked)
+	-- a labelled text field. masked = shows * instead of the text (the real text is kept in f.real)
+	local function makeField(parent, y, caption, placeholder, masked)
 		local f = { real = "" }
+		local cap = label(parent, string.upper(caption), UDim2.fromOffset(2, y), UDim2.new(1, -4, 0, 14),
+			Enum.Font.GothamMedium, 10, DIM_TEXT)
+		cap.ZIndex = 3
 		local box = new("TextBox", {
-			Position = UDim2.fromOffset(10, y),
-			Size = UDim2.new(1, -20, 0, 34),
+			Position = UDim2.fromOffset(0, y + 16),
+			Size = UDim2.new(1, 0, 0, 34),
 			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamMedium,
@@ -487,9 +495,11 @@ function Auth.new(opts)
 
 		box.Focused:Connect(function()
 			TweenService:Create(st, FAST, { Color = ICON }):Play()
+			TweenService:Create(cap, FAST, { TextColor3 = ICON }):Play()
 		end)
 		box.FocusLost:Connect(function(enterPressed)
 			TweenService:Create(st, FAST, { Color = BORDER }):Play()
+			TweenService:Create(cap, FAST, { TextColor3 = DIM_TEXT }):Play()
 			if enterPressed and f.onEnter then
 				f.onEnter()
 			end
@@ -542,8 +552,8 @@ function Auth.new(opts)
 	local function makeButton(parent, y, text)
 		local b = new("TextButton", {
 			AutoButtonColor = false,
-			Position = UDim2.fromOffset(10, y),
-			Size = UDim2.new(1, -20, 0, 36),
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.new(1, 0, 0, 38),
 			BackgroundColor3 = JOIN_BG,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamMedium,
@@ -552,32 +562,19 @@ function Auth.new(opts)
 			TextColor3 = BLACK,
 		}, parent)
 		corner(b, 8)
+		local sc = new("UIScale", { Scale = 1 }, b)
 		b.MouseEnter:Connect(function()
 			TweenService:Create(b, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
 		end)
 		b.MouseLeave:Connect(function()
 			TweenService:Create(b, FAST, { BackgroundColor3 = JOIN_BG }):Play()
+			TweenService:Create(sc, FAST, { Scale = 1 }):Play()
 		end)
-		return b
-	end
-
-	local function makeLink(parent, y, text)
-		local b = new("TextButton", {
-			AutoButtonColor = false,
-			Position = UDim2.fromOffset(10, y),
-			Size = UDim2.new(1, -20, 0, 20),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			Font = Enum.Font.GothamMedium,
-			Text = text,
-			TextSize = 12,
-			TextColor3 = DIM_TEXT,
-		}, parent)
-		b.MouseEnter:Connect(function()
-			TweenService:Create(b, FAST, { TextColor3 = ICON_HOVER }):Play()
+		b.MouseButton1Down:Connect(function()
+			TweenService:Create(sc, FAST, { Scale = 0.98 }):Play()
 		end)
-		b.MouseLeave:Connect(function()
-			TweenService:Create(b, FAST, { TextColor3 = DIM_TEXT }):Play()
+		b.MouseButton1Up:Connect(function()
+			TweenService:Create(sc, FAST, { Scale = 1 }):Play()
 		end)
 		return b
 	end
@@ -585,46 +582,80 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- THE TWO PAGES
 	---------------------------------------------------------------------
+	local formArea = new("Frame", {
+		Name = "Form",
+		Position = UDim2.fromOffset(0, 56),
+		Size = UDim2.new(1, 0, 1, -56),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, content)
 	local keyPage = new("Frame", {
 		Name = "KeyPage",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-	}, content)
+	}, formArea)
 	local loginPage = new("Frame", {
 		Name = "LoginPage",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Visible = false,
-	}, content)
+	}, formArea)
 
 	-- KEY page: key, username, password, create account
-	local kKey = makeField(keyPage, 66, "Key  (Y1-XXXX-XXXX-XXXX)", false)
-	local kUser = makeField(keyPage, 106, "Create a username", false)
-	local kPass = makeField(keyPage, 146, "Create a password", true)
-	local kBtn = makeButton(keyPage, 218, "Create account")
-	local kLink = makeLink(keyPage, 262, "Already have an account? Log in")
+	local kKey = makeField(keyPage, 0, "Key", "Y1-XXXX-XXXX-XXXX", false)
+	local kUser = makeField(keyPage, 58, "Username", "Create a username", false)
+	local kPass = makeField(keyPage, 116, "Password", "Create a password", true)
+	local kBtn = makeButton(keyPage, 184, "Create account")
 
 	-- LOGIN page: username, password, log in
-	local lUser = makeField(loginPage, 86, "Username", false)
-	local lPass = makeField(loginPage, 126, "Password", true)
-	local lBtn = makeButton(loginPage, 206, "Log in")
-	local lLink = makeLink(loginPage, 250, "Have a key? Create an account")
+	local lUser = makeField(loginPage, 0, "Username", "Your username", false)
+	local lPass = makeField(loginPage, 58, "Password", "Your password", true)
+	local lBtn = makeButton(loginPage, 126, "Log in")
 
-	local function showPage(name)
+	-- Enter jumps to the next field (the last one submits, see below)
+	kKey.onEnter = function()
+		kUser.box:CaptureFocus()
+	end
+	kUser.onEnter = function()
+		kPass.box:CaptureFocus()
+	end
+	lUser.onEnter = function()
+		lPass.box:CaptureFocus()
+	end
+
+	local function paintTabs(animate)
+		local isKey = (page == "key")
+		local pos = UDim2.new(0, 3, 0, 3)
+		if not isKey then
+			pos = UDim2.new(0.5, 1, 0, 3)
+		end
+		if animate then
+			TweenService:Create(indicator, SMOOTH, { Position = pos }):Play()
+		else
+			indicator.Position = pos
+		end
+		local onC = BLACK
+		local offC = ICON
+		TweenService:Create(tabKey, FAST, { TextColor3 = isKey and onC or offC }):Play()
+		TweenService:Create(tabLogin, FAST, { TextColor3 = isKey and offC or onC }):Play()
+	end
+
+	local function showPage(name, animate)
 		page = name
 		keyPage.Visible = (name == "key")
 		loginPage.Visible = (name == "login")
 		if name == "key" then
 			subtitle.Text = "Enter your key and create your account"
-			statusLine.Position = UDim2.fromOffset(10, 184)
+			statusLine.Position = UDim2.fromOffset(0, 56 + 184 + 38 + 10)
 		else
 			subtitle.Text = "Log in to continue"
-			statusLine.Position = UDim2.fromOffset(10, 164)
+			statusLine.Position = UDim2.fromOffset(0, 56 + 126 + 38 + 10)
 		end
+		paintTabs(animate)
 	end
-	showPage("key")
+	showPage("key", false)
 
 	---------------------------------------------------------------------
 	-- ACTIONS
@@ -683,7 +714,7 @@ function Auth.new(opts)
 				kKey.clear()
 				kUser.clear()
 				kPass.clear()
-				showPage("login")
+				showPage("login", true)
 				setStatus("Account created! Now log in.", true)
 			else
 				setStatus(tostring(res.message or "Could not create the account."))
@@ -730,7 +761,6 @@ function Auth.new(opts)
 					end
 					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-					shadowTo(false, LEAVE, fitScale * 0.94)
 					task.delay(LEAVE.Time + 0.03, function()
 						if not alive then
 							return
@@ -757,19 +787,19 @@ function Auth.new(opts)
 	kPass.onEnter = doRegister
 	lPass.onEnter = doLogin
 
-	kLink.Activated:Connect(function()
-		if busy then
+	tabKey.Activated:Connect(function()
+		if busy or page == "key" then
 			return
 		end
 		setStatus("")
-		showPage("login")
+		showPage("key", true)
 	end)
-	lLink.Activated:Connect(function()
-		if busy then
+	tabLogin.Activated:Connect(function()
+		if busy or page == "login" then
 			return
 		end
 		setStatus("")
-		showPage("key")
+		showPage("login", true)
 	end)
 
 	closeBtn.Activated:Connect(function()
@@ -799,7 +829,6 @@ function Auth.new(opts)
 		else
 			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-			shadowTo(false, LEAVE, fitScale * 0.94)
 			task.delay(LEAVE.Time + 0.03, function()
 				gui:Destroy()
 			end)
@@ -809,8 +838,6 @@ function Auth.new(opts)
 	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-	shadowTo(true, SMOOTH, nil)
-	TweenService:Create(shadowScale, POP, { Scale = fitScale }):Play()
 
 	return W
 end
