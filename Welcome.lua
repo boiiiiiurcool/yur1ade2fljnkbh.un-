@@ -1,67 +1,48 @@
--- Welcome.lua  (welcome screen + module loader)
+-- Auth.lua  (key + account creation page, then login page; runs BEFORE Welcome.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same look as ui.lua: small black window with tiny rounded corners and a close button.
--- It shows the "yur1" title (gradient text) and a spinning wheel with "Loading everything safely".
--- Under that it shows which module is being checked right now.
+-- Same look as Welcome.lua / ui.lua. Layout: a side panel on the left (logo + short facts) and the form
+-- on the right with a two-tab switch (Create account | Log in) on top. Two pages in one window:
+--   KEY page    Key + Username + Password -> "Create account"
+--               The server checks the key (it must exist, be unused and not revoked), makes the account
+--               and marks the key as used. Then the window goes to the LOGIN page.
+--   LOGIN page  Username + Password -> "Log in"
+--               The server checks the password and the HWID. The first time an account logs in, the
+--               HWID of that device is saved on the account; from then on only that device can log in.
 --
--- LOADING (done here, not in main.lua):
---   Pass 1: every module in opts.Modules is checked ONE AT A TIME. Each one is downloaded
---           opts.Checks times (default 10) and all copies must be identical, so we know
---           we hold the newest version and not a stale cached one. Then it is compiled.
---   Pass 2: after all modules passed, every module is downloaded once more, very quickly,
---           and compared with what we hold. If one changed it is recompiled.
---   Then the state becomes "ready" and the Continue button can show.
+-- Nothing is checked on this device: every decision is made by the website (the Lovable server).
+-- This file only shows the UI and sends two requests:
+--   POST <ApiUrl>register   { key, username, password, hwid }
+--   POST <ApiUrl>login      { username, password, hwid }
+-- Every answer is JSON: { ok = true/false, message = "...", token = "...", username = "...", expires_at = "..." }
 --
--- The Continue button only appears after WaitSeconds (default 10) AND once loading finished.
--- Enter cannot skip the wait either.
---
--- The window is NOT draggable. It always opens in the middle of the screen.
--- OnContinue receives (position, modules). modules is a table keyed by each entry's Id.
---
---   local welcome = Welcome.new({
---       Name = "Y1Welcome",
+--   local auth = Auth.new({
+--       Name = "Y1Auth",
 --       Title = "yur1",
---       ButtonText = "Continue",
---       WaitSeconds = 10,
---       Base = "https://.../main/",      -- must end with a slash
---       NoCache = true,
---       LocalDir = nil,                  -- for testing: workspace folder to use readfile
---       Checks = 10,
---       Modules = {
---           { Id = "UI", Name = "ui.lua", Key = "new", Required = true },
---           ...
---       },
---       OnContinue = function(position, modules) end,
---       OnClose = function() end,
+--       ApiUrl = "https://xxxx.supabase.co/functions/v1/",   -- must end with a slash
+--       OnSuccess = function(session, position) end,         -- session = { token, username, expires_at, hwid }
+--       OnClose = function() end,                            -- the X was pressed
 --   })
---   welcome:SetState("loading", "text")  -- still available
---   welcome:GetModules()
---   welcome:GetPosition()
---   welcome:Close(instant)
+--   auth:Close(instant)
 
-local Welcome = {}
+local Auth = {}
 
-function Welcome.new(opts)
+function Auth.new(opts)
 	opts = opts or {}
-	local guiName = opts.Name or "Y1Welcome"
+	local guiName = opts.Name or "Y1Auth"
 	local title = opts.Title or "yur1"
-	local buttonText = opts.ButtonText or "Continue"
-	local WAIT_SECONDS = opts.WaitSeconds or 10
-
-	local BASE = opts.Base or ""
-	local NO_CACHE = (opts.NoCache ~= false)
-	local LOCAL_DIR = opts.LocalDir
-	local CHECKS = opts.Checks or 10
-	local moduleList = opts.Modules or {}
+	local API = opts.ApiUrl or ""
+	-- optional: full URLs per endpoint, for when register / login do not share one base url
+	local EP = opts.Endpoints or {}
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
+	local HttpService = game:GetService("HttpService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
-	-- only one welcome screen at a time
+	-- only one auth window at a time
 	do
 		local old = playerGui:FindFirstChild(guiName)
 		if old then
@@ -70,17 +51,13 @@ function Welcome.new(opts)
 	end
 
 	local W = {}
-	local conns = {}
 	local alive = true
-	local continued = false
-	local state = "loading"
-	local waitDone = false      -- true once WAIT_SECONDS have passed
-	local btnShown = false      -- true while the Continue button is the thing on screen
-	local loaded = {}           -- Id -> module table
-	local sources = {}          -- file name -> source text we are holding
+	local busy = false
+	local finished = false
+	local page = "key"
 
 	---------------------------------------------------------------------
-	-- THEME (same colours as ui.lua)
+	-- THEME (same colours as Welcome.lua)
 	---------------------------------------------------------------------
 	local BLACK      = Color3.fromRGB(10, 10, 11)
 	local BORDER     = Color3.fromRGB(36, 36, 39)
@@ -91,14 +68,15 @@ function Welcome.new(opts)
 	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
 	local DIM_TEXT   = Color3.fromRGB(116, 116, 124)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
+	local GOOD       = Color3.fromRGB(110, 200, 140)
 
 	local RADIUS = 4
+	local PANEL_BG = Color3.fromRGB(17, 17, 19)
 
 	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local SMOOTH = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 	local POP = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 	local LEAVE = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-	local SPRING = TweenInfo.new(0.24, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
@@ -147,31 +125,80 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
+	-- HWID + HTTP
+	---------------------------------------------------------------------
+	-- the id of this device: the executor's own id when it has one, else Roblox's client id
+	local function getHwid()
+		local id = nil
+		local ok, res = pcall(function()
+			if type(gethwid) == "function" then
+				return gethwid()
+			end
+			return nil
+		end)
+		if ok and type(res) == "string" and res ~= "" then
+			id = res
+		end
+		if id == nil then
+			local ok2, res2 = pcall(function()
+				return game:GetService("RbxAnalyticsService"):GetClientId()
+			end)
+			if ok2 and type(res2) == "string" and res2 ~= "" then
+				id = res2
+			end
+		end
+		return id
+	end
+
+	local function httpRequest()
+		return (syn and syn.request) or (http and http.request) or http_request or request
+	end
+
+	-- sends a POST to the server and returns the decoded answer table (never throws)
+	local function post(path, data)
+		local req = httpRequest()
+		if req == nil then
+			return { ok = false, message = "This executor cannot send web requests." }
+		end
+		local okSend, res = pcall(function()
+			return req({
+				Url = EP[path] or (API .. path),
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body = HttpService:JSONEncode(data),
+			})
+		end)
+		if not okSend or type(res) ~= "table" then
+			return { ok = false, message = "Could not reach the server. Try again." }
+		end
+		local body = res.Body
+		if type(body) ~= "string" or body == "" then
+			return { ok = false, message = "The server sent an empty answer (" .. tostring(res.StatusCode) .. ")." }
+		end
+		local okDec, decoded = pcall(function()
+			return HttpService:JSONDecode(body)
+		end)
+		if not okDec or type(decoded) ~= "table" then
+			return { ok = false, message = "The server sent an answer that could not be read." }
+		end
+		return decoded
+	end
+
+	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 340
-	local WIN_H = 220
+	local WIN_W = 560
+	local WIN_H = 360
 	local BAR_H = 34
-	local CONTENT_W = WIN_W - 12
-	local CONTENT_H = WIN_H - (BAR_H + 6)
-	local BTN_W = 240
-	local BTN_H = 38
-	if touch then
-		BTN_H = 46
-	end
-	local BOT_W = BTN_W + 16            -- a little wider than the button so its grow animation is not clipped
-	local STATUS_Y = BTN_H + 16
-	local BOT_H = STATUS_Y + 14
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
-		DisplayOrder = 1000,
+		DisplayOrder = 1001,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, playerGui)
 
-	-- small screens: shrink the whole window to fit
 	local fitScale = 1
 	do
 		local cam = workspace.CurrentCamera
@@ -194,7 +221,6 @@ function Welcome.new(opts)
 	corner(window)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
-	-- clean gradient background behind everything
 	do
 		local backdrop = new("Frame", {
 			Name = "Backdrop",
@@ -212,9 +238,7 @@ function Welcome.new(opts)
 				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
 			}),
 		}, backdrop)
-	end
 
-	do
 		local outline = new("Frame", {
 			Name = "Outline",
 			Position = UDim2.fromOffset(1, 1),
@@ -227,14 +251,13 @@ function Welcome.new(opts)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	-- top bar (holds the close button)
 	local bar = new("Frame", {
 		Name = "TopBar",
 		Size = UDim2.new(1, 0, 0, BAR_H),
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- close button (top right), same look as the control cluster in ui.lua
+	-- close button (top right)
 	local closeBtn = nil
 	do
 		local PAD = 3
@@ -283,15 +306,10 @@ function Welcome.new(opts)
 		line(45)
 		line(-45)
 
-		local hoveringClose = false
-		local function paint(isOver, pressed)
+		local function paint(isOver)
 			local bgT = 1
 			if isOver then
-				if pressed then
-					bgT = 0.35
-				else
-					bgT = 0
-				end
+				bgT = 0
 			end
 			TweenService:Create(closeBtn, FAST, { BackgroundTransparency = bgT }):Play()
 			local color = ICON
@@ -303,52 +321,38 @@ function Welcome.new(opts)
 			end
 		end
 		closeBtn.MouseEnter:Connect(function()
-			hoveringClose = true
-			paint(true, false)
+			paint(true)
 		end)
 		closeBtn.MouseLeave:Connect(function()
-			hoveringClose = false
-			paint(false, false)
-		end)
-		closeBtn.MouseButton1Down:Connect(function()
-			paint(true, true)
-		end)
-		closeBtn.MouseButton1Up:Connect(function()
-			paint(hoveringClose, false)
+			paint(false)
 		end)
 	end
 
-	-- content area
-	local content = new("Frame", {
-		Name = "Content",
-		Position = UDim2.fromOffset(6, BAR_H),
-		Size = UDim2.new(1, -12, 1, -(BAR_H + 6)),
-		BackgroundTransparency = 1,
-	}, window)
-
-	---------------------------------------------------------------------
-	-- TITLE: "yur1" with the soft white-to-grey gradient
-	---------------------------------------------------------------------
-	local titleBase = UDim2.fromOffset(0, -6)
-	local titleGroup = new("CanvasGroup", {
-		Name = "Title",
-		Position = titleBase + UDim2.fromOffset(0, 12),
-		Size = UDim2.fromOffset(CONTENT_W, 56),
-		BackgroundTransparency = 1,
+	-- LEFT: side panel with the logo, what the page is for, and three short facts
+	local PANEL_W = 190
+	local panel = new("Frame", {
+		Name = "Panel",
+		Position = UDim2.fromOffset(6, 6),
+		Size = UDim2.new(0, PANEL_W, 1, -12),
+		BackgroundColor3 = PANEL_BG,
 		BorderSizePixel = 0,
-		GroupTransparency = 1,
-	}, content)
+		ZIndex = 2,
+	}, window)
+	corner(panel, RADIUS + 2)
+	stroke(panel, BORDER, 1, 0)
 
 	local titleLabel = new("TextLabel", {
 		BackgroundTransparency = 1,
-		Size = UDim2.fromScale(1, 1),
+		Position = UDim2.fromOffset(0, 34),
+		Size = UDim2.new(1, 0, 0, 48),
 		Font = Enum.Font.GothamBlack,
 		Text = title,
-		TextSize = 44,
+		TextSize = 38,
 		TextColor3 = Color3.new(1, 1, 1),
 		TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Center,
-	}, titleGroup)
+		ZIndex = 3,
+	}, panel)
 	new("UIGradient", {
 		Rotation = 90,
 		Color = ColorSequence.new({
@@ -357,288 +361,459 @@ function Welcome.new(opts)
 		}),
 	}, titleLabel)
 
-	---------------------------------------------------------------------
-	-- BOTTOM (the other content): loading wheel first, Continue button after the wait
-	---------------------------------------------------------------------
-	local bottomBase = UDim2.fromOffset(math.floor((CONTENT_W - BOT_W) / 2), math.floor((CONTENT_H - BOT_H) / 2) + 14)
-	local bottom = new("CanvasGroup", {
-		Name = "Bottom",
-		Position = bottomBase + UDim2.fromOffset(0, 12),
-		Size = UDim2.fromOffset(BOT_W, BOT_H),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = 1,
-	}, content)
+	local subtitle = label(panel, "", UDim2.fromOffset(18, 90), UDim2.new(1, -36, 0, 36),
+		Enum.Font.Gotham, 12, ICON, Enum.TextXAlignment.Center)
+	subtitle.TextWrapped = true
+	subtitle.TextTruncate = Enum.TextTruncate.None
+	subtitle.TextYAlignment = Enum.TextYAlignment.Top
+	subtitle.ZIndex = 3
 
-	-- loading part: wheel + "Loading everything safely"
-	local loaderGroup = new("CanvasGroup", {
-		Name = "Loader",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
+	new("Frame", {
+		Position = UDim2.fromOffset(28, 150),
+		Size = UDim2.new(1, -56, 0, 1),
+		BackgroundColor3 = BORDER,
 		BorderSizePixel = 0,
-		GroupTransparency = 0,
-	}, bottom)
+		ZIndex = 3,
+	}, panel)
 
-	local function ringFrame()
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0, 18),
-			Size = UDim2.fromOffset(30, 30),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-		}, loaderGroup)
-		corner(f, 100)
-		return f
+	local facts = {
+		"You deserve the best from us",
+		"Dont crack this",
+		"Powered by reruinz server auth",
+	}
+	for i = 1, #facts do
+		local ft = label(panel, facts[i], UDim2.fromOffset(18, 168 + (i - 1) * 28), UDim2.new(1, -36, 0, 20),
+			Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
+		ft.ZIndex = 3
 	end
-	local track = ringFrame()
-	stroke(track, CLUSTER_BG, 3, 0)
-	local arc = ringFrame()
-	local arcStroke = stroke(arc, ICON_HOVER, 3, 0)
-	local grad = new("UIGradient", {
-		Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.5, 0),
-			NumberSequenceKeypoint.new(0.501, 1),
-			NumberSequenceKeypoint.new(1, 1),
-		}),
-	}, arcStroke)
-	local spin = TweenService:Create(
-		grad,
-		TweenInfo.new(0.9, Enum.EasingStyle.Linear, Enum.EasingDirection.In, -1),
-		{ Rotation = 360 }
-	)
-	spin:Play()
 
-	local loaderText = label(loaderGroup, "Loading everything safely", UDim2.fromOffset(0, 42), UDim2.new(1, 0, 0, 16),
-		Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Center)
-
-	-- button part (hidden until the wait is over and the state is "ready")
-	local btnGroup = new("CanvasGroup", {
-		Name = "ButtonGroup",
-		Size = UDim2.fromScale(1, 1),
+	-- RIGHT: the form
+	local content = new("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(PANEL_W + 6 + 18, BAR_H),
+		Size = UDim2.new(1, -(PANEL_W + 6 + 18 + 18), 1, -(BAR_H + 18)),
 		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = 1,
-		Visible = false,
-	}, bottom)
+	}, window)
 
-	local btn = new("TextButton", {
-		Name = "Continue",
-		AutoButtonColor = false,
-		Position = UDim2.fromOffset(8, 4),
-		Size = UDim2.fromOffset(BTN_W, BTN_H),
+	-- two-tab switch: a light pill slides between "Create account" and "Log in"
+	local tabs = new("Frame", {
+		Name = "Tabs",
+		Position = UDim2.fromOffset(0, 6),
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundColor3 = CLUSTER_BG,
+		BorderSizePixel = 0,
+	}, content)
+	corner(tabs, 10)
+
+	local indicator = new("Frame", {
+		Position = UDim2.new(0, 3, 0, 3),
+		Size = UDim2.new(0.5, -4, 1, -6),
 		BackgroundColor3 = JOIN_BG,
 		BorderSizePixel = 0,
-		Font = Enum.Font.GothamMedium,
-		Text = buttonText,
-		TextSize = 14,
-		TextColor3 = BLACK,
-	}, btnGroup)
-	corner(btn, 8)
-	local btnScale = new("UIScale", { Scale = 1 }, btn)
+		ZIndex = 2,
+	}, tabs)
+	corner(indicator, 8)
 
-	-- rounded chevron drawn with two bars (same style as the arrows in the main window)
-	local chev = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(1, -24, 0.5, 0),
-		Size = UDim2.fromOffset(12, 12),
-		BackgroundTransparency = 1,
-	}, btn)
-	local function chevBar(y, rot)
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, -0.5, 0.5, y),
-			Size = UDim2.fromOffset(7, 2),
-			Rotation = rot,
-			BackgroundColor3 = BLACK,
+	local function makeTab(xScale, text)
+		local b = new("TextButton", {
+			AutoButtonColor = false,
+			Position = UDim2.fromScale(xScale, 0),
+			Size = UDim2.fromScale(0.5, 1),
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-		}, chev)
-		corner(f, 1)
+			Font = Enum.Font.GothamMedium,
+			Text = text,
+			TextSize = 13,
+			TextColor3 = ICON,
+			ZIndex = 3,
+		}, tabs)
+		return b
 	end
-	chevBar(-2.5, 45)
-	chevBar(2.5, -45)
+	local tabKey = makeTab(0, "Create account")
+	local tabLogin = makeTab(0.5, "Log in")
 
-	-- status line: shows which module is being checked right now (also text from SetState)
-	local status = label(bottom, "", UDim2.fromOffset(0, STATUS_Y), UDim2.new(1, 0, 0, 14),
-		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
+	-- the message line (errors in red, good news in green); it sits under the button of each page
+	local statusLine = new("TextLabel", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 30),
+		Font = Enum.Font.Gotham,
+		Text = "",
+		TextColor3 = HOVER_RED,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	}, content)
 
-	---------------------------------------------------------------------
-	-- LOADER <-> BUTTON SWITCH
-	---------------------------------------------------------------------
-	local hovering = false
-	local swapToken = 0
-
-	local function paintButton()
-		local bg = JOIN_BG
-		if hovering then
-			bg = Color3.fromRGB(255, 255, 255)
-		end
-		TweenService:Create(btn, FAST, { BackgroundColor3 = bg }):Play()
-		local cx = -24
-		if hovering then
-			cx = -20
-		end
-		TweenService:Create(chev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
-	end
-
-	-- decides what the window shows
-	local function refreshBottom()
-		if not alive then
-			return
-		end
-
-		local isErr = (state == "error")
-		if isErr then
-			loaderText.Text = "Could not load"
-			loaderText.TextColor3 = HOVER_RED
-			track.Visible = false
-			arc.Visible = false
+	local function setStatus(text, good)
+		statusLine.Text = text or ""
+		if good then
+			statusLine.TextColor3 = GOOD
 		else
-			loaderText.Text = "Loading everything safely"
-			loaderText.TextColor3 = TEXT_COLOR
-			track.Visible = true
-			arc.Visible = true
-		end
-
-		local showBtn = (state == "ready" and waitDone)
-		if showBtn and not btnShown then
-			btnShown = true
-			swapToken = swapToken + 1
-			local tk = swapToken
-			btnGroup.Visible = true
-			TweenService:Create(loaderGroup, FAST, { GroupTransparency = 1 }):Play()
-			TweenService:Create(btnGroup, SMOOTH, { GroupTransparency = 0 }):Play()
-			task.delay(FAST.Time + 0.03, function()
-				if alive and tk == swapToken then
-					loaderGroup.Visible = false
-				end
-			end)
-		elseif (not showBtn) and btnShown then
-			btnShown = false
-			swapToken = swapToken + 1
-			local tk = swapToken
-			loaderGroup.Visible = true
-			TweenService:Create(btnGroup, FAST, { GroupTransparency = 1 }):Play()
-			TweenService:Create(loaderGroup, SMOOTH, { GroupTransparency = 0 }):Play()
-			task.delay(FAST.Time + 0.03, function()
-				if alive and tk == swapToken then
-					btnGroup.Visible = false
-				end
-			end)
+			statusLine.TextColor3 = HOVER_RED
 		end
 	end
 
-	local function leaveAndCallback(leavePos)
-		local cb = opts.OnContinue
-		W:Close(true)
-		if cb then
-			local ok, err = pcall(cb, leavePos, loaded)
-			if not ok then
-				warn("[welcome] OnContinue error: " .. tostring(err))
+	---------------------------------------------------------------------
+	-- CONTROLS
+	---------------------------------------------------------------------
+	-- a labelled text field. masked = shows * instead of the text (the real text is kept in f.real)
+	local function makeField(parent, y, caption, placeholder, masked)
+		local f = { real = "" }
+		local cap = label(parent, string.upper(caption), UDim2.fromOffset(2, y), UDim2.new(1, -4, 0, 14),
+			Enum.Font.GothamMedium, 10, DIM_TEXT)
+		cap.ZIndex = 3
+		local box = new("TextBox", {
+			Position = UDim2.fromOffset(0, y + 16),
+			Size = UDim2.new(1, 0, 0, 34),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = TEXT_COLOR,
+			PlaceholderText = placeholder,
+			PlaceholderColor3 = DIM_TEXT,
+			Text = "",
+			ClearTextOnFocus = false,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, parent)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, box)
+		corner(box, RADIUS + 2)
+		local st = stroke(box, BORDER, 1, 0)
+		f.box = box
+
+		box.Focused:Connect(function()
+			TweenService:Create(st, FAST, { Color = ICON }):Play()
+			TweenService:Create(cap, FAST, { TextColor3 = ICON }):Play()
+		end)
+		box.FocusLost:Connect(function(enterPressed)
+			TweenService:Create(st, FAST, { Color = BORDER }):Play()
+			TweenService:Create(cap, FAST, { TextColor3 = DIM_TEXT }):Play()
+			if enterPressed and f.onEnter then
+				f.onEnter()
 			end
+		end)
+
+		if masked then
+			-- the box shows only stars. When the text changes we work out what was typed / deleted by
+			-- comparing the stars at the start and the end, and keep the real password in f.real
+			local guard = false
+			box:GetPropertyChangedSignal("Text"):Connect(function()
+				if guard then
+					return
+				end
+				local t = box.Text
+				local m = #f.real
+				local n = #t
+				local ms = math.min(m, n)
+				local i = 0
+				while i < ms and string.sub(t, i + 1, i + 1) == "*" do
+					i = i + 1
+				end
+				local j = 0
+				while j < ms - i and string.sub(t, n - j, n - j) == "*" do
+					j = j + 1
+				end
+				local inserted = string.sub(t, i + 1, n - j)
+				f.real = string.sub(f.real, 1, i) .. inserted .. string.sub(f.real, m - j + 1)
+				local shown = string.rep("*", #f.real)
+				if t ~= shown then
+					guard = true
+					box.Text = shown
+					guard = false
+				end
+			end)
+		end
+
+		function f.get()
+			if masked then
+				return f.real
+			end
+			return box.Text
+		end
+		function f.clear()
+			f.real = ""
+			box.Text = ""
+		end
+		return f
+	end
+
+	local function makeButton(parent, y, text)
+		local b = new("TextButton", {
+			AutoButtonColor = false,
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.new(1, 0, 0, 38),
+			BackgroundColor3 = JOIN_BG,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			Text = text,
+			TextSize = 14,
+			TextColor3 = BLACK,
+		}, parent)
+		corner(b, 8)
+		local sc = new("UIScale", { Scale = 1 }, b)
+		b.MouseEnter:Connect(function()
+			TweenService:Create(b, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+		end)
+		b.MouseLeave:Connect(function()
+			TweenService:Create(b, FAST, { BackgroundColor3 = JOIN_BG }):Play()
+			TweenService:Create(sc, FAST, { Scale = 1 }):Play()
+		end)
+		b.MouseButton1Down:Connect(function()
+			TweenService:Create(sc, FAST, { Scale = 0.98 }):Play()
+		end)
+		b.MouseButton1Up:Connect(function()
+			TweenService:Create(sc, FAST, { Scale = 1 }):Play()
+		end)
+		return b
+	end
+
+	---------------------------------------------------------------------
+	-- THE TWO PAGES
+	---------------------------------------------------------------------
+	local formArea = new("Frame", {
+		Name = "Form",
+		Position = UDim2.fromOffset(0, 56),
+		Size = UDim2.new(1, 0, 1, -56),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, content)
+	local keyPage = new("Frame", {
+		Name = "KeyPage",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, formArea)
+	local loginPage = new("Frame", {
+		Name = "LoginPage",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, formArea)
+
+	-- KEY page: key, username, password, create account
+	local kKey = makeField(keyPage, 0, "Key", "Y1-XXXX-XXXX-XXXX", false)
+	local kUser = makeField(keyPage, 58, "Username", "Create a username", false)
+	local kPass = makeField(keyPage, 116, "Password", "Create a password", true)
+	local kBtn = makeButton(keyPage, 184, "Create account")
+
+	-- LOGIN page: username, password, log in
+	local lUser = makeField(loginPage, 0, "Username", "Your username", false)
+	local lPass = makeField(loginPage, 58, "Password", "Your password", true)
+	local lBtn = makeButton(loginPage, 126, "Log in")
+
+	-- Enter jumps to the next field (the last one submits, see below)
+	kKey.onEnter = function()
+		kUser.box:CaptureFocus()
+	end
+	kUser.onEnter = function()
+		kPass.box:CaptureFocus()
+	end
+	lUser.onEnter = function()
+		lPass.box:CaptureFocus()
+	end
+
+	local function paintTabs(animate)
+		local isKey = (page == "key")
+		local pos = UDim2.new(0, 3, 0, 3)
+		if not isKey then
+			pos = UDim2.new(0.5, 1, 0, 3)
+		end
+		if animate then
+			TweenService:Create(indicator, SMOOTH, { Position = pos }):Play()
+		else
+			indicator.Position = pos
+		end
+		local onC = BLACK
+		local offC = ICON
+		TweenService:Create(tabKey, FAST, { TextColor3 = isKey and onC or offC }):Play()
+		TweenService:Create(tabLogin, FAST, { TextColor3 = isKey and offC or onC }):Play()
+	end
+
+	local function showPage(name, animate)
+		page = name
+		keyPage.Visible = (name == "key")
+		loginPage.Visible = (name == "login")
+		if name == "key" then
+			subtitle.Text = "Enter your key and create your account"
+			statusLine.Position = UDim2.fromOffset(0, 56 + 184 + 38 + 10)
+		else
+			subtitle.Text = "Log in to continue"
+			statusLine.Position = UDim2.fromOffset(0, 56 + 126 + 38 + 10)
+		end
+		paintTabs(animate)
+	end
+	showPage("key", false)
+
+	---------------------------------------------------------------------
+	-- ACTIONS
+	---------------------------------------------------------------------
+	local function setBusy(b, btn, idleText, busyText)
+		busy = b
+		if b then
+			btn.Text = busyText
+			btn.TextTransparency = 0.4
+		else
+			btn.Text = idleText
+			btn.TextTransparency = 0
 		end
 	end
 
-	local function doContinue()
-		if not alive or continued or state ~= "ready" or not waitDone or not btnShown then
+	local function trim(s)
+		return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
+	end
+
+	local function doRegister()
+		if busy or not alive or finished then
 			return
 		end
-		continued = true
-		local leavePos = window.Position
-		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-		TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-		task.delay(LEAVE.Time + 0.03, function()
-			if alive then
-				leaveAndCallback(leavePos)
+		local key = string.upper((string.gsub(kKey.get(), "%s", "")))
+		local user = trim(kUser.get())
+		local pass = kPass.get()
+		if key == "" then
+			setStatus("Enter your key.")
+			return
+		end
+		if #user < 3 or #user > 20 or string.find(user, "[^%w_]") then
+			setStatus("Username: 3-20 letters, numbers or _")
+			return
+		end
+		if #pass < 6 then
+			setStatus("Password must be at least 6 characters.")
+			return
+		end
+		local hwid = getHwid()
+		if hwid == nil then
+			setStatus("Could not read this device's HWID.")
+			return
+		end
+		setStatus("")
+		setBusy(true, kBtn, "Create account", "Please wait...")
+		task.spawn(function()
+			local res = post("register", { key = key, username = user, password = pass, hwid = hwid })
+			if not alive then
+				return
+			end
+			setBusy(false, kBtn, "Create account", "Please wait...")
+			if res.ok then
+				-- account made: go to the login page with the username filled in
+				lUser.box.Text = user
+				lPass.clear()
+				kKey.clear()
+				kUser.clear()
+				kPass.clear()
+				showPage("login", true)
+				setStatus("Account created! Now log in.", true)
+			else
+				setStatus(tostring(res.message or "Could not create the account."))
 			end
 		end)
 	end
 
-	btn.MouseEnter:Connect(function()
-		hovering = true
-		paintButton()
-		TweenService:Create(btnScale, SPRING, { Scale = 1.02 }):Play()
-	end)
-	btn.MouseLeave:Connect(function()
-		hovering = false
-		paintButton()
-		TweenService:Create(btnScale, SPRING, { Scale = 1 }):Play()
-	end)
-	btn.MouseButton1Down:Connect(function()
-		TweenService:Create(btnScale, FAST, { Scale = 0.96 }):Play()
-	end)
-	btn.MouseButton1Up:Connect(function()
-		local s = 1
-		if hovering then
-			s = 1.02
+	local function doLogin()
+		if busy or not alive or finished then
+			return
 		end
-		TweenService:Create(btnScale, SPRING, { Scale = s }):Play()
+		local user = trim(lUser.get())
+		local pass = lPass.get()
+		if user == "" or pass == "" then
+			setStatus("Enter your username and password.")
+			return
+		end
+		local hwid = getHwid()
+		if hwid == nil then
+			setStatus("Could not read this device's HWID.")
+			return
+		end
+		setStatus("")
+		setBusy(true, lBtn, "Log in", "Logging in...")
+		task.spawn(function()
+			local res = post("login", { username = user, password = pass, hwid = hwid })
+			if not alive then
+				return
+			end
+			setBusy(false, lBtn, "Log in", "Logging in...")
+			if res.ok and type(res.token) == "string" and res.token ~= "" then
+				finished = true
+				setStatus("Welcome, " .. tostring(res.username or user) .. "!", true)
+				local session = {
+					token = res.token,
+					username = res.username or user,
+					expires_at = res.expires_at,
+					hwid = hwid,
+				}
+				local leavePos = window.Position
+				task.delay(0.6, function()
+					if not alive then
+						return
+					end
+					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
+					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+					task.delay(LEAVE.Time + 0.03, function()
+						if not alive then
+							return
+						end
+						local cb = opts.OnSuccess
+						W:Close(true)
+						if cb then
+							local okCb, err = pcall(cb, session, leavePos)
+							if not okCb then
+								warn("[auth] OnSuccess error: " .. tostring(err))
+							end
+						end
+					end)
+				end)
+			else
+				lPass.clear()
+				setStatus(tostring(res.message or "Login failed."))
+			end
+		end)
+	end
+
+	kBtn.Activated:Connect(doRegister)
+	lBtn.Activated:Connect(doLogin)
+	kPass.onEnter = doRegister
+	lPass.onEnter = doLogin
+
+	tabKey.Activated:Connect(function()
+		if busy or page == "key" then
+			return
+		end
+		setStatus("")
+		showPage("key", true)
 	end)
-	btn.Activated:Connect(doContinue)
+	tabLogin.Activated:Connect(function()
+		if busy or page == "login" then
+			return
+		end
+		setStatus("")
+		showPage("login", true)
+	end)
 
 	closeBtn.Activated:Connect(function()
-		if not alive or continued then
+		if not alive or finished then
 			return
 		end
 		local cb = opts.OnClose
 		W:Close(false)
 		if cb then
-			local ok, err = pcall(cb)
-			if not ok then
-				warn("[welcome] OnClose error: " .. tostring(err))
+			local okCb, err = pcall(cb)
+			if not okCb then
+				warn("[auth] OnClose error: " .. tostring(err))
 			end
 		end
 	end)
 
-	-- Enter also continues (but only once the button is showing)
-	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
-		if processed then
-			return
-		end
-		if input.KeyCode == Enum.KeyCode.Return or input.KeyCode == Enum.KeyCode.KeypadEnter then
-			doContinue()
-		end
-	end))
-
 	---------------------------------------------------------------------
 	-- PUBLIC API
 	---------------------------------------------------------------------
-	function W:SetState(newState, text)
-		if not alive then
-			return
-		end
-		state = newState
-		status.Text = text or ""
-		if newState == "error" then
-			status.TextColor3 = HOVER_RED
-			spin:Pause()
-		else
-			status.TextColor3 = DIM_TEXT
-			spin:Play()
-		end
-		refreshBottom()
-	end
-
-	function W:GetPosition()
-		return window.Position
-	end
-
-	function W:GetModules()
-		return loaded
-	end
-
 	function W:Close(instant)
 		if not alive then
 			return
 		end
 		alive = false
-		spin:Cancel()
-		for i = 1, #conns do
-			pcall(function()
-				conns[i]:Disconnect()
-			end)
-		end
-		conns = {}
 		if instant then
 			gui:Destroy()
 		else
@@ -650,207 +825,11 @@ function Welcome.new(opts)
 		end
 	end
 
-	---------------------------------------------------------------------
-	-- MODULE LOADER (runs behind the welcome window)
-	---------------------------------------------------------------------
-	local bust = 0
-
-	-- shows what is being checked (only while still loading)
-	local function setInfo(text)
-		if alive and state == "loading" then
-			status.Text = text
-		end
-	end
-
-	-- one download, no retries
-	local function fetchOnce(name)
-		if LOCAL_DIR then
-			return readfile(LOCAL_DIR .. name)
-		end
-		bust = bust + 1
-		local url = BASE .. name
-		if NO_CACHE then
-			url = url .. "?v=" .. tostring(os.time()) .. "_" .. tostring(bust)
-		end
-		local ok, body = pcall(function()
-			return game:HttpGet(url)
-		end)
-		if ok and type(body) == "string" and body ~= "" then
-			return body
-		end
-		-- fallback to the executor's request function
-		local req = (syn and syn.request) or (http and http.request) or http_request or request
-		if req then
-			local ok2, res = pcall(function()
-				return req({ Url = url, Method = "GET" })
-			end)
-			if ok2 and res and res.StatusCode == 200 and res.Body then
-				return res.Body
-			end
-		end
-		error("could not download " .. name, 0)
-	end
-
-	-- one download, up to 3 tries
-	local function fetch(name)
-		local lastErr = "unknown"
-		for attempt = 1, 3 do
-			local ok, res = pcall(fetchOnce, name)
-			if ok then
-				return res
-			end
-			lastErr = tostring(res)
-			if not alive then
-				break
-			end
-			task.wait(0.3)
-		end
-		error(lastErr, 0)
-	end
-
-	-- turns source text into the module table and makes sure it has the needed function
-	local function compile(entry, src)
-		local fn, err = loadstring(src, "=" .. entry.Name)
-		if not fn then
-			error("could not compile " .. entry.Name .. ": " .. tostring(err), 0)
-		end
-		local result = fn()
-		local key = entry.Key or "new"
-		if type(result) ~= "table" or type(result[key]) ~= "function" then
-			error(entry.Name .. " did not return a module with ." .. key .. " (got " .. typeof(result) .. ")", 0)
-		end
-		return result
-	end
-
-	-- pass 1 for one module: download it CHECKS times in a row, all copies must match.
-	-- if a copy differs (stale cache), the newest one becomes the reference and counting restarts.
-	local function checkModule(entry, index, total)
-		local ref = nil
-		local count = 0
-		local restarts = 0
-		while count < CHECKS do
-			if not alive then
-				return nil
-			end
-			setInfo("[" .. index .. "/" .. total .. "] Checking " .. entry.Name .. " (" .. (count + 1) .. "/" .. CHECKS .. ")")
-			local src = fetch(entry.Name)
-			if ref == nil or src == ref then
-				ref = src
-				count = count + 1
-			else
-				restarts = restarts + 1
-				ref = src
-				count = 1
-				if restarts > 3 then
-					count = CHECKS    -- keeps changing: accept the newest copy and move on
-				end
-			end
-			task.wait(0.05)
-		end
-		return ref
-	end
-
-	-- returns true when the failure must stop everything
-	local function handleFail(entry, err)
-		warn("[Y1] " .. entry.Name .. " failed: " .. tostring(err))
-		if entry.Required then
-			W:SetState("error", "Could not load " .. entry.Name .. " - see console (F9)")
-			return true
-		end
-		return false
-	end
-
-	local function runLoader()
-		local total = #moduleList
-
-		-- pass 1: one module at a time, checked CHECKS times each
-		for i = 1, total do
-			local entry = moduleList[i]
-			local ok, src = pcall(checkModule, entry, i, total)
-			if not alive then
-				return
-			end
-			if ok and src then
-				local ok2, mod = pcall(compile, entry, src)
-				if ok2 then
-					loaded[entry.Id] = mod
-					sources[entry.Name] = src
-					print("[Y1] loaded " .. entry.Name)
-				elseif handleFail(entry, mod) then
-					return
-				end
-			else
-				if handleFail(entry, src) then
-					return
-				end
-			end
-		end
-
-		-- pass 2: one very quick scan of everything again
-		for i = 1, total do
-			local entry = moduleList[i]
-			if not alive then
-				return
-			end
-			if sources[entry.Name] then
-				setInfo("Final scan: " .. entry.Name .. " (" .. i .. "/" .. total .. ")")
-				local ok, src = pcall(fetch, entry.Name)
-				if ok and src ~= sources[entry.Name] then
-					local ok2, mod = pcall(compile, entry, src)
-					if ok2 then
-						loaded[entry.Id] = mod
-						sources[entry.Name] = src
-						print("[Y1] updated " .. entry.Name)
-					else
-						warn("[Y1] " .. entry.Name .. " changed but failed to compile, keeping the old copy: " .. tostring(mod))
-					end
-				end
-				task.wait()
-			end
-		end
-
-		if not alive then
-			return
-		end
-		W:SetState("ready", "")
-		if opts.OnLoaded then
-			pcall(opts.OnLoaded, loaded)
-		end
-	end
-
-	---------------------------------------------------------------------
-	-- INTRO: window pops in, then the title and the wheel fade up
-	---------------------------------------------------------------------
-	paintButton()
-	refreshBottom()
-
+	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-	TweenService:Create(titleGroup, SMOOTH, { Position = titleBase, GroupTransparency = 0 }):Play()
-	task.delay(0.1, function()
-		if alive then
-			TweenService:Create(bottom, SMOOTH, { Position = bottomBase, GroupTransparency = 0 }):Play()
-		end
-	end)
-
-	-- the wait: Continue can only show after WAIT_SECONDS, even if everything is loaded sooner
-	task.delay(WAIT_SECONDS, function()
-		if alive then
-			waitDone = true
-			refreshBottom()
-		end
-	end)
-
-	-- start loading the modules behind the window
-	task.spawn(function()
-		local ok, err = pcall(runLoader)
-		if not ok and alive then
-			warn("[Y1] loader crashed: " .. tostring(err))
-			W:SetState("error", "Could not load - see console (F9)")
-		end
-	end)
 
 	return W
 end
 
-return Welcome
+return Auth
