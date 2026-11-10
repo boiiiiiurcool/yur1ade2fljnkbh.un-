@@ -2,21 +2,25 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- Builds the Visuals tab INTO win.VisualsPage (ui.lua loads it through opts.VisualsModule).
--- Same look as the Misc tab: cards with an Enable switch and three dots; the dots open a pop-up.
+-- Same look as the Misc tab: cards with three dots; the dots open a pop-up.
 -- Click the dots again, or anywhere except the pop-up, to close it. Everything starts OFF.
 --
---   OUTLINE ESP   Enable + dots. Pop-up: Outline (switch + colour/opacity), Glow (switch + colour/opacity).
---                 Drawn with Roblox Highlights (Roblox shows at most 31 highlights at once).
---   TEAM CHECK    Enable + dots. Pop-up: Action = Hide ESP (teammates get no ESP) or Set Color (teammates
---                 are drawn in the colour you pick).
---   VISIBLE CHECK Enable + dots. Pop-up: Action = Hide ESP (players you cannot see get no ESP) or
---                 Set Color (players you CAN see are drawn in the colour you pick).
---   FILTERS       Only dots. Pop-up: Self ESP (switch) and Render Distance (slider, studs).
---   BOX ESP       A colour square (box colour + opacity) and dots. Pop-up: Enable, Fill Box (switch + fill
---                 colour/opacity), Box Type = 2D / 3D / Corners (3D has no fill).
---                 Boxes are drawn with plain gui frames (no Drawing library needed).
+--   FILTERS   Only dots. Pop-up: Self ESP (switch), Render Distance (slider, studs), then
+--             Team Check (switch + Action: Hide ESP / Set Color + colour square) and
+--             Visible Check (switch + Action + colour square).
+--             Hide ESP = no ESP for teammates / for players you cannot see.
+--             Set Color = teammates / players you CAN see are drawn in that colour.
+--   BOX ESP   Colour square (box colour + opacity) and dots. Pop-up: Enable, Fill Box (switch + fill
+--             colour/opacity), Box Type = 2D / 3D / Corners (3D has no fill).
+--   NAME ESP  Colour square (text colour + opacity) and dots. Pop-up: Enable, Name = Display Name
+--             (default) or Username, then Distance (shows how far they are) and Equipped Tool (the
+--             tool they hold). Drawn above the head (name) and under the feet (distance, tool).
+--   HEALTH    Colour square (bar colour) and dots. Pop-up: Health Bar, Health Based (the bar changes
+--             from green to red with their health), Health Text and Text Position = Next to Bar /
+--             Next to Name.
 --   Colour picker  Click a colour square: saturation / brightness square, hue bar, opacity bar and a
 --                  hex + opacity box. The opacity bar is the transparency picker.
+--   Boxes, names and bars are drawn with plain gui frames (no Drawing library needed).
 --
 -- Build signature: Visuals.build(container, T, H, opts) -> { Root = ..., Unload = fn }
 
@@ -45,25 +49,15 @@ function VisualsPage.build(parent, T, H, opts)
 	local WHITE = Color3.fromRGB(255, 255, 255)
 
 	local S = {
-		-- outline esp
-		hlOn = false,
-		outlineOn = true,
-		outlineColor = WHITE,
-		outlineAlpha = 1,
-		glowOn = false,
-		glowColor = Color3.fromRGB(255, 255, 255),
-		glowAlpha = 0.35,
-		-- team check
-		teamOn = false,
-		teamAction = "Set Color",
-		teamColor = Color3.fromRGB(80, 160, 255),
-		-- visible check
-		visOn = false,
-		visAction = "Set Color",
-		visColor = Color3.fromRGB(80, 230, 120),
 		-- filters
 		selfEsp = false,
 		dist = 1000,
+		teamOn = false,
+		teamAction = "Set Color",
+		teamColor = Color3.fromRGB(80, 160, 255),
+		visOn = false,
+		visAction = "Set Color",
+		visColor = Color3.fromRGB(80, 230, 120),
 		-- box esp
 		boxOn = false,
 		boxColor = WHITE,
@@ -72,10 +66,26 @@ function VisualsPage.build(parent, T, H, opts)
 		fillColor = Color3.fromRGB(255, 255, 255),
 		fillAlpha = 0.3,
 		boxType = "2D",
+		-- name esp
+		nameOn = false,
+		nameColor = WHITE,
+		nameAlpha = 1,
+		nameType = "Display Name",
+		showDist = false,
+		showTool = false,
+		-- health
+		hpBarOn = false,
+		hpBased = true,
+		hpColor = Color3.fromRGB(80, 230, 120),
+		hpAlpha = 1,
+		hpTextOn = false,
+		hpTextPos = "Next to Bar",
 	}
 
 	local ACTIONS = { "Hide ESP", "Set Color" }
 	local BOX_TYPES = { "2D", "3D", "Corners" }
+	local NAME_TYPES = { "Display Name", "Username" }
+	local HP_POS = { "Next to Bar", "Next to Name" }
 
 	---------------------------------------------------------------------
 	-- pointer helpers
@@ -1043,8 +1053,8 @@ function VisualsPage.build(parent, T, H, opts)
 		return UDim2.new(1, -(16 + 38 + 10), 0, y + 14)
 	end
 
-	local function noteText(P, text, y)
-		local l = label(P.frame, text, UDim2.fromOffset(16, y), UDim2.new(1, -32, 0, 28),
+	local function noteText(P, text, y, h)
+		local l = label(P.frame, text, UDim2.fromOffset(16, y), UDim2.new(1, -32, 0, h or 28),
 			Enum.Font.Gotham, 11, T.DIM_TEXT)
 		l.TextWrapped = true
 		l.TextTruncate = Enum.TextTruncate.None
@@ -1103,144 +1113,83 @@ function VisualsPage.build(parent, T, H, opts)
 		end
 	end
 
-	-- 1) OUTLINE ESP -----------------------------------------------------
-	local hlCard = makeCard("Outline ESP")
-	local hlSub = cardTitle(hlCard, "Enable")
-	local function refreshHl()
-		if S.hlOn then
-			setSub(hlSub, "Active", true)
-		else
-			setSub(hlSub, "Off", false)
-		end
-	end
-	refreshHl()
-	makeSwitch(hlCard, S.hlOn, function(on)
-		S.hlOn = on
-		refreshHl()
-	end, 23)
-	local hlDots = makeDots(hlCard, UDim2.new(1, -58, 0, 23))
-
-	do
-		local P = makePopup("OutlinePopup", "Outline ESP", 264, 132, hlDots)
-		switchRow(P, 50, "Outline", S.outlineOn, function(on)
-			S.outlineOn = on
-		end)
-		colorSquare(P.frame, swatchPos(50), "outline",
-			function() return S.outlineColor end,
-			function() return S.outlineAlpha end,
-			function(c, al)
-				S.outlineColor = c
-				S.outlineAlpha = al
-			end, P.frame)
-
-		switchRow(P, 86, "Glow", S.glowOn, function(on)
-			S.glowOn = on
-		end)
-		colorSquare(P.frame, swatchPos(86), "glow",
-			function() return S.glowColor end,
-			function() return S.glowAlpha end,
-			function(c, al)
-				S.glowColor = c
-				S.glowAlpha = al
-			end, P.frame)
+	-- 1) FILTERS (only the dots) ----------------------------------------
+	local function divider(P, y)
+		new("Frame", {
+			Position = UDim2.fromOffset(16, y),
+			Size = UDim2.new(1, -32, 0, 1),
+			BackgroundColor3 = T.BORDER,
+			BorderSizePixel = 0,
+		}, P.frame)
 	end
 
-	-- 2) TEAM CHECK ------------------------------------------------------
-	local teamCard = makeCard("Team Check")
-	local teamSub = cardTitle(teamCard, "Enable")
-	local function refreshTeam()
-		if S.teamOn then
-			setSub(teamSub, S.teamAction, true)
-		else
-			setSub(teamSub, "Off", false)
-		end
-	end
-	refreshTeam()
-	makeSwitch(teamCard, S.teamOn, function(on)
-		S.teamOn = on
-		refreshTeam()
-	end, 23)
-	local teamDots = makeDots(teamCard, UDim2.new(1, -58, 0, 23))
-
-	do
-		local P = makePopup("TeamPopup", "Team Check", 264, 182, teamDots)
-		makeChoiceRow(P, 50, "Action", ACTIONS,
-			function() return S.teamAction end,
-			function(v)
-				S.teamAction = v
-				refreshTeam()
-			end)
-		label(P.frame, "Color", UDim2.fromOffset(16, 86), UDim2.new(1, -90, 0, 28),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		colorSquare(P.frame, UDim2.new(1, -16, 0, 100), "team",
-			function() return S.teamColor end,
-			function() return 1 end,
-			function(c)
-				S.teamColor = c
-			end, P.frame)
-		noteText(P, "Hide ESP: your teammates get no ESP. Set Color: your teammates are drawn in this color.", 126)
-	end
-
-	-- 3) VISIBLE CHECK ---------------------------------------------------
-	local visCard = makeCard("Visible Check")
-	local visSub = cardTitle(visCard, "Enable")
-	local function refreshVis()
-		if S.visOn then
-			setSub(visSub, S.visAction, true)
-		else
-			setSub(visSub, "Off", false)
-		end
-	end
-	refreshVis()
-	makeSwitch(visCard, S.visOn, function(on)
-		S.visOn = on
-		refreshVis()
-	end, 23)
-	local visDots = makeDots(visCard, UDim2.new(1, -58, 0, 23))
-
-	do
-		local P = makePopup("VisiblePopup", "Visible Check", 264, 182, visDots)
-		makeChoiceRow(P, 50, "Action", ACTIONS,
-			function() return S.visAction end,
-			function(v)
-				S.visAction = v
-				refreshVis()
-			end)
-		label(P.frame, "Color", UDim2.fromOffset(16, 86), UDim2.new(1, -90, 0, 28),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		colorSquare(P.frame, UDim2.new(1, -16, 0, 100), "visible",
-			function() return S.visColor end,
-			function() return 1 end,
-			function(c)
-				S.visColor = c
-			end, P.frame)
-		noteText(P, "Hide ESP: players you cannot see get no ESP. Set Color: players you can see are drawn in this color.", 126)
-	end
-
-	-- 4) FILTERS (only the dots) ----------------------------------------
 	local filCard = makeCard("Filters")
 	local filSub = cardTitle(filCard, "Filters")
 	local function refreshFil()
-		local selfText = "Self ESP off"
-		if S.selfEsp then
-			selfText = "Self ESP on"
+		local parts = {}
+		if S.teamOn then
+			parts[#parts + 1] = "Team"
 		end
-		filSub.Text = selfText .. " - " .. S.dist .. " studs"
+		if S.visOn then
+			parts[#parts + 1] = "Visible"
+		end
+		local text = S.dist .. " studs"
+		if #parts > 0 then
+			text = text .. " - " .. table.concat(parts, ", ")
+		end
+		filSub.Text = text
 		filSub.TextColor3 = T.DIM_TEXT
 	end
 	refreshFil()
 	local filDots = makeDots(filCard, UDim2.new(1, -12, 0.5, 0))
 
 	do
-		local P = makePopup("FiltersPopup", "Filters", 264, 124, filDots)
+		local P = makePopup("FiltersPopup", "Filters", 264, 352, filDots)
 		switchRow(P, 50, "Self ESP", S.selfEsp, function(on)
 			S.selfEsp = on
-			refreshFil()
 		end)
 		makeSlider(P.frame, 90, "Distance", 60, 50, 5000, 50, S.dist, "%d", function(v)
 			S.dist = v
 			refreshFil()
 		end)
+		divider(P, 122)
+
+		-- team check
+		switchRow(P, 130, "Team Check", S.teamOn, function(on)
+			S.teamOn = on
+			refreshFil()
+		end)
+		makeChoiceRow(P, 166, "Action", ACTIONS,
+			function() return S.teamAction end,
+			function(v)
+				S.teamAction = v
+			end)
+		colorSquare(P.frame, UDim2.new(1, -(16 + 112 + 10), 0, 180), "team",
+			function() return S.teamColor end,
+			function() return 1 end,
+			function(c)
+				S.teamColor = c
+			end, P.frame)
+		divider(P, 202)
+
+		-- visible check
+		switchRow(P, 210, "Visible Check", S.visOn, function(on)
+			S.visOn = on
+			refreshFil()
+		end)
+		makeChoiceRow(P, 246, "Action", ACTIONS,
+			function() return S.visAction end,
+			function(v)
+				S.visAction = v
+			end)
+		colorSquare(P.frame, UDim2.new(1, -(16 + 112 + 10), 0, 260), "visible",
+			function() return S.visColor end,
+			function() return 1 end,
+			function(c)
+				S.visColor = c
+			end, P.frame)
+
+		noteText(P, "Hide ESP removes the ESP. Set Color uses the color square. Team Check acts on your teammates, Visible Check on players you can see.", 284, 56)
 	end
 
 	-- 5) BOX ESP (colour square + dots) ----------------------------------
@@ -1286,6 +1235,95 @@ function VisualsPage.build(parent, T, H, opts)
 				refreshBox()
 			end)
 		noteText(P, "3D boxes have no fill. The opacity bar in the color picker is the transparency.", 156)
+	end
+
+	-- 3) NAME ESP (colour square + dots) ---------------------------------
+	local nameCard = makeCard("Name ESP")
+	local nameSub = cardTitle(nameCard, "Name")
+	local function refreshName()
+		if S.nameOn then
+			setSub(nameSub, "On - " .. S.nameType, true)
+		else
+			setSub(nameSub, "Off - " .. S.nameType, false)
+		end
+	end
+	refreshName()
+	local nameDots = makeDots(nameCard, UDim2.new(1, -12, 0.5, 0))
+	colorSquare(nameCard, UDim2.new(1, -(12 + 32 + 6), 0.5, 0), "name",
+		function() return S.nameColor end,
+		function() return S.nameAlpha end,
+		function(c, al)
+			S.nameColor = c
+			S.nameAlpha = al
+		end, nil)
+
+	do
+		local P = makePopup("NamePopup", "Name ESP", 264, 214, nameDots)
+		switchRow(P, 50, "Enable", S.nameOn, function(on)
+			S.nameOn = on
+			refreshName()
+		end)
+		makeChoiceRow(P, 86, "Name", NAME_TYPES,
+			function() return S.nameType end,
+			function(v)
+				S.nameType = v
+				refreshName()
+			end)
+		divider(P, 122)
+		switchRow(P, 130, "Distance", S.showDist, function(on)
+			S.showDist = on
+		end)
+		switchRow(P, 166, "Equipped Tool", S.showTool, function(on)
+			S.showTool = on
+		end)
+	end
+
+	-- 4) HEALTH (colour square + dots) -------------------------------------
+	local hpCard = makeCard("Health")
+	local hpSub = cardTitle(hpCard, "Health")
+	local function refreshHp()
+		local parts = {}
+		if S.hpBarOn then
+			parts[#parts + 1] = "Bar"
+		end
+		if S.hpTextOn then
+			parts[#parts + 1] = "Text"
+		end
+		if #parts > 0 then
+			setSub(hpSub, "On - " .. table.concat(parts, " + "), true)
+		else
+			setSub(hpSub, "Off", false)
+		end
+	end
+	refreshHp()
+	local hpDots = makeDots(hpCard, UDim2.new(1, -12, 0.5, 0))
+	colorSquare(hpCard, UDim2.new(1, -(12 + 32 + 6), 0.5, 0), "health",
+		function() return S.hpColor end,
+		function() return S.hpAlpha end,
+		function(c, al)
+			S.hpColor = c
+			S.hpAlpha = al
+		end, nil)
+
+	do
+		local P = makePopup("HealthPopup", "Health", 264, 238, hpDots)
+		switchRow(P, 50, "Health Bar", S.hpBarOn, function(on)
+			S.hpBarOn = on
+			refreshHp()
+		end)
+		switchRow(P, 86, "Health Based", S.hpBased, function(on)
+			S.hpBased = on
+		end)
+		switchRow(P, 122, "Health Text", S.hpTextOn, function(on)
+			S.hpTextOn = on
+			refreshHp()
+		end)
+		makeChoiceRow(P, 158, "Text Position", HP_POS,
+			function() return S.hpTextPos end,
+			function(v)
+				S.hpTextPos = v
+			end)
+		noteText(P, "Health Based: the bar goes from green to red with their health. Otherwise the color square on the card is the bar color.", 196, 42)
 	end
 
 	-- a click or tap anywhere outside an open pop-up (or its button) closes it
@@ -1338,7 +1376,7 @@ function VisualsPage.build(parent, T, H, opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, player:WaitForChild("PlayerGui"))
 
-	local entries = {}   -- player -> { rect, stroke, corners, lines, hl, mode }
+	local entries = {}   -- player -> { rect, stroke, corners, lines, name, info, hpBack, hpFill, hpText, mode }
 
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -1357,8 +1395,24 @@ function VisualsPage.build(parent, T, H, opts)
 		return list
 	end
 
+	local function newText(anchor, size, w, h)
+		local t = Instance.new("TextLabel")
+		t.AnchorPoint = anchor
+		t.Size = UDim2.fromOffset(w, h)
+		t.BackgroundTransparency = 1
+		t.BorderSizePixel = 0
+		t.Font = Enum.Font.GothamMedium
+		t.TextSize = size
+		t.TextColor3 = WHITE
+		t.TextStrokeColor3 = Color3.new(0, 0, 0)
+		t.TextStrokeTransparency = 0.3
+		t.Visible = false
+		t.Parent = espGui
+		return t
+	end
+
 	local function newEntry()
-		local E = { mode = nil, corners = nil, lines = nil, hl = nil }
+		local E = { mode = nil, corners = nil, lines = nil }
 		E.rect = new("Frame", {
 			BackgroundColor3 = WHITE,
 			BackgroundTransparency = 1,
@@ -1369,6 +1423,23 @@ function VisualsPage.build(parent, T, H, opts)
 		E.stroke.Thickness = 1.5
 		E.stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		E.stroke.Parent = E.rect
+
+		E.name = newText(Vector2.new(0.5, 1), 13, 240, 16)
+		E.info = newText(Vector2.new(0.5, 0), 12, 240, 30)
+		E.info.TextYAlignment = Enum.TextYAlignment.Top
+		E.hpText = newText(Vector2.new(1, 0.5), 11, 40, 12)
+		E.hpText.TextXAlignment = Enum.TextXAlignment.Right
+		E.hpBack = new("Frame", {
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 0.35,
+			BorderSizePixel = 0,
+			Visible = false,
+		}, espGui)
+		E.hpFill = new("Frame", {
+			BackgroundColor3 = WHITE,
+			BorderSizePixel = 0,
+			Visible = false,
+		}, espGui)
 		return E
 	end
 
@@ -1387,10 +1458,26 @@ function VisualsPage.build(parent, T, H, opts)
 		E.mode = nil
 	end
 
+	local function hideExtras(E)
+		E.name.Visible = false
+		E.info.Visible = false
+		E.hpText.Visible = false
+		E.hpBack.Visible = false
+		E.hpFill.Visible = false
+	end
+
+	local function hideEntry(E)
+		hideBox(E)
+		hideExtras(E)
+	end
+
 	local function destroyEntry(E)
-		pcall(function()
-			E.rect:Destroy()
-		end)
+		local list = { E.rect, E.name, E.info, E.hpText, E.hpBack, E.hpFill }
+		for i = 1, #list do
+			pcall(function()
+				list[i]:Destroy()
+			end)
+		end
 		if E.corners then
 			for i = 1, #E.corners do
 				pcall(function()
@@ -1405,14 +1492,9 @@ function VisualsPage.build(parent, T, H, opts)
 				end)
 			end
 		end
-		if E.hl then
-			pcall(function()
-				E.hl:Destroy()
-			end)
-		end
 	end
 
-	-- a 1.5px line between two screen points, drawn with a rotated frame
+	-- a line between two screen points, drawn with a rotated frame
 	local function setLine(f, ax, ay, bx, by, th, color, transp)
 		local dx = bx - ax
 		local dy = by - ay
@@ -1439,52 +1521,24 @@ function VisualsPage.build(parent, T, H, opts)
 		return workspace:Raycast(from, part.Position - from, rayParams) == nil
 	end
 
-	local function updateHighlight(E, char, override, show)
-		if not show then
-			if E.hl then
-				E.hl.Enabled = false
-			end
-			return
+	-- the screen rectangle from the top of the head to the feet (nil when it is behind the camera)
+	local function getRect(cam, pos)
+		local topV = cam:WorldToViewportPoint(pos + Vector3.new(0, 2.8, 0))
+		local botV = cam:WorldToViewportPoint(pos - Vector3.new(0, 3.2, 0))
+		local h = botV.Y - topV.Y
+		if topV.Z <= 0 or botV.Z <= 0 or h < 2 then
+			return nil
 		end
-		if E.hl == nil or E.hl.Parent ~= char then
-			if E.hl then
-				pcall(function()
-					E.hl:Destroy()
-				end)
-			end
-			local hl = Instance.new("Highlight")
-			hl.Name = "Y1Hl"
-			hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-			hl.Adornee = char
-			hl.Parent = char
-			E.hl = hl
-		end
-		local hl = E.hl
-		if not S.outlineOn and not S.glowOn then
-			hl.Enabled = false
-			return
-		end
-		hl.Enabled = true
-		hl.OutlineColor = override or S.outlineColor
-		hl.FillColor = override or S.glowColor
-		if S.outlineOn then
-			hl.OutlineTransparency = 1 - S.outlineAlpha
-		else
-			hl.OutlineTransparency = 1
-		end
-		if S.glowOn then
-			hl.FillTransparency = 1 - S.glowAlpha
-		else
-			hl.FillTransparency = 1
-		end
+		local w = h * 0.56
+		local cx = (topV.X + botV.X) / 2
+		return { x1 = cx - w / 2, y1 = topV.Y, x2 = cx + w / 2, y2 = botV.Y, w = w, h = h, cx = cx }
 	end
 
-	local function updateBox(E, cam, hrp, override)
+	local function updateBox(E, cam, hrp, override, rc)
 		local mode = S.boxType
 		local color = override or S.boxColor
 		local fillColor = override or S.fillColor
 		local lineT = 1 - S.boxAlpha
-		local pos = hrp.Position
 
 		-- hide the pieces of the other box types when the type changes
 		if E.mode ~= mode then
@@ -1497,7 +1551,7 @@ function VisualsPage.build(parent, T, H, opts)
 		if mode == "3D" then
 			E.lines = E.lines or makeLines(12)
 			local _, yaw = hrp.CFrame:ToOrientation()
-			local cf = CFrame.new(pos) * CFrame.Angles(0, yaw, 0)
+			local cf = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
 			local pts = {}
 			for i = 0, 7 do
 				local sx = -1
@@ -1537,24 +1591,14 @@ function VisualsPage.build(parent, T, H, opts)
 			return
 		end
 
-		-- 2D and Corners: a screen rectangle from the top of the head to the feet
-		local topV = cam:WorldToViewportPoint(pos + Vector3.new(0, 2.8, 0))
-		local botV = cam:WorldToViewportPoint(pos - Vector3.new(0, 3.2, 0))
-		local h = botV.Y - topV.Y
-		if topV.Z <= 0 or botV.Z <= 0 or h < 2 then
+		-- 2D and Corners
+		if rc == nil then
 			E.rect.Visible = false
 			setGroupVisible(E.corners, false)
 			return
 		end
-		local w = h * 0.56
-		local cx = (topV.X + botV.X) / 2
-		local x1 = cx - w / 2
-		local y1 = topV.Y
-		local x2 = cx + w / 2
-		local y2 = botV.Y
-
-		E.rect.Position = UDim2.fromOffset(x1, y1)
-		E.rect.Size = UDim2.fromOffset(w, h)
+		E.rect.Position = UDim2.fromOffset(rc.x1, rc.y1)
+		E.rect.Size = UDim2.fromOffset(rc.w, rc.h)
 		E.rect.BackgroundColor3 = fillColor
 		if S.fillOn then
 			E.rect.BackgroundTransparency = 1 - S.fillAlpha
@@ -1572,24 +1616,117 @@ function VisualsPage.build(parent, T, H, opts)
 			E.stroke.Enabled = false
 			E.rect.Visible = S.fillOn
 			E.corners = E.corners or makeLines(8)
-			local cl = math.max(4, w * 0.28)
-			local ch = math.max(4, h * 0.2)
+			local cl = math.max(4, rc.w * 0.28)
+			local ch = math.max(4, rc.h * 0.2)
 			local c = E.corners
-			setLine(c[1], x1, y1, x1 + cl, y1, 1.5, color, lineT)
-			setLine(c[2], x1, y1, x1, y1 + ch, 1.5, color, lineT)
-			setLine(c[3], x2, y1, x2 - cl, y1, 1.5, color, lineT)
-			setLine(c[4], x2, y1, x2, y1 + ch, 1.5, color, lineT)
-			setLine(c[5], x1, y2, x1 + cl, y2, 1.5, color, lineT)
-			setLine(c[6], x1, y2, x1, y2 - ch, 1.5, color, lineT)
-			setLine(c[7], x2, y2, x2 - cl, y2, 1.5, color, lineT)
-			setLine(c[8], x2, y2, x2, y2 - ch, 1.5, color, lineT)
+			setLine(c[1], rc.x1, rc.y1, rc.x1 + cl, rc.y1, 1.5, color, lineT)
+			setLine(c[2], rc.x1, rc.y1, rc.x1, rc.y1 + ch, 1.5, color, lineT)
+			setLine(c[3], rc.x2, rc.y1, rc.x2 - cl, rc.y1, 1.5, color, lineT)
+			setLine(c[4], rc.x2, rc.y1, rc.x2, rc.y1 + ch, 1.5, color, lineT)
+			setLine(c[5], rc.x1, rc.y2, rc.x1 + cl, rc.y2, 1.5, color, lineT)
+			setLine(c[6], rc.x1, rc.y2, rc.x1, rc.y2 - ch, 1.5, color, lineT)
+			setLine(c[7], rc.x2, rc.y2, rc.x2 - cl, rc.y2, 1.5, color, lineT)
+			setLine(c[8], rc.x2, rc.y2, rc.x2, rc.y2 - ch, 1.5, color, lineT)
 		end
 	end
 
-	local function hideEntry(E)
-		hideBox(E)
-		if E.hl then
-			E.hl.Enabled = false
+	-- name, distance, tool, health bar and health text
+	local function updateExtras(E, plr, char, hum, hrp, override, rc, origin)
+		if rc == nil then
+			hideExtras(E)
+			return
+		end
+
+		local maxHp = hum.MaxHealth
+		if maxHp <= 0 then
+			maxHp = 100
+		end
+		local frac = math.clamp(hum.Health / maxHp, 0, 1)
+		local hpStr = tostring(math.floor(hum.Health + 0.5))
+		local textColor = override or S.nameColor
+
+		-- name (+ health text when it is set to sit next to the name)
+		local nameText = nil
+		if S.nameOn then
+			if S.nameType == "Username" then
+				nameText = plr.Name
+			else
+				nameText = plr.DisplayName
+			end
+		end
+		if S.hpTextOn and S.hpTextPos == "Next to Name" then
+			if nameText then
+				nameText = nameText .. " [" .. hpStr .. "]"
+			else
+				nameText = "[" .. hpStr .. "]"
+			end
+		end
+		if nameText then
+			E.name.Text = nameText
+			E.name.Position = UDim2.fromOffset(rc.cx, rc.y1 - 2)
+			E.name.TextColor3 = textColor
+			E.name.TextTransparency = 1 - S.nameAlpha
+			E.name.Visible = true
+		else
+			E.name.Visible = false
+		end
+
+		-- distance and equipped tool under the feet
+		local lines = {}
+		if S.nameOn and S.showDist then
+			local d = (hrp.Position - origin).Magnitude
+			lines[#lines + 1] = string.format("%d studs", math.floor(d + 0.5))
+		end
+		if S.nameOn and S.showTool then
+			local tool = char:FindFirstChildOfClass("Tool")
+			if tool then
+				lines[#lines + 1] = tool.Name
+			end
+		end
+		if #lines > 0 then
+			E.info.Text = table.concat(lines, "\n")
+			E.info.Position = UDim2.fromOffset(rc.cx, rc.y2 + 2)
+			E.info.TextColor3 = textColor
+			E.info.TextTransparency = 1 - S.nameAlpha
+			E.info.Visible = true
+		else
+			E.info.Visible = false
+		end
+
+		-- health bar (left of the box)
+		local barColor = S.hpColor
+		if S.hpBased then
+			barColor = Color3.fromHSV(frac * 0.33, 1, 1)
+		end
+		if S.hpBarOn then
+			E.hpBack.Position = UDim2.fromOffset(rc.x1 - 7, rc.y1 - 1)
+			E.hpBack.Size = UDim2.fromOffset(5, rc.h + 2)
+			E.hpBack.Visible = true
+			local fh = math.max(1, rc.h * frac)
+			E.hpFill.Position = UDim2.fromOffset(rc.x1 - 6, rc.y2 - fh)
+			E.hpFill.Size = UDim2.fromOffset(3, fh)
+			E.hpFill.BackgroundColor3 = barColor
+			E.hpFill.BackgroundTransparency = 1 - S.hpAlpha
+			E.hpFill.Visible = true
+		else
+			E.hpBack.Visible = false
+			E.hpFill.Visible = false
+		end
+
+		-- health text next to the bar
+		if S.hpTextOn and S.hpTextPos == "Next to Bar" then
+			local tx = rc.x1 - 4
+			local ty = (rc.y1 + rc.y2) / 2
+			if S.hpBarOn then
+				tx = rc.x1 - 10
+				ty = math.clamp(rc.y2 - rc.h * frac, rc.y1 + 5, rc.y2 - 5)
+			end
+			E.hpText.Text = hpStr
+			E.hpText.Position = UDim2.fromOffset(tx, ty)
+			E.hpText.TextColor3 = barColor
+			E.hpText.Visible = true
+		else
+			E.hpText.Visible = false
 		end
 	end
 
@@ -1602,6 +1739,15 @@ function VisualsPage.build(parent, T, H, opts)
 			return
 		end
 		local camPos = cam.CFrame.Position
+		local origin = camPos
+		if player.Character then
+			local myRoot = player.Character:FindFirstChild("HumanoidRootPart")
+			if myRoot then
+				origin = myRoot.Position
+			end
+		end
+		local anyOn = S.boxOn or S.nameOn or S.hpBarOn or S.hpTextOn
+
 		local all = Players:GetPlayers()
 		for i = 1, #all do
 			local plr = all[i]
@@ -1609,11 +1755,11 @@ function VisualsPage.build(parent, T, H, opts)
 			local show = false
 			local override = nil
 			local char = nil
+			local hum = nil
 			local hrp = nil
 
-			if (S.hlOn or S.boxOn) and (plr ~= player or S.selfEsp) then
+			if anyOn and (plr ~= player or S.selfEsp) then
 				char = plr.Character
-				local hum = nil
 				if char then
 					hum = char:FindFirstChildOfClass("Humanoid")
 					hrp = char:FindFirstChild("HumanoidRootPart")
@@ -1651,12 +1797,13 @@ function VisualsPage.build(parent, T, H, opts)
 					E = newEntry()
 					entries[plr] = E
 				end
-				updateHighlight(E, char, override, S.hlOn)
+				local rc = getRect(cam, hrp.Position)
 				if S.boxOn then
-					updateBox(E, cam, hrp, override)
+					updateBox(E, cam, hrp, override, rc)
 				else
 					hideBox(E)
 				end
+				updateExtras(E, plr, char, hum, hrp, override, rc, origin)
 			end
 		end
 	end
