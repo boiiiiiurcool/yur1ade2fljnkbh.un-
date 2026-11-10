@@ -207,6 +207,53 @@ function Auth.new(opts)
 		end
 	end
 
+	-- SOFT SHADOW (sits behind the window, in the ScreenGui: the window is a CanvasGroup, which would clip it).
+	-- Seven rounded layers, each a little bigger and a little fainter at the edge, lowered a few pixels, so
+	-- the window looks lifted off the game like the notification on the Home page. Layers are tweened
+	-- together with the window (intro / leave), scale included.
+	local SHADOW_LAYERS = 7
+	local SHADOW_STEP = 6        -- px each layer grows per side
+	local SHADOW_BASE = 0.93     -- transparency of one layer (they stack, so the middle is darker)
+	local shadowHolder = new("Frame", {
+		Name = "Shadow",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(WIN_W, WIN_H),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 0,
+	}, gui)
+	local shadowScale = new("UIScale", { Scale = fitScale * 0.92 }, shadowHolder)
+	local shadowLayers = {}
+	for i = 1, SHADOW_LAYERS do
+		local e = i * SHADOW_STEP
+		local layer = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, 10),
+			Size = UDim2.new(1, e * 2, 1, e * 2),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 0,
+		}, shadowHolder)
+		corner(layer, RADIUS + e)
+		shadowLayers[i] = layer
+	end
+
+	-- fades the shadow in (1) or out (0) with the same timing as the window
+	local function shadowTo(visible, info, scale)
+		for i = 1, #shadowLayers do
+			local t = 1
+			if visible then
+				t = SHADOW_BASE
+			end
+			TweenService:Create(shadowLayers[i], info, { BackgroundTransparency = t }):Play()
+		end
+		if scale then
+			TweenService:Create(shadowScale, info, { Scale = scale }):Play()
+		end
+	end
+
 	local window = new("CanvasGroup", {
 		Name = "Window",
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -236,6 +283,40 @@ function Auth.new(opts)
 				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
 			}),
 		}, backdrop)
+
+		-- soft light falling from the top edge
+		local topGlow = new("Frame", {
+			Name = "TopGlow",
+			Size = UDim2.new(1, 0, 0, 150),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, window)
+		corner(topGlow, RADIUS)
+		new("UIGradient", {
+			Rotation = 90,
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.93),
+				NumberSequenceKeypoint.new(1, 1),
+			}),
+		}, topGlow)
+
+		-- thin bright line along the top edge that fades out toward both sides
+		local topLine = new("Frame", {
+			Name = "TopLine",
+			Position = UDim2.fromOffset(20, 1),
+			Size = UDim2.new(1, -40, 0, 1),
+			BackgroundColor3 = ICON_HOVER,
+			BorderSizePixel = 0,
+			ZIndex = 21,
+		}, window)
+		new("UIGradient", {
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.5, 0.78),
+				NumberSequenceKeypoint.new(1, 1),
+			}),
+		}, topLine)
 
 		local outline = new("Frame", {
 			Name = "Outline",
@@ -649,6 +730,7 @@ function Auth.new(opts)
 					end
 					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+					shadowTo(false, LEAVE, fitScale * 0.94)
 					task.delay(LEAVE.Time + 0.03, function()
 						if not alive then
 							return
@@ -717,6 +799,7 @@ function Auth.new(opts)
 		else
 			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+			shadowTo(false, LEAVE, fitScale * 0.94)
 			task.delay(LEAVE.Time + 0.03, function()
 				gui:Destroy()
 			end)
@@ -726,6 +809,8 @@ function Auth.new(opts)
 	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
+	shadowTo(true, SMOOTH, nil)
+	TweenService:Create(shadowScale, POP, { Scale = fitScale }):Play()
 
 	return W
 end
