@@ -35,6 +35,24 @@
 -- Pop-up: Keybind (click it, then press a key; Escape = none), Visualize (a ring showing the radius,
 -- around the target while orbiting, around you while you adjust it), Speed, Distance (radius, studs).
 --
+-- SPIN BOT: a fifth small card (row 4, right). Enable switch + three dots.
+-- Your character spins (or is turned over) while you walk around normally and the camera stays normal.
+-- The spin turns the HumanoidRootPart (AutoRotate is switched off while it is on); the tilt modes change
+-- the root joint (Root / RootJoint C0), so the camera and your walking are not affected.
+-- Modes: Normal = spins. Upside = upside down (+ spin). Side = lying on your side (+ spin).
+--        Backwards = your character faces away from where you walk (no spin).
+-- Speed 0 stops the spinning, so Upside and Side become a fixed pose. Everything is put back when
+-- you turn it off, change character or unload.
+--
+-- SPIN BOT: a fifth small card (row 4, right). Enable switch + three dots. Only YOUR character is turned;
+-- you still walk normally and the camera is untouched (the Humanoid's AutoRotate is switched off and the
+-- root part's rotation is set every frame while its position is left alone). Modes (drop-down):
+--   Normal    = spins around (Speed slider)
+--   Upside    = upside down, facing where your camera looks
+--   Side      = lying on your side, facing where your camera looks
+--   Backwards = facing away from where your camera looks
+-- Turning it off (or unloading) stands the character back up.
+--
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
 -- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
 
@@ -1689,6 +1707,428 @@ function AnimationPage.build(parent, T, H, ctx)
 		hideRing()
 	end
 
+
+	---------------------------------------------------------------------
+	-- SPIN BOT (row 4, right)
+	---------------------------------------------------------------------
+	local SP_MODES = { "Normal", "Upside", "Side", "Backwards" }
+	local SP = {
+		enabled = false,
+		mode = "Normal",
+		speed = 30,
+		spin = 0,
+		facing = 0,
+		facingSet = false,
+		yaw = 0,
+		joint = nil,
+		jointC0 = nil,
+		autoRotate = nil,
+		hum = nil,
+	}
+
+	local spCard = new("Frame", {
+		Name = "SpinBotCard",
+		Position = UDim2.new(0.5, 4, 0, 246),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, parent)
+	corner(spCard, RADIUS + 4)
+	stroke(spCard, T.BORDER, 1, 0)
+
+	local spCaption = label(parent, "SPIN BOT", UDim2.new(0.5, 6, 0, 228), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(spCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local spSub = label(spCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	spSub.RichText = true
+
+	local function refreshSpStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if SP.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font> <font color="rgb(116,116,124)">- ' .. SP.mode .. '</font>'
+		end
+		spSub.Text = state
+	end
+	refreshSpStatus()
+
+	-- puts the root joint and AutoRotate back the way they were
+	local function spRestore()
+		if SP.joint and SP.joint.Parent and SP.jointC0 then
+			pcall(function()
+				SP.joint.C0 = SP.jointC0
+			end)
+		end
+		if SP.hum and SP.hum.Parent and SP.autoRotate ~= nil then
+			pcall(function()
+				SP.hum.AutoRotate = SP.autoRotate
+			end)
+		end
+		SP.joint = nil
+		SP.jointC0 = nil
+		SP.autoRotate = nil
+		SP.hum = nil
+		SP.facingSet = false
+	end
+
+	X.makeSwitch(spCard, false, function(on)
+		SP.enabled = on
+		if not on then
+			spRestore()
+		end
+		refreshSpStatus()
+	end, 23)
+
+	local spDots = X.makeDots(spCard, UDim2.new(1, -58, 0, 23))
+
+	local SPW = 290
+	local SPH = 140
+	local spF = X.makeFloating("SpinBotSettings", SPW, SPH)
+	local spPop = spF.frame
+
+	label(spPop, "Spin Bot", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, spPop)
+
+	local spDrop = X.dropdownRow(spPop, 50, "Mode", 100, 128, SP_MODES, 1, function(i)
+		SP.mode = SP_MODES[i]
+		refreshSpStatus()
+	end, spPop)
+
+	makeSlider(spPop, 94, "Speed", 64, 0, 100, 1, SP.speed, "%d", function(v)
+		SP.speed = v
+	end)
+
+	local function openSp()
+		if spF.isOpen() then
+			return
+		end
+		spF.open(X.placeNear(spDots.btn, SPW, SPH, nil))
+		spDots.open = true
+		spDots.paint()
+	end
+
+	local function closeSp()
+		spF.close()
+		spDrop.close()
+		spDots.open = false
+		spDots.paint()
+	end
+
+	spDots.btn.Activated:Connect(function()
+		if spF.isOpen() then
+			closeSp()
+		else
+			openSp()
+		end
+	end)
+
+	X.addPopup({
+		isOpen = function()
+			return spF.isOpen()
+		end,
+		close = closeSp,
+		hit = { spPop, spDots.btn, spDrop.frame },
+	})
+
+	local function findRootJoint(char, hrp)
+		local j = char:FindFirstChild("Root", true)
+		if j and j:IsA("Motor6D") then
+			return j
+		end
+		j = hrp:FindFirstChild("RootJoint")
+		if j and j:IsA("Motor6D") then
+			return j
+		end
+		return nil
+	end
+
+	-- the tilt of the body for the current mode (applied to the root joint)
+	local function tiltFor(mode)
+		if mode == "Upside" then
+			return CFrame.Angles(math.pi, 0, 0)
+		elseif mode == "Side" then
+			return CFrame.Angles(0, 0, math.pi / 2)
+		end
+		return CFrame.new()
+	end
+
+	local function spApply()
+		local char = player.Character
+		local hrp = nil
+		local hum = nil
+		if char then
+			hrp = char:FindFirstChild("HumanoidRootPart")
+			hum = char:FindFirstChildOfClass("Humanoid")
+		end
+		if not hrp or not hum or hum.Health <= 0 then
+			return
+		end
+
+		-- new character: forget the old joint / humanoid (they are gone)
+		if SP.hum ~= hum then
+			SP.joint = nil
+			SP.jointC0 = nil
+			SP.autoRotate = hum.AutoRotate
+			SP.hum = hum
+			SP.facingSet = false
+		end
+		if hum.AutoRotate then
+			hum.AutoRotate = false
+		end
+
+		if not SP.joint or not SP.joint.Parent then
+			SP.joint = findRootJoint(char, hrp)
+			if SP.joint then
+				SP.jointC0 = SP.joint.C0
+			end
+		end
+
+		if not SP.facingSet then
+			local look = hrp.CFrame.LookVector
+			SP.facing = math.atan2(-look.X, -look.Z)
+			SP.facingSet = true
+		end
+
+		-- the direction you are walking in (stays as it was while you stand still)
+		local md = hum.MoveDirection
+		if md.Magnitude > 0.1 then
+			SP.facing = math.atan2(-md.X, -md.Z)
+		end
+
+		local yaw = SP.facing
+		if SP.mode == "Backwards" then
+			yaw = yaw + math.pi
+		else
+			yaw = yaw + SP.spin
+		end
+		SP.yaw = yaw
+		hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
+
+		if SP.joint and SP.jointC0 then
+			local want = SP.jointC0 * tiltFor(SP.mode)
+			if SP.joint.C0 ~= want then
+				SP.joint.C0 = want
+			end
+		end
+	end
+
+	conns[#conns + 1] = RunService.Heartbeat:Connect(function(dt)
+		if not running or not SP.enabled then
+			return
+		end
+		if SP.mode ~= "Backwards" then
+			SP.spin = (SP.spin + SP.speed * 0.5 * dt) % (math.pi * 2)
+		end
+		pcall(spApply)
+	end)
+
+	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
+		if not running or not SP.enabled then
+			return
+		end
+		pcall(spApply)
+	end)
+
+	local function spinUnload()
+		SP.enabled = false
+		spRestore()
+	end
+
+
+	---------------------------------------------------------------------
+	-- SPIN BOT (row 4, right)
+	---------------------------------------------------------------------
+	local SB_MODES = { "Normal", "Upside", "Side", "Backwards" }
+	local SB = {
+		enabled = false,
+		mode = "Normal",
+		speed = 10,
+		angle = 0,
+		savedAuto = nil,
+	}
+
+	local sbCard = new("Frame", {
+		Name = "SpinBotCard",
+		Position = UDim2.new(0.5, 4, 0, 246),
+		Size = UDim2.new(0.5, -6, 0, 46),
+		BackgroundColor3 = T.SIDEBAR_BG,
+		BorderSizePixel = 0,
+	}, parent)
+	corner(sbCard, RADIUS + 4)
+	stroke(sbCard, T.BORDER, 1, 0)
+
+	local sbCaption = label(parent, "SPIN BOT", UDim2.new(0.5, 6, 0, 228), UDim2.new(0.5, -10, 0, 14),
+		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+	label(sbCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	local sbSub = label(sbCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
+		Enum.Font.Gotham, 11, T.DIM_TEXT)
+	sbSub.RichText = true
+
+	local function refreshSbStatus()
+		local state = '<font color="rgb(116,116,124)">Off</font>'
+		if SB.enabled then
+			state = '<font color="rgb(52,199,120)">Active</font> - ' .. SB.mode
+		end
+		sbSub.Text = state
+	end
+	refreshSbStatus()
+
+	-- stands the character back up and gives the Humanoid its rotation back
+	local function sbRestore()
+		local char = player.Character
+		if not char then
+			return
+		end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		if hum and SB.savedAuto ~= nil then
+			hum.AutoRotate = SB.savedAuto
+		end
+		SB.savedAuto = nil
+		if hrp then
+			local look = hrp.CFrame.LookVector
+			local yaw = math.atan2(-look.X, -look.Z)
+			hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
+	X.makeSwitch(sbCard, false, function(on)
+		if on then
+			SB.enabled = true
+		else
+			SB.enabled = false
+			sbRestore()
+		end
+		refreshSbStatus()
+	end, 23)
+
+	local sbDots = X.makeDots(sbCard, UDim2.new(1, -58, 0, 23))
+
+	local SBW = 290
+	local SBH = 140
+	local sbF = X.makeFloating("SpinBotSettings", SBW, SBH)
+	local sbPop = sbF.frame
+
+	label(sbPop, "Spin Bot", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
+		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 40),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, sbPop)
+
+	local sbDrop = animDropdown(sbPop, 50, "Mode", SB_MODES, 1, function(i)
+		SB.mode = SB_MODES[i]
+		refreshSbStatus()
+	end, sbPop)
+
+	makeSlider(sbPop, 94, "Speed", 64, 1, 100, 1, SB.speed, "%d", function(v)
+		SB.speed = v
+	end)
+
+	local function openSb()
+		if sbF.isOpen() then
+			return
+		end
+		sbF.open(X.placeNear(sbDots.btn, SBW, SBH, nil))
+		sbDots.open = true
+		sbDots.paint()
+	end
+
+	local function closeSb()
+		sbF.close()
+		sbDrop.close()
+		sbDots.open = false
+		sbDots.paint()
+	end
+
+	sbDots.btn.Activated:Connect(function()
+		if sbF.isOpen() then
+			closeSb()
+		else
+			openSb()
+		end
+	end)
+
+	X.addPopup({
+		isOpen = function()
+			return sbF.isOpen()
+		end,
+		close = closeSb,
+		hit = { sbPop, sbDots.btn, sbDrop.frame },
+	})
+
+	-- sets the rotation of the root part only; its position (and your movement) is left alone
+	local function sbStep(dt)
+		if not running or not SB.enabled then
+			return
+		end
+		local char = player.Character
+		if not char then
+			return
+		end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local hrp = char:FindFirstChild("HumanoidRootPart")
+		if not hum or not hrp or hum.Health <= 0 then
+			return
+		end
+		if SB.savedAuto == nil then
+			SB.savedAuto = hum.AutoRotate
+		end
+		if hum.AutoRotate then
+			hum.AutoRotate = false
+		end
+
+		-- the way the camera looks (flat), so the non-spinning modes face where you aim
+		local yaw = 0
+		local cam = workspace.CurrentCamera
+		if cam then
+			local look = cam.CFrame.LookVector
+			yaw = math.atan2(-look.X, -look.Z)
+		end
+
+		local rot = nil
+		if SB.mode == "Normal" then
+			SB.angle = (SB.angle + SB.speed * 36 * math.rad(1) * dt) % (math.pi * 2)
+			rot = CFrame.Angles(0, SB.angle, 0)
+		elseif SB.mode == "Upside" then
+			rot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(0, 0, math.pi)
+		elseif SB.mode == "Side" then
+			rot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(0, 0, math.pi / 2)
+		else
+			rot = CFrame.Angles(0, yaw + math.pi, 0)
+		end
+		hrp.CFrame = CFrame.new(hrp.Position) * rot
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end
+
+	conns[#conns + 1] = RunService.Heartbeat:Connect(sbStep)
+	conns[#conns + 1] = RunService.RenderStepped:Connect(sbStep)
+
+	-- after a respawn the saved AutoRotate belongs to the old character
+	conns[#conns + 1] = player.CharacterAdded:Connect(function()
+		SB.savedAuto = nil
+	end)
+
+	local function spinUnload()
+		if SB.enabled then
+			SB.enabled = false
+			sbRestore()
+		end
+	end
+
 	---------------------------------------------------------------------
 	-- unload: put the original animations back
 	---------------------------------------------------------------------
@@ -1701,6 +2141,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		running = false
 		pcall(hitboxUnload)
 		pcall(orbitUnload)
+		pcall(spinUnload)
+		pcall(spinUnload)
 		applyToken = applyToken + 1
 		runApply(true, false)
 		for i = 1, #conns do
@@ -1720,6 +2162,12 @@ function AnimationPage.build(parent, T, H, ctx)
 			obCard:Destroy()
 			obCaption:Destroy()
 			obPop:Destroy()
+			sbCard:Destroy()
+			sbCaption:Destroy()
+			sbPop:Destroy()
+			spCard:Destroy()
+			spCaption:Destroy()
+			spPop:Destroy()
 		end)
 	end
 
