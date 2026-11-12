@@ -28,8 +28,10 @@
 --                when the game keeps resetting Humanoid.JumpPower
 --   Gravity      A force on your character (mass x (196.2 - wanted gravity)) instead of Workspace.Gravity,
 --                so the change is big and the game cannot just set it back
---   Tickrate     Your client FPS cap (setfpscap, or setfflag as a fallback). The popup shows the FPS it
---                measures so you can see if it worked. The server tick rate cannot be changed from a client.
+--   Tickrate     How often your client sends your position to the server: the Roblox flag
+--                DFIntS2PhysicsSenderRate (normally about 15 a second), set with setfflag. Higher = less
+--                desync and better hit registration; 1 = desync on purpose. The pop-up shows what the
+--                flag is set to (needs getfflag). Turning it off puts the old value back.
 --   Bunny Hop    Hold Space: you jump the moment you land and gain speed on every hop (Gain) up to the
 --                Max Speed. Steer in the air with W A S D.
 --   No Clip      Walk through walls
@@ -72,8 +74,8 @@ function MovementPage.build(parent, T, H, ctx)
 	-- the features
 	---------------------------------------------------------------------
 	local function capNote()
-		if type(setfpscap) ~= "function" and type(setfflag) ~= "function" then
-			return "Your executor has no setfpscap / setfflag, so this does nothing."
+		if type(setfflag) ~= "function" then
+			return "Your executor has no setfflag, so this does nothing."
 		end
 		return nil
 	end
@@ -96,9 +98,9 @@ function MovementPage.build(parent, T, H, ctx)
 			desc = "The normal gravity is 196. Lower = floaty, higher = heavy. Done with a force on your character, so the change is big and the game cannot just set it back.",
 			sliders = { { key = "grav", name = "Gravity", min = 0, max = 400, step = 1, value = 60, fmt = "%d" } } },
 		{ id = "tickrate", title = "Tickrate",
-			desc = "Sets your client FPS cap (more updates per second from your side). The server's own tick rate cannot be changed from a client.",
+			desc = "How often your client sends your position to the server (Roblox flag DFIntS2PhysicsSenderRate, normally about 15 a second). Higher = the server sees you more up to date: less desync, better hit registration. A very low value (1) desyncs you on purpose.",
 			note = capNote,
-			sliders = { { key = "rate", name = "Rate", min = 15, max = 360, step = 5, value = 144, fmt = "%d" } } },
+			sliders = { { key = "rate", name = "Send Rate", min = 1, max = 1000, step = 1, value = 240, fmt = "%d" } } },
 		{ id = "bhop", title = "Bunny Hop",
 			desc = "Hold Space: you jump the moment you land and gain speed on every hop (Gain) up to Max Speed. Steer in the air with W A S D.",
 			sliders = {
@@ -551,7 +553,17 @@ function MovementPage.build(parent, T, H, ctx)
 	local layoutPop = nil
 	local closeChoices = nil
 	local slipVel = nil     -- (declared early: the Type row resets it)
-	local fpsValue = 0      -- (declared early: the Tickrate pop-up shows it)
+	local fpsValue = 0
+	-- the line the Tickrate pop-up shows: what the flag is set to right now (when the executor can read flags)
+	local function sendRateText()
+		if type(getfflag) == "function" then
+			local ok, v = pcall(getfflag, "DFIntS2PhysicsSenderRate")
+			if ok and v ~= nil then
+				return "Send rate now: " .. tostring(v)
+			end
+		end
+		return "Send rate now: unknown"
+	end
 
 	local popTitle = label(pop, "", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
 		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
@@ -960,7 +972,7 @@ function MovementPage.build(parent, T, H, ctx)
 		y = y + 2
 		fpsLbl.Visible = (f.def.id == "tickrate")
 		if fpsLbl.Visible then
-			fpsLbl.Text = string.format("Measured: %d fps", math.floor(fpsValue + 0.5))
+			fpsLbl.Text = sendRateText()
 			fpsLbl.Position = UDim2.fromOffset(16, y)
 			y = y + 20
 		end
@@ -1307,13 +1319,11 @@ function MovementPage.build(parent, T, H, ctx)
 		end)
 	end
 
-	-- both ways are tried: some executors have a setfpscap that does nothing
+	-- Tickrate = how often the client sends your physics (position) to the server.
+	-- It is the dynamic flag DFIntS2PhysicsSenderRate (default about 15).
 	local function applyCap(v)
-		if type(setfpscap) == "function" then
-			pcall(setfpscap, v)
-		end
 		if type(setfflag) == "function" then
-			pcall(setfflag, "DFIntTaskSchedulerTargetFps", tostring(v))
+			pcall(setfflag, "DFIntS2PhysicsSenderRate", tostring(v))
 		end
 	end
 
@@ -1431,18 +1441,19 @@ function MovementPage.build(parent, T, H, ctx)
 			fpsFrames = 0
 			fpsTime = 0
 			if fpsLbl.Visible then
-				fpsLbl.Text = string.format("Measured: %d fps", math.floor(fpsValue + 0.5))
+				fpsLbl.Text = sendRateText()
 			end
 		end
 
 		-- tickrate (your fps cap)
 		if a.tickrate then
 			if origCap == nil then
-				origCap = 60
-				if type(getfpscap) == "function" then
-					local ok, v = pcall(getfpscap)
-					if ok and type(v) == "number" and v >= 0 then
-						origCap = v
+				origCap = 15
+				if type(getfflag) == "function" then
+					local ok, v = pcall(getfflag, "DFIntS2PhysicsSenderRate")
+					local n = tonumber(v)
+					if ok and n then
+						origCap = n
 					end
 				end
 				lastCap = nil
