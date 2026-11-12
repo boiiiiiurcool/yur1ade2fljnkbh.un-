@@ -1,7 +1,11 @@
 -- movement.lua  (Y1 Misc tab > Movement page)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Twelve cards, two per row (the page scrolls). Every card is an Enable switch + three dots.
+-- Three connected backgrounds (the page scrolls if it has to):
+--   left  : "Main Movements"  = Walk Speed, Jump Power, Inf Jump, Fly, Gravity
+--   left  : "Zee Hood Movements" = No Slowdown, No Jump Cooldown (below Main Movements)
+--   right : "Extra Movements" = Tickrate, Bunny Hop, No Clip, Spider Man, Float
+-- Every row of a group has the feature name, a switch and three dots.
 -- The dots open ONE shared pop-up with:
 --   Keybind : click it, then press a key (Escape or Backspace clears it)
 --   Mode    : Always = on the moment the switch is on, no key needed
@@ -421,62 +425,91 @@ function MovementPage.build(parent, T, H, ctx)
 	local closePop = nil
 	local cur = nil   -- the feature the pop-up is showing
 
-	for i = 1, #DEFS do
-		local d = DEFS[i]
-		local f = F[d.id]
-		local col = (i - 1) % 2
-		local row = math.floor((i - 1) / 2)
-		local cardY = CARD_TOP + row * ROW_STEP
+	-- three connected backgrounds: every group is ONE card with a row per feature
+	local ROW_H = 46
+	local GROUPS = {
+		{ title = "Main Movements", col = 0, ids = { "walkspeed", "jumppower", "infjump", "fly", "gravity" } },
+		{ title = "Zee Hood Movements", col = 0, ids = { "noslow", "nojumpcd" } },
+		{ title = "Extra Movements", col = 1, ids = { "tickrate", "bhop", "noclip", "spider", "float" } },
+	}
+	local colY = { [0] = CARD_TOP, [1] = CARD_TOP }
+	local bodyBottom = 0
 
-		local pos = UDim2.new(0, 2, 0, cardY)
-		local capPos = UDim2.new(0, 4, 0, cardY - 18)
-		if col == 1 then
-			pos = UDim2.new(0.5, 4, 0, cardY)
-			capPos = UDim2.new(0.5, 6, 0, cardY - 18)
+	for gi = 1, #GROUPS do
+		local g = GROUPS[gi]
+		local gy = colY[g.col]
+		local gh = #g.ids * ROW_H
+		local gpos = UDim2.new(0, 2, 0, gy)
+		local capPos = UDim2.new(0, 4, 0, gy - 18)
+		if g.col == 1 then
+			gpos = UDim2.new(0.5, 4, 0, gy)
+			capPos = UDim2.new(0.5, 6, 0, gy - 18)
 		end
 
-		local card = new("Frame", {
-			Name = d.id .. "Card",
-			Position = pos,
-			Size = UDim2.new(0.5, -6, 0, 46),
+		local group = new("Frame", {
+			Name = "Group" .. gi,
+			Position = gpos,
+			Size = UDim2.new(0.5, -6, 0, gh),
 			BackgroundColor3 = T.SIDEBAR_BG,
 			BorderSizePixel = 0,
 		}, body)
-		corner(card, RADIUS + 4)
-		stroke(card, T.BORDER, 1, 0)
+		corner(group, RADIUS + 4)
+		stroke(group, T.BORDER, 1, 0)
 
-		label(body, string.upper(d.title), capPos, UDim2.new(0.5, -10, 0, 14),
+		label(body, g.title, capPos, UDim2.new(0.5, -10, 0, 14),
 			Enum.Font.GothamMedium, 11, T.DIM_TEXT)
 
-		label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-		f.sub = label(card, "", UDim2.fromOffset(14, 25), UDim2.new(1, -100, 0, 14),
-			Enum.Font.Gotham, 11, T.DIM_TEXT)
-		f.sub.RichText = true
+		for k = 1, #g.ids do
+			local f = F[g.ids[k]]
+			local d = f.def
 
-		makeSwitch(card, false, function(on)
-			f.enabled = on
-			f.toggled = false
-			f.held = false
-			refreshSub(f)
-		end, 23)
+			local row = new("Frame", {
+				Name = d.id .. "Row",
+				Position = UDim2.fromOffset(0, (k - 1) * ROW_H),
+				Size = UDim2.new(1, 0, 0, ROW_H),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, group)
 
-		f.dots = makeDots(card, UDim2.new(1, -58, 0, 23))
-		f.dots.btn.Activated:Connect(function()
-			if cur == f and closePop then
-				closePop()
-				return
+			-- thin divider between the rows of a group
+			if k > 1 then
+				new("Frame", {
+					Position = UDim2.fromOffset(12, 0),
+					Size = UDim2.new(1, -24, 0, 1),
+					BackgroundColor3 = T.BORDER,
+					BorderSizePixel = 0,
+				}, row)
 			end
-			openFor(f)
-		end)
+
+			label(row, d.title, UDim2.fromOffset(14, 7), UDim2.new(1, -110, 0, 16),
+				Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+			f.sub = label(row, "", UDim2.fromOffset(14, 25), UDim2.new(1, -100, 0, 14),
+				Enum.Font.Gotham, 11, T.DIM_TEXT)
+			f.sub.RichText = true
+
+			makeSwitch(row, false, function(on)
+				f.enabled = on
+				f.toggled = false
+				f.held = false
+				refreshSub(f)
+			end, 23)
+
+			f.dots = makeDots(row, UDim2.new(1, -58, 0, 23))
+			f.dots.btn.Activated:Connect(function()
+				if cur == f and closePop then
+					closePop()
+					return
+				end
+				openFor(f)
+			end)
+		end
+
+		colY[g.col] = gy + gh + 30   -- the next group in this column (room for its title)
+		bodyBottom = math.max(bodyBottom, gy + gh)
 	end
 
-	do
-		local rows = math.ceil(#DEFS / 2)
-		local bodyH = CARD_TOP + (rows - 1) * ROW_STEP + 46
-		body.Size = UDim2.new(1, -12, 0, bodyH)
-		scroll.CanvasSize = UDim2.new(0, 0, 0, bodyH + 12)
-	end
+	body.Size = UDim2.new(1, -12, 0, bodyBottom)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, bodyBottom + 12)
 
 	local function keyName(f)
 		if f.key then
