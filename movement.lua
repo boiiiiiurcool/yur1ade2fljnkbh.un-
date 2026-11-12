@@ -551,6 +551,7 @@ function MovementPage.build(parent, T, H, ctx)
 	local layoutPop = nil
 	local closeChoices = nil
 	local slipVel = nil     -- (declared early: the Type row resets it)
+	local fpsValue = 0      -- (declared early: the Tickrate pop-up shows it)
 
 	local popTitle = label(pop, "", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
 		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
@@ -1170,7 +1171,6 @@ function MovementPage.build(parent, T, H, ctx)
 	local lastCap = nil
 	local fpsFrames = 0
 	local fpsTime = 0
-	local fpsValue = 0
 	local hookOn = false
 	local hookFloor = 50
 	local hookInstalled = false
@@ -1307,10 +1307,12 @@ function MovementPage.build(parent, T, H, ctx)
 		end)
 	end
 
+	-- both ways are tried: some executors have a setfpscap that does nothing
 	local function applyCap(v)
 		if type(setfpscap) == "function" then
 			pcall(setfpscap, v)
-		elseif type(setfflag) == "function" then
+		end
+		if type(setfflag) == "function" then
 			pcall(setfflag, "DFIntTaskSchedulerTargetFps", tostring(v))
 		end
 	end
