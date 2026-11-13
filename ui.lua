@@ -539,6 +539,9 @@ function UI.new(opts)
 
 	-- where the window starts: a little right of the middle, so the keybinds panel fits on its left
 	local START_POS = UDim2.new(0.5, 132, 0.5, 0)
+	if typeof(opts.Position) == "UDim2" then
+		START_POS = opts.Position   -- main.lua passes the spot where the welcome window was
+	end
 
 	local fitScale = 1
 	do
@@ -563,8 +566,8 @@ function UI.new(opts)
 		end
 		local ww = WIN_W * fitScale
 		local wh = WIN_H * fitScale
-		START_LEFT = vp.X / 2 + 132 - ww / 2
-		START_TOP = vp.Y / 2 - wh / 2
+		START_LEFT = vp.X * START_POS.X.Scale + START_POS.X.Offset - ww / 2
+		START_TOP = vp.Y * START_POS.Y.Scale + START_POS.Y.Offset - wh / 2
 	end
 
 	local window = new("CanvasGroup", {
@@ -711,13 +714,16 @@ function UI.new(opts)
 		local mid = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(360, 70),
+			Size = UDim2.fromOffset(420, 120),
 			BackgroundTransparency = 1,
 		}, p)
 		local t1 = label(mid, tab.title, UDim2.fromOffset(0, 8), UDim2.new(1, 0, 0, 26),
 			Enum.Font.GothamBold, 20, TEXT_COLOR, Enum.TextXAlignment.Center)
-		local t2 = label(mid, tab.sub, UDim2.fromOffset(0, 40), UDim2.new(1, 0, 0, 16),
+		local t2 = label(mid, tab.sub, UDim2.fromOffset(0, 40), UDim2.new(1, 0, 0, 70),
 			Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
+		t2.TextWrapped = true
+		t2.TextTruncate = Enum.TextTruncate.None
+		t2.TextYAlignment = Enum.TextYAlignment.Top
 
 		local body = new("Frame", {
 			Name = "Body",
@@ -2358,6 +2364,8 @@ function UI.new(opts)
 	-- THE WINDOW OBJECT (what main.lua and the modules use)
 	---------------------------------------------------------------------
 	win.Gui = gui
+	win.ScreenGui = gui
+	win.Root = window
 	win.Window = window
 	win.Content = card
 	win.Pages = containers          -- [tab id] = the frame a module builds into
@@ -2492,7 +2500,12 @@ function UI.new(opts)
 					end
 				else
 					warn("[Y1] the " .. id .. " page failed: " .. tostring(res))
-					win:SetPageMessage(id, id, "Could not build this page (see console F9)", true)
+					local msg = tostring(res)
+					if #msg > 260 then
+						msg = string.sub(msg, 1, 257) .. "..."
+					end
+					win:SetPageMessage(id, id .. " failed to build", msg, true)
+					toast(id .. " page failed - see console (F9)", 4)
 				end
 				task.wait()
 			end
