@@ -487,23 +487,23 @@ function Welcome.new(opts)
 	local paintSkip = nil
 	local skipLabel = nil
 
-	-- SKIP BUTTON: fixed size, lives in the bottom area (NOT inside the clipping loader group), and
+	-- SKIP BUTTON: bottom right corner of the window (NOT inside the clipping loader group), fixed size, and
 	-- draws its own 1px border with an inner face instead of a UIStroke, so nothing can be cut off.
-	local skipW = 124
+	local skipW = 104
 	if touch then
-		skipW = 140
+		skipW = 124
 	end
 	local skipBtn = new("TextButton", {
 		Name = "Skip",
 		AutoButtonColor = false,
 		Text = "",
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 52),
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -16, 1, -14),
 		Size = UDim2.fromOffset(skipW, SKIP_H),
 		BackgroundColor3 = BORDER,
 		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, bottom)
+		ZIndex = 5,
+	}, window)
 	corner(skipBtn, 8)
 	local skipFace = new("Frame", {
 		Position = UDim2.fromOffset(1, 1),
@@ -646,7 +646,7 @@ function Welcome.new(opts)
 	chevBar(2.5, -45)
 
 	-- what is being checked right now (also text from SetState), under the bar / button
-	local status = label(bottom, "", UDim2.fromOffset(2, 52 + SKIP_H + 6), UDim2.new(1, -4, 0, 18),
+	local status = label(bottom, "", UDim2.fromOffset(2, 54), UDim2.new(1, -4, 0, 18),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 	status.TextWrapped = true
 	status.TextTruncate = Enum.TextTruncate.None
