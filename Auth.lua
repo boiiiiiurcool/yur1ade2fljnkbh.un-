@@ -1,8 +1,8 @@
 -- Auth.lua  (key + account creation page, then login page; runs BEFORE Welcome.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Layout: a side panel on the left (logo + short facts) and the form on the right with a
--- two-tab switch (Create account | Log in) on top. Two pages in one window:
+-- Layout: one centered column. The logo sits on top, then the two-tab switch (Create account | Log in)
+-- and the form. A small notification card pops up at the bottom right of the screen. Two pages in one window:
 --   KEY page    Key + Username + Password -> "Create account"
 --               The server checks the key (it must exist, be unused and not revoked), makes the account
 --               and marks the key as used. Then the window goes to the LOGIN page.
@@ -63,7 +63,7 @@ function Auth.new(opts)
 	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on light buttons
 	local BORDER     = Color3.fromRGB(58, 58, 58)
 	local CLUSTER_BG = Color3.fromRGB(45, 45, 45)     -- fields + tab bar
-	local PANEL_BG   = Color3.fromRGB(29, 29, 29)
+	local TOAST_BG   = Color3.fromRGB(26, 26, 26)
 	local ICON       = Color3.fromRGB(176, 176, 182)
 	local HOVER_RED  = Color3.fromRGB(214, 62, 62)    -- error text
 	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
@@ -186,9 +186,9 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 560
-	local WIN_H = 360
-	local TOP_PAD = 18 -- space above the form (there is no title bar any more)
+	local WIN_W = 380
+	local WIN_H = 440
+	local HEAD_H = 104 -- the logo + subtitle area on top
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
@@ -233,32 +233,19 @@ function Auth.new(opts)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	-- LEFT: side panel with the logo at the top, what the page is for, and three short facts
-	local PANEL_W = 190
-	local panel = new("Frame", {
-		Name = "Panel",
-		Position = UDim2.fromOffset(8, 8),
-		Size = UDim2.new(0, PANEL_W, 1, -16),
-		BackgroundColor3 = PANEL_BG,
-		BorderSizePixel = 0,
-		ZIndex = 2,
-	}, window)
-	corner(panel, RADIUS + 2)
-	stroke(panel, BORDER, 1, 0)
-
-	-- logo: "yur" in a calm red, the last character (the 1) keeps the white gradient
+	-- TOP: the logo, centered. "yur" in a calm red, the last character (the 1) keeps the white gradient
 	local titleHead = string.sub(title, 1, -2)
 	local titleTail = string.sub(title, -1)
 
 	local titleRow = new("Frame", {
 		Name = "Logo",
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 16),
-		Size = UDim2.fromOffset(0, 44),
+		Position = UDim2.new(0.5, 0, 0, 20),
+		Size = UDim2.fromOffset(0, 48),
 		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundTransparency = 1,
 		ZIndex = 3,
-	}, panel)
+	}, window)
 	new("UIListLayout", {
 		FillDirection = Enum.FillDirection.Horizontal,
 		HorizontalAlignment = Enum.HorizontalAlignment.Center,
@@ -270,11 +257,11 @@ function Auth.new(opts)
 		return new("TextLabel", {
 			LayoutOrder = order,
 			BackgroundTransparency = 1,
-			Size = UDim2.fromOffset(0, 44),
+			Size = UDim2.fromOffset(0, 48),
 			AutomaticSize = Enum.AutomaticSize.X,
 			Font = Enum.Font.GothamBlack,
 			Text = text,
-			TextSize = 36,
+			TextSize = 42,
 			TextColor3 = color,
 			TextYAlignment = Enum.TextYAlignment.Center,
 			ZIndex = 3,
@@ -291,37 +278,15 @@ function Auth.new(opts)
 		}),
 	}, oneLabel)
 
-	local subtitle = label(panel, "", UDim2.fromOffset(18, 68), UDim2.new(1, -36, 0, 32),
-		Enum.Font.Gotham, 12, ICON, Enum.TextXAlignment.Center)
-	subtitle.TextWrapped = true
-	subtitle.TextTruncate = Enum.TextTruncate.None
-	subtitle.TextYAlignment = Enum.TextYAlignment.Top
+	local subtitle = label(window, "", UDim2.fromOffset(28, 72), UDim2.new(1, -56, 0, 16),
+		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 	subtitle.ZIndex = 3
 
-	new("Frame", {
-		Position = UDim2.fromOffset(28, 112),
-		Size = UDim2.new(1, -56, 0, 1),
-		BackgroundColor3 = BORDER,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, panel)
-
-	local facts = {
-		"You deserve the best from us",
-		"Dont crack this",
-		"Powered by reruinz server auth",
-	}
-	for i = 1, #facts do
-		local ft = label(panel, facts[i], UDim2.fromOffset(18, 130 + (i - 1) * 26), UDim2.new(1, -36, 0, 20),
-			Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
-		ft.ZIndex = 3
-	end
-
-	-- RIGHT: the form
+	-- the form column
 	local content = new("Frame", {
 		Name = "Content",
-		Position = UDim2.fromOffset(PANEL_W + 8 + 18, TOP_PAD),
-		Size = UDim2.new(1, -(PANEL_W + 8 + 18 + 18), 1, -(TOP_PAD + 18)),
+		Position = UDim2.fromOffset(28, HEAD_H),
+		Size = UDim2.new(1, -56, 1, -(HEAD_H + 20)),
 		BackgroundTransparency = 1,
 	}, window)
 
@@ -682,6 +647,7 @@ function Auth.new(opts)
 					end
 					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+					hideToast()
 					task.delay(LEAVE.Time + 0.03, function()
 						if not alive then
 							return
@@ -724,6 +690,69 @@ function Auth.new(opts)
 	end)
 
 	---------------------------------------------------------------------
+	-- NOTIFICATION (bottom right of the screen)
+	---------------------------------------------------------------------
+	local TOAST_W = 330
+	local TOAST_H = 92
+	local toast = new("Frame", {
+		Name = "Notice",
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, TOAST_W + 40, 1, -18),
+		Size = UDim2.fromOffset(TOAST_W, TOAST_H),
+		BackgroundColor3 = TOAST_BG,
+		BorderSizePixel = 0,
+		ZIndex = 50,
+	}, gui)
+	corner(toast, 10)
+	stroke(toast, BORDER, 1, 0)
+
+	-- icon: a small fingerprint made of rings, with a gap cut through them
+	local iconBox = new("Frame", {
+		Position = UDim2.fromOffset(16, 16),
+		Size = UDim2.fromOffset(34, 34),
+		BackgroundTransparency = 1,
+		ZIndex = 51,
+	}, toast)
+	local ringSizes = { 32, 25, 18, 11 }
+	for i = 1, #ringSizes do
+		local r = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(ringSizes[i], ringSizes[i]),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 51,
+		}, iconBox)
+		corner(r, 100)
+		stroke(r, ICON, 1.5, 0)
+	end
+	new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 4, 0.5, 2),
+		Size = UDim2.fromOffset(3, 18),
+		BackgroundColor3 = TOAST_BG,
+		BorderSizePixel = 0,
+		ZIndex = 52,
+	}, iconBox)
+
+	local tTitle = label(toast, "Reruinz Server Auth", UDim2.fromOffset(64, 12), UDim2.new(1, -78, 0, 16),
+		Enum.Font.GothamBold, 12, DIM_TEXT)
+	tTitle.ZIndex = 51
+	local tBody = label(toast, "Dont attempt to do anything silly because its not worth the pain",
+		UDim2.fromOffset(64, 30), UDim2.new(1, -78, 0, 34), Enum.Font.GothamMedium, 13, TEXT_COLOR)
+	tBody.TextWrapped = true
+	tBody.TextTruncate = Enum.TextTruncate.None
+	tBody.TextYAlignment = Enum.TextYAlignment.Top
+	tBody.ZIndex = 51
+	local tFoot = label(toast, "rock and roll", UDim2.fromOffset(64, 68), UDim2.new(1, -78, 0, 16),
+		Enum.Font.Gotham, 12, DIM_TEXT)
+	tFoot.ZIndex = 51
+
+	local function hideToast()
+		TweenService:Create(toast, LEAVE, { Position = UDim2.new(1, TOAST_W + 40, 1, -18) }):Play()
+	end
+
+	---------------------------------------------------------------------
 	-- PUBLIC API
 	---------------------------------------------------------------------
 	function W:Close(instant)
@@ -736,6 +765,7 @@ function Auth.new(opts)
 		else
 			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+			hideToast()
 			task.delay(LEAVE.Time + 0.03, function()
 				gui:Destroy()
 			end)
@@ -745,6 +775,11 @@ function Auth.new(opts)
 	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
+	task.delay(0.35, function()
+		if alive then
+			TweenService:Create(toast, SMOOTH, { Position = UDim2.new(1, -18, 1, -18) }):Play()
+		end
+	end)
 
 	return W
 end
