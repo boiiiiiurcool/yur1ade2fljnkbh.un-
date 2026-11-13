@@ -26,7 +26,11 @@
 -- Enable switch + three dots. Makes every other player's real HumanoidRootPart bigger on YOUR client
 -- (never Massless; CanCollide forced off before every physics step; everything restored when turned off).
 -- Pop-up: Visualize, Team Check, Knocked Check (BodyEffects["K.O"], Zee Hood), Size (slider 2-50 +
--- typed box 1-100), Dynamic (smaller hitbox when they are close: Min Size + Full At).
+-- typed box 1-100), Dynamic (smaller hitbox when they are close: Min Size + Full At),
+-- Hitbox Spoofer (switch at the bottom, ON by default): while the expander is on, hitboxspoofer.lua puts
+-- blood where it normally lands and keeps the armor visual at its normal size and position for every player.
+-- hitboxspoofer.lua is found through ctx (HitboxSpoofer / HitboxSpooferModule / Modules.HitboxSpoofer) or,
+-- if extra.lua does not pass it on, through getgenv().Y1_MODULES.HitboxSpoofer (main.lua sets that).
 --
 -- ORBIT: a fourth small card (row 4, left). Enable switch + three dots.
 -- Set a keybind in the pop-up. Press it to start orbiting the player closest to your mouse
@@ -781,6 +785,59 @@ function AnimationPage.build(parent, T, H, ctx)
 	local records = {}   -- [player] = { part, size, transparency, canCollide, box, wire }
 	local activeCount = 0
 
+	---------------------------------------------------------------------
+	-- HITBOX SPOOFER link (hitboxspoofer.lua): blood + armor fix for every player.
+	-- Runs only while the Hitbox Expander is on AND its "Hitbox Spoofer" switch is on.
+	---------------------------------------------------------------------
+	local spooferOn = true      -- the switch at the bottom of the Hitbox Expander pop-up
+	local spoofer = nil         -- the object made by hitboxspoofer.lua
+
+	local function getSpooferModule()
+		local m = nil
+		if type(ctx) == "table" then
+			m = ctx.HitboxSpoofer or ctx.HitboxSpooferModule
+			if not m and type(ctx.Modules) == "table" then
+				m = ctx.Modules.HitboxSpoofer
+			end
+		end
+		if not m then
+			local okG, g = pcall(function()
+				return getgenv()
+			end)
+			if okG and type(g) == "table" and type(g.Y1_MODULES) == "table" then
+				m = g.Y1_MODULES.HitboxSpoofer
+			end
+		end
+		if type(m) == "table" and type(m.new) == "function" then
+			return m
+		end
+		return nil
+	end
+
+	local function spooferSync()
+		local want = HB.enabled and spooferOn
+		if want then
+			if not spoofer then
+				local m = getSpooferModule()
+				if m then
+					local ok, obj = pcall(m.new, {})
+					if ok and type(obj) == "table" then
+						spoofer = obj
+					end
+				end
+			end
+			if spoofer then
+				pcall(function()
+					spoofer:SetEnabled(true)
+				end)
+			end
+		elseif spoofer then
+			pcall(function()
+				spoofer:SetEnabled(false)
+			end)
+		end
+	end
+
 	local function teamSkip(p)
 		if not HB.teamCheck then
 			return false
@@ -1067,6 +1124,12 @@ function AnimationPage.build(parent, T, H, ctx)
 	local function hitboxUnload()
 		HB.enabled = false
 		releaseAll()
+		if spoofer then
+			pcall(function()
+				spoofer:Unload()
+			end)
+			spoofer = nil
+		end
 	end
 
 
@@ -1201,12 +1264,13 @@ function AnimationPage.build(parent, T, H, ctx)
 	X.makeSwitch(hbCard, false, function(on)
 		HB.enabled = on
 		refreshHbStatus()
+		spooferSync()
 	end, 23)
 
 	local hbDots = X.makeDots(hbCard, UDim2.new(1, -58, 0, 23))
 
 	local HBW = 290
-	local HBH = 330
+	local HBH = 366
 	local hbF = X.makeFloating("HitboxSettings", HBW, HBH)
 	local hbPop = hbF.frame
 
@@ -1296,6 +1360,20 @@ function AnimationPage.build(parent, T, H, ctx)
 		minApi.dim(on)
 		farApi.dim(on)
 	end, 238, 16)
+
+	-- Hitbox Spoofer: blood where it normally lands + armor visual at its normal size and position (hitboxspoofer.lua)
+	new("Frame", {
+		Position = UDim2.fromOffset(16, 318),
+		Size = UDim2.new(1, -32, 0, 1),
+		BackgroundColor3 = T.BORDER,
+		BorderSizePixel = 0,
+	}, hbPop)
+	label(hbPop, "Hitbox Spoofer", UDim2.fromOffset(16, 324), UDim2.new(1, -90, 0, 28),
+		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+	X.makeSwitch(hbPop, true, function(on)
+		spooferOn = on
+		spooferSync()
+	end, 338, 16)
 
 	local function openHb()
 		if hbF.isOpen() then
