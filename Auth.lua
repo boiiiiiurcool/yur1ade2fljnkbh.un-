@@ -36,7 +36,8 @@
 --       ApiUrl = "https://xxxx.supabase.co/functions/v1/",   -- must end with a slash
 --       SessionFile = "Y1Auth_session.json",                 -- optional, where the session is remembered
 --       Secret = "change-this-to-your-own-random-text",      -- optional, used to sign the session file
---       Verify = true,                                       -- optional, ask the server on Continue
+--       Verify = true,                                       -- optional, on by default (false = skip the server check)
+--       Endpoints = { verify = "https://..." },              -- optional, verify already defaults to yur1.lovable.app
 --       OnSuccess = function(session, position) end,         -- session = { token, username, expires_at, hwid }
 --       OnClose = function() end,                            -- only fires if you call auth:Close(false) yourself
 --   })
@@ -51,9 +52,16 @@ function Auth.new(opts)
 	local API = opts.ApiUrl or ""
 	local SESSION_FILE = opts.SessionFile or "Y1Auth_session.json"
 	local SECRET = opts.Secret or "y1-session-secret-change-me"
-	local VERIFY = (opts.Verify == true)
+	local VERIFY = (opts.Verify ~= false) -- on by default, pass Verify = false to turn it off
 	-- optional: full URLs per endpoint, for when register / login do not share one base url
-	local EP = opts.Endpoints or {}
+	local EP = {
+		verify = "https://yur1.lovable.app/api/public/verify",
+	}
+	if type(opts.Endpoints) == "table" then
+		for k, v in pairs(opts.Endpoints) do
+			EP[k] = v
+		end
+	end
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
