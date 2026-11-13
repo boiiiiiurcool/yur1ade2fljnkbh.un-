@@ -5,8 +5,12 @@
 -- a subtitle, a list with ONE LOADING BAR PER MODULE (waiting -> checking 3/10 -> ready), a counter,
 -- an overall bar, and the Continue button once everything is loaded.
 --
+-- Module file names are HIDDEN on screen: rows say "Module 1", "Module 2", ...
+-- Ready is GREEN. There are no status dots.
+--
 -- SILENT: nothing is printed or warned in the console. A failure shows in the window instead
--- (the row turns red); the last error text is available with welcome:GetError().
+-- (the row turns amber); the last error text (with the real file name) is available
+-- with welcome:GetError().
 --
 -- LOADING (done here, not in main.lua):
 --   Pass 1: every module in opts.Modules is checked ONE AT A TIME. Each one is downloaded
@@ -62,7 +66,6 @@ function Welcome.new(opts)
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
-	local RunService = game:GetService("RunService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
@@ -97,9 +100,9 @@ function Welcome.new(opts)
 	local TEXT_COLOR = Color3.fromRGB(232, 232, 236)
 	local DIM_TEXT   = Color3.fromRGB(122, 122, 128)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
-	local GOOD       = Color3.fromRGB(110, 200, 140)
-	local BAD        = Color3.fromRGB(214, 90, 90)
-	local WARN       = Color3.fromRGB(226, 168, 72)   -- failed modules and errors (ready is red now)
+	local GOOD       = Color3.fromRGB(110, 200, 140)  -- ready
+	local BAD        = Color3.fromRGB(214, 90, 90)    -- fatal error
+	local WARN       = Color3.fromRGB(226, 168, 72)   -- failed modules
 	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, close button hover
 
 	local RADIUS = 4
@@ -378,14 +381,14 @@ function Welcome.new(opts)
 	local rowKind = {}
 	local rowProg = {}
 	for i = 1, total do
-		local entry = moduleList[i]
 		local row = new("Frame", {
 			Position = UDim2.fromOffset(0, 4 + (i - 1) * ROW_H),
 			Size = UDim2.new(1, 0, 0, ROW_H),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, list)
-		local nm = label(row, entry.Name, UDim2.fromOffset(28, 3), UDim2.new(1, -144, 0, 16),
+		-- the real file name is hidden: rows are just numbered
+		local nm = label(row, "Module " .. tostring(i), UDim2.fromOffset(14, 3), UDim2.new(1, -134, 0, 16),
 			Enum.Font.GothamMedium, 12, DIM_TEXT)
 		local st = label(row, "Waiting", UDim2.new(1, -118, 0, 3), UDim2.fromOffset(104, 16),
 			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
@@ -402,7 +405,7 @@ function Welcome.new(opts)
 			BorderSizePixel = 0,
 		}, track)
 		corner(fill, 2)
-		-- soft highlight behind the row that is being worked on (also flashes red when it becomes ready)
+		-- soft highlight behind the row that is being worked on (also flashes green when it becomes ready)
 		local hl = new("Frame", {
 			Position = UDim2.fromOffset(4, 1),
 			Size = UDim2.new(1, -8, 1, -2),
@@ -412,15 +415,6 @@ function Welcome.new(opts)
 			ZIndex = 0,
 		}, row)
 		corner(hl, 6)
-		-- status dot: grey = waiting, pulsing = working, red = ready, amber = failed
-		local dot = new("Frame", {
-			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.fromOffset(14, 11),
-			Size = UDim2.fromOffset(6, 6),
-			BackgroundColor3 = DIM_TEXT,
-			BorderSizePixel = 0,
-		}, row)
-		corner(dot, 3)
 		-- a light band that sweeps over the bar while the module is being worked on
 		local shine = new("Frame", {
 			Size = UDim2.fromScale(1, 1),
@@ -436,7 +430,7 @@ function Welcome.new(opts)
 				NumberSequenceKeypoint.new(1, 1),
 			}),
 		}, shine)
-		rowsUI[i] = { name = nm, st = st, fill = fill, hl = hl, dot = dot, shine = shine, grad = shineGrad }
+		rowsUI[i] = { name = nm, st = st, fill = fill, hl = hl, shine = shine, grad = shineGrad }
 		rowKind[i] = "wait"
 		rowProg[i] = 0
 	end
@@ -561,46 +555,33 @@ function Welcome.new(opts)
 		rowKind[i] = kind
 		rowProg[i] = f
 		r.st.Text = text
+
 		local nameC = DIM_TEXT
 		local stC = DIM_TEXT
 		local fillC = ICON_HOVER
+		local hlC = BORDER
+		local hlT = 1
 		if kind == "active" then
 			nameC = TEXT_COLOR
 			stC = ICON
+			hlT = 0.45
 		elseif kind == "done" then
 			nameC = TEXT_COLOR
-			stC = CALM_RED
-			fillC = CALM_RED
+			stC = GOOD
+			fillC = GOOD
 		elseif kind == "fail" then
 			nameC = TEXT_COLOR
 			stC = WARN
 			fillC = WARN
-		end
-		local dotC = DIM_TEXT
-		local hlC = BORDER
-		local hlT = 1
-		if kind == "active" then
-			dotC = ICON_HOVER
-			hlT = 0.45
-		elseif kind == "hold" then
-			-- compiled, waiting for the final scan
-			dotC = ICON
-			nameC = TEXT_COLOR
-			stC = ICON
-		elseif kind == "done" then
-			dotC = CALM_RED
-		elseif kind == "fail" then
-			dotC = WARN
 			hlC = WARN
 			hlT = 0.8
 		end
-		r.dot.BackgroundTransparency = 0
-		TweenService:Create(r.dot, FAST, { BackgroundColor3 = dotC }):Play()
+
 		r.hl.BackgroundColor3 = hlC
 		TweenService:Create(r.hl, SMOOTH, { BackgroundTransparency = hlT }):Play()
 		if kind == "done" and prevKind ~= "done" then
-			-- a short red flash when a module becomes ready
-			r.hl.BackgroundColor3 = CALM_RED
+			-- a short green flash when a module becomes ready
+			r.hl.BackgroundColor3 = GOOD
 			r.hl.BackgroundTransparency = 0.7
 			TweenService:Create(r.hl, TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 				{ BackgroundTransparency = 1 }):Play()
@@ -650,8 +631,8 @@ function Welcome.new(opts)
 			subtitle.Text = "Something went wrong"
 		elseif state == "ready" then
 			loaderText.Text = "Everything is ready"
-			loaderText.TextColor3 = TEXT_COLOR
-			overallFill.BackgroundColor3 = CALM_RED
+			loaderText.TextColor3 = GOOD
+			overallFill.BackgroundColor3 = GOOD
 			subtitle.Text = "All modules are ready"
 		else
 			loaderText.Text = "Checking modules"
@@ -816,7 +797,7 @@ function Welcome.new(opts)
 	---------------------------------------------------------------------
 	local bust = 0
 
-	-- shows what is being checked (only while still loading)
+	-- shows what is being checked (only while still loading). Never shows file names.
 	local function setInfo(text)
 		if alive and state == "loading" then
 			status.Text = text
@@ -886,7 +867,7 @@ function Welcome.new(opts)
 	-- pass 1 for one module: download it CHECKS times in a row, all copies must match.
 	-- if a copy differs (stale cache), the newest one becomes the reference and counting restarts.
 	-- The module's bar fills while this runs (0 - 85 percent).
-	local function checkModule(entry, index, total)
+	local function checkModule(entry, index, count_total)
 		local ref = nil
 		local count = 0
 		local restarts = 0
@@ -895,7 +876,7 @@ function Welcome.new(opts)
 			if not alive then
 				return nil
 			end
-			setInfo("[" .. index .. "/" .. total .. "] Checking " .. entry.Name)
+			setInfo("[" .. index .. "/" .. count_total .. "] Checking module " .. index)
 			local src = fetch(entry.Name)
 			if ref == nil or src == ref then
 				ref = src
@@ -914,24 +895,24 @@ function Welcome.new(opts)
 		return ref
 	end
 
-	-- returns true when the failure must stop everything (nothing is printed, the row turns red)
+	-- returns true when the failure must stop everything (nothing is printed, the row turns amber)
 	local function handleFail(entry, err, index)
 		lastError = entry.Name .. ": " .. tostring(err)
 		setRow(index, rowProg[index] or 0, "Failed", "fail")
 		if entry.Required then
-			W:SetState("error", "Could not load " .. entry.Name)
+			W:SetState("error", "Could not load module " .. index)
 			return true
 		end
 		return false
 	end
 
 	local function runLoader()
-		local total = #moduleList
+		local count_total = #moduleList
 
 		-- pass 1: one module at a time, checked CHECKS times each
-		for i = 1, total do
+		for i = 1, count_total do
 			local entry = moduleList[i]
-			local ok, src = pcall(checkModule, entry, i, total)
+			local ok, src = pcall(checkModule, entry, i, count_total)
 			if not alive then
 				return
 			end
@@ -952,13 +933,13 @@ function Welcome.new(opts)
 		end
 
 		-- pass 2: one very quick scan of everything again
-		for i = 1, total do
+		for i = 1, count_total do
 			local entry = moduleList[i]
 			if not alive then
 				return
 			end
 			if sources[entry.Name] then
-				setInfo("Final scan: " .. entry.Name .. " (" .. i .. "/" .. total .. ")")
+				setInfo("Final scan: module " .. i .. " of " .. count_total)
 				local ok, src = pcall(fetch, entry.Name)
 				if ok and src ~= sources[entry.Name] then
 					local ok2, mod = pcall(compile, entry, src)
