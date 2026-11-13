@@ -1,5 +1,17 @@
--- extra.lua  (Y1 Misc tab > Extra page: BulletTracer + HitSounds, Zee Hood only)
+-- extra.lua  (Y1 Misc tab > Extra page)
 -- ASCII only, conservative syntax (no += and no continue).
+--
+-- The page is built like movement.lua: connected backgrounds, one row per feature
+-- (feature name, switch, three dots), and the page scrolls if it has to.
+--
+--   LEFT   "Zee Hood Extras"  = Bullet Tracer, Hit Sounds, Hit Markers   (built in this file)
+--   LEFT   "Extra Needs"      = Orbit, Spin Bot, Hitbox Expander          (built by animation.lua)
+--   RIGHT  "Quality Of Life"  = Animations, Anti AFK, Ping Spoofer        (built by animation.lua + pingspoofer.lua)
+--
+-- animation.lua gets the empty row frames in ctx.Rows (orbit, spin, hitbox, anim, afk, ping) together with the
+-- helpers in ctx.Helpers, and fills them. pingspoofer.lua is built by animation.lua into ctx.Rows.ping.
+-- Every switch is OFF each time the script starts. The dots open one settings pop-up per feature.
+-- Click the dots again, or anywhere except the pop-up, to close it. Scrolling the page closes it too.
 --
 -- BULLET TRACER
 --   Your gun script makes a "BULLET_RAYS" part for every shot. This module watches for those and
@@ -20,16 +32,6 @@
 --   When you shoot someone, the damage you did shows as red text next to them (like -200 or -100).
 --   The text is a world-size billboard, so it gets bigger when they are close and smaller when
 --   they are far. The only setting is Fade Speed (how fast the text disappears).
---   The damage is measured from the target's health dropping right after your hit lands.
---
--- Each page card is a small Enable card (a switch, OFF every time the script starts, and three dots).
--- The dots open one settings pop-up. Click the dots again, or anywhere except the pop-up, to close it.
--- Tracer: Material and Fade Style: click the button to go to the next choice.
--- Hit Sounds: Sound and Sound Player Option are real drop-down menus (they open a list next to the pop-up).
---
--- FIX: pop-ups no longer close when you click inside them near the bottom. The old check compared the
--- mouse position (which includes the top bar offset) with the pop-up position (which may not), so the
--- bottom strip of a pop-up counted as "outside". The check now tries every coordinate space.
 --
 -- Build signature: Extra.build(container, T, H, ctx) -> { Root = ..., Unload = fn }
 
@@ -116,8 +118,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	-- true when the pointer is over obj. Mouse and touch positions can be shifted by the top bar
-	-- (GuiInset) compared with AbsolutePosition, so every possible space is tried. This is what
-	-- fixes pop-ups closing when you click near the bottom of them.
+	-- (GuiInset) compared with AbsolutePosition, so every possible space is tried.
 	local function pointerOver(obj, input)
 		local inset = GuiService:GetGuiInset()
 		local ix = input.Position.X
@@ -150,7 +151,7 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- root
+	-- root + scrolling page
 	---------------------------------------------------------------------
 	local root = new("Frame", {
 		Name = "ExtraRoot",
@@ -158,6 +159,27 @@ function ExtraPage.build(parent, T, H, ctx)
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, parent)
+
+	local scroll = new("ScrollingFrame", {
+		Name = "ExtraScroll",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = T.ICON,
+		ScrollBarImageTransparency = 0.5,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		ElasticBehavior = Enum.ElasticBehavior.Never,
+	}, root)
+
+	local body = new("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(2, 2),
+		Size = UDim2.new(1, -12, 0, 10),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+	}, scroll)
 
 	local probe = new("Frame", {
 		Position = UDim2.fromOffset(-300, -300),
@@ -379,6 +401,16 @@ function ExtraPage.build(parent, T, H, ctx)
 			D.paint()
 		end)
 		return D
+	end
+
+	-- the name + status text at the left of a row. Returns the status label (RichText).
+	local function rowHead(row, title)
+		label(row, title, UDim2.fromOffset(14, 7), UDim2.new(1, -110, 0, 16),
+			Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
+		local sub = label(row, "", UDim2.fromOffset(14, 25), UDim2.new(1, -100, 0, 14),
+			Enum.Font.Gotham, 11, T.DIM_TEXT)
+		sub.RichText = true
+		return sub
 	end
 
 	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue)
@@ -642,6 +674,73 @@ function ExtraPage.build(parent, T, H, ctx)
 
 		return { frame = F.frame, close = F.close }
 	end
+
+	---------------------------------------------------------------------
+	-- THE PAGE LAYOUT: connected backgrounds, one row per feature (like movement.lua)
+	---------------------------------------------------------------------
+	local ROW_H = 46
+	local CARD_TOP = 22
+	local rows = {}
+
+	local GROUPS = {
+		{ title = "Zee Hood Extras", col = 0, ids = { "tracer", "sounds", "markers" } },
+		{ title = "Extra Needs", col = 0, ids = { "orbit", "spin", "hitbox" } },
+		{ title = "Quality Of Life", col = 1, ids = { "anim", "afk", "ping" } },
+	}
+	local colY = { [0] = CARD_TOP, [1] = CARD_TOP }
+	local bodyBottom = 0
+
+	for gi = 1, #GROUPS do
+		local g = GROUPS[gi]
+		local gy = colY[g.col]
+		local gh = #g.ids * ROW_H
+		local gpos = UDim2.new(0, 2, 0, gy)
+		local capPos = UDim2.new(0, 4, 0, gy - 18)
+		if g.col == 1 then
+			gpos = UDim2.new(0.5, 4, 0, gy)
+			capPos = UDim2.new(0.5, 6, 0, gy - 18)
+		end
+
+		local group = new("Frame", {
+			Name = "Group" .. gi,
+			Position = gpos,
+			Size = UDim2.new(0.5, -6, 0, gh),
+			BackgroundColor3 = T.SIDEBAR_BG,
+			BorderSizePixel = 0,
+		}, body)
+		corner(group, RADIUS + 4)
+		stroke(group, T.BORDER, 1, 0)
+
+		label(body, g.title, capPos, UDim2.new(0.5, -10, 0, 14),
+			Enum.Font.GothamMedium, 11, T.DIM_TEXT)
+
+		for k = 1, #g.ids do
+			local row = new("Frame", {
+				Name = g.ids[k] .. "Row",
+				Position = UDim2.fromOffset(0, (k - 1) * ROW_H),
+				Size = UDim2.new(1, 0, 0, ROW_H),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, group)
+
+			-- thin divider between the rows of a group
+			if k > 1 then
+				new("Frame", {
+					Position = UDim2.fromOffset(12, 0),
+					Size = UDim2.new(1, -24, 0, 1),
+					BackgroundColor3 = T.BORDER,
+					BorderSizePixel = 0,
+				}, row)
+			end
+			rows[g.ids[k]] = row
+		end
+
+		colY[g.col] = gy + gh + 30   -- the next group in this column (room for its title)
+		bodyBottom = math.max(bodyBottom, gy + gh)
+	end
+
+	body.Size = UDim2.new(1, -12, 0, bodyBottom)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, bodyBottom + 12)
 
 	---------------------------------------------------------------------
 	-- colour picker (saturation / brightness, hue, opacity, hex + opacity text)
@@ -994,47 +1093,27 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- TRACER CARD (switch + three dots)   left half of the page
+	-- BULLET TRACER ROW (Zee Hood Extras, row 1)
 	---------------------------------------------------------------------
-	local card = new("Frame", {
-		Name = "EnableCard",
-		Position = UDim2.fromOffset(2, 24),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, root)
-	corner(card, RADIUS + 4)
-	stroke(card, T.BORDER, 1, 0)
-
-	label(root, "BULLET TRACER", UDim2.fromOffset(4, 6), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local enableSub = label(card, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	enableSub.RichText = true
+	local tracerSub = rowHead(rows.tracer, "Bullet Tracer")
 
 	local function refreshStatus()
 		local state = '<font color="rgb(116,116,124)">Off</font>'
 		if S.enabled then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		enableSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+		tracerSub.Text = state
 	end
 	refreshStatus()
 
-	makeSwitch(card, S.enabled, function(on)
+	makeSwitch(rows.tracer, S.enabled, function(on)
 		S.enabled = on
 		refreshStatus()
 	end, 23)
 
-	local dots = makeDots(card, UDim2.new(1, -58, 0, 23))
+	local dots = makeDots(rows.tracer, UDim2.new(1, -58, 0, 23))
 
-	---------------------------------------------------------------------
-	-- TRACER SETTINGS POP-UP (opens from the three dots)
-	--   Color / Material / Fade Style / Thickness / Duration / Rainbow (+ Speed)
-	---------------------------------------------------------------------
+	-- settings pop-up: Color / Material / Fade Style / Thickness / Duration / Rainbow (+ Speed)
 	local SW = 264
 	local SH = 296
 	local settings = makeFloating("TracerSettings", SW, SH)
@@ -1179,37 +1258,20 @@ function ExtraPage.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- HIT SOUNDS CARD (switch + three dots)   right half of the page
+	-- HIT SOUNDS ROW (Zee Hood Extras, row 2)
 	---------------------------------------------------------------------
-	local hsCard = new("Frame", {
-		Name = "HitSoundsCard",
-		Position = UDim2.new(0.5, 4, 0, 24),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, root)
-	corner(hsCard, RADIUS + 4)
-	stroke(hsCard, T.BORDER, 1, 0)
-
-	label(root, "HIT SOUNDS", UDim2.new(0.5, 6, 0, 6), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(hsCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local hsSub = label(hsCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	hsSub.RichText = true
+	local hsSub = rowHead(rows.sounds, "Hit Sounds")
 
 	local function refreshHsStatus()
 		local state = '<font color="rgb(116,116,124)">Off</font>'
 		if HS.enabled then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		hsSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+		hsSub.Text = state
 	end
 	refreshHsStatus()
 
-	makeSwitch(hsCard, HS.enabled, function(on)
+	makeSwitch(rows.sounds, HS.enabled, function(on)
 		HS.enabled = on
 		refreshHsStatus()
 		if on then
@@ -1217,12 +1279,9 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 	end, 23)
 
-	local hsDots = makeDots(hsCard, UDim2.new(1, -58, 0, 23))
+	local hsDots = makeDots(rows.sounds, UDim2.new(1, -58, 0, 23))
 
-	---------------------------------------------------------------------
-	-- HIT SOUNDS SETTINGS POP-UP
-	--   Sound (drop-down) / Sound Player Option (drop-down) / Volume
-	---------------------------------------------------------------------
+	-- settings pop-up: Sound (drop-down) / Sound Player Option (drop-down) / Volume / Mute Gun Sounds
 	local HSW = 320
 	local HSH = 210
 	local hsSettings = makeFloating("HitSoundSettings", HSW, HSH)
@@ -1307,42 +1366,25 @@ function ExtraPage.build(parent, T, H, ctx)
 	}
 
 	---------------------------------------------------------------------
-	-- HIT MARKERS CARD (switch + three dots)   second row, left half
+	-- HIT MARKERS ROW (Zee Hood Extras, row 3)
 	---------------------------------------------------------------------
-	local hmCard = new("Frame", {
-		Name = "HitMarkersCard",
-		Position = UDim2.fromOffset(2, 98),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, root)
-	corner(hmCard, RADIUS + 4)
-	stroke(hmCard, T.BORDER, 1, 0)
-
-	label(root, "HIT MARKERS", UDim2.fromOffset(4, 80), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(hmCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local hmSub = label(hmCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	hmSub.RichText = true
+	local hmSub = rowHead(rows.markers, "Hit Markers")
 
 	local function refreshHmStatus()
 		local state = '<font color="rgb(116,116,124)">Off</font>'
 		if HM.enabled then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		hmSub.Text = '<font color="rgb(230,230,234)"><b>Zee Hood only</b></font> - ' .. state
+		hmSub.Text = state
 	end
 	refreshHmStatus()
 
-	makeSwitch(hmCard, HM.enabled, function(on)
+	makeSwitch(rows.markers, HM.enabled, function(on)
 		HM.enabled = on
 		refreshHmStatus()
 	end, 23)
 
-	local hmDots = makeDots(hmCard, UDim2.new(1, -58, 0, 23))
+	local hmDots = makeDots(rows.markers, UDim2.new(1, -58, 0, 23))
 
 	-- settings pop-up: only the Fade Speed
 	local HMW = 280
@@ -1429,10 +1471,6 @@ function ExtraPage.build(parent, T, H, ctx)
 			m = m.Parent
 		end
 		return nil
-	end
-
-	local function isEnemyHit(inst)
-		return enemyHumanoid(inst) ~= nil
 	end
 
 	-- the params table passed to GunHandler.Shoot (it has a Shooter field)
@@ -1814,8 +1852,9 @@ function ExtraPage.build(parent, T, H, ctx)
 		end
 	end)
 
-		---------------------------------------------------------------------
-	-- ANIMATIONS (built by animation.lua into this page)
+	---------------------------------------------------------------------
+	-- ANIMATIONS / ORBIT / SPIN BOT / HITBOX EXPANDER / ANTI AFK / PING SPOOFER
+	-- (animation.lua fills the rows it is given; it builds pingspoofer.lua into rows.ping)
 	---------------------------------------------------------------------
 	local animHandle = nil
 	do
@@ -1824,18 +1863,27 @@ function ExtraPage.build(parent, T, H, ctx)
 			animMod = ctx.AnimationModule
 		end
 		if type(animMod) == "table" and type(animMod.build) == "function" then
-			local ok, res = pcall(animMod.build, root, T, H, {
+			local animCtx = {
+				Rows = rows,
 				Helpers = {
 					makeSwitch = makeSwitch,
 					makeDots = makeDots,
 					makeFloating = makeFloating,
 					dropdownRow = dropdownRow,
 					placeNear = placeNear,
+					rowHead = rowHead,
 					addPopup = function(entry)
 						popupList[#popupList + 1] = entry
 					end,
 				},
-			})
+			}
+			-- pass the other modules along (hitboxspoofer.lua, pingspoofer.lua) when main.lua gave them to this page
+			if type(ctx) == "table" then
+				animCtx.HitboxSpooferModule = ctx.HitboxSpooferModule or ctx.HitboxSpoofer
+				animCtx.PingSpooferModule = ctx.PingSpooferModule or ctx.PingSpoofer
+				animCtx.Modules = ctx.Modules
+			end
+			local ok, res = pcall(animMod.build, root, T, H, animCtx)
 			if not ok then
 				warn("[extra] animation.lua failed: " .. tostring(res))
 			elseif type(res) == "table" then
@@ -1869,6 +1917,11 @@ function ExtraPage.build(parent, T, H, ctx)
 				end
 			end
 		end
+	end)
+
+	-- a pop-up stays where it opened, so scrolling the page closes it
+	conns[#conns + 1] = scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+		closeAllPopups()
 	end)
 
 	-- leaving this page (or the Misc tab) closes every pop-up: watch the page and everything above it
