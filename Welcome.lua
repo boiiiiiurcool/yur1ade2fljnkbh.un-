@@ -480,7 +480,11 @@ function Welcome.new(opts)
 	}, overallTrack)
 	corner(overallFill, 3)
 
-	-- skip button: flat, outlined, under the overall bar
+	local paintSkip = nil
+
+	-- SKIP BUTTON: secondary look next to the light Continue button.
+	-- Flat dark well + thin border + double chevron. Hover: red border, brighter text,
+	-- chevrons slide forward. Press: small squeeze.
 	local skipBtn = new("TextButton", {
 		Name = "Skip",
 		AutoButtonColor = false,
@@ -488,26 +492,82 @@ function Welcome.new(opts)
 		Size = UDim2.new(1, -4, 0, SKIP_H),
 		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
-		Font = Enum.Font.GothamMedium,
+		Font = Enum.Font.GothamBold,
 		Text = skipText,
 		TextSize = 12,
 		TextColor3 = DIM_TEXT,
 	}, loaderGroup)
 	corner(skipBtn, 8)
+	local skipScale = new("UIScale", { Scale = 1 }, skipBtn)
 	local skipStroke = stroke(skipBtn, BORDER, 1, 0)
-	skipBtn.MouseEnter:Connect(function()
-		if skipping then
-			return
+
+	local skipChev = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(16, 12),
+		BackgroundTransparency = 1,
+	}, skipBtn)
+	local skipBars = {}
+	local function skipBar(x, y, rot)
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, x, 0.5, y),
+			Size = UDim2.fromOffset(7, 2),
+			Rotation = rot,
+			BackgroundColor3 = DIM_TEXT,
+			BorderSizePixel = 0,
+		}, skipChev)
+		corner(f, 1)
+		table.insert(skipBars, f)
+	end
+	skipBar(-3.5, -2.5, 45)
+	skipBar(-3.5, 2.5, -45)
+	skipBar(2.5, -2.5, 45)
+	skipBar(2.5, 2.5, -45)
+
+	local skipOver = false
+	local skipDown = false
+	paintSkip = function()
+		local over = skipOver and not skipping
+		local bg = WELL
+		local strokeC = BORDER
+		local textC = DIM_TEXT
+		local cx = -24
+		local sc = 1
+		if over then
+			bg = Color3.fromRGB(38, 38, 38)
+			strokeC = CALM_RED
+			textC = ICON_HOVER
+			cx = -19
+			sc = 1.02
+			if skipDown then
+				sc = 0.97
+			end
 		end
-		TweenService:Create(skipBtn, FAST, { TextColor3 = ICON_HOVER }):Play()
-		TweenService:Create(skipStroke, FAST, { Color = ICON }):Play()
+		TweenService:Create(skipBtn, FAST, { BackgroundColor3 = bg, TextColor3 = textC }):Play()
+		TweenService:Create(skipStroke, FAST, { Color = strokeC }):Play()
+		TweenService:Create(skipChev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
+		TweenService:Create(skipScale, SPRING, { Scale = sc }):Play()
+		for i = 1, #skipBars do
+			TweenService:Create(skipBars[i], FAST, { BackgroundColor3 = textC }):Play()
+		end
+	end
+	skipBtn.MouseEnter:Connect(function()
+		skipOver = true
+		paintSkip()
 	end)
 	skipBtn.MouseLeave:Connect(function()
-		if skipping then
-			return
-		end
-		TweenService:Create(skipBtn, FAST, { TextColor3 = DIM_TEXT }):Play()
-		TweenService:Create(skipStroke, FAST, { Color = BORDER }):Play()
+		skipOver = false
+		skipDown = false
+		paintSkip()
+	end)
+	skipBtn.MouseButton1Down:Connect(function()
+		skipDown = true
+		paintSkip()
+	end)
+	skipBtn.MouseButton1Up:Connect(function()
+		skipDown = false
+		paintSkip()
 	end)
 
 	local btnGroup = new("CanvasGroup", {
@@ -746,8 +806,7 @@ function Welcome.new(opts)
 		skipping = true
 		waitDone = true
 		skipBtn.Text = "Skipping..."
-		TweenService:Create(skipBtn, FAST, { TextColor3 = DIM_TEXT }):Play()
-		TweenService:Create(skipStroke, FAST, { Color = BORDER }):Play()
+		paintSkip()
 		refreshBottom()
 	end
 	skipBtn.Activated:Connect(requestSkip)
