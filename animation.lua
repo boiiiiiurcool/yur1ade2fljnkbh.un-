@@ -1,64 +1,55 @@
--- animation.lua  (Y1 Misc tab > Extra page: Animations card, built INTO extra.lua's page)
+-- animation.lua  (Y1 Misc tab > Extra page: fills the rows that extra.lua made)
 -- ASCII only, conservative syntax (no += and no continue).
 --
+-- extra.lua builds the connected backgrounds and hands the empty rows over in ctx.Rows:
+--   "Extra Needs"     (left)  : ctx.Rows.orbit, ctx.Rows.spin, ctx.Rows.hitbox
+--   "Quality Of Life" (right) : ctx.Rows.anim,  ctx.Rows.afk,  ctx.Rows.ping
+-- Every row = feature name + status text, a switch, and three dots (Anti AFK has the switch only).
+-- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement, rowHead).
+--
+-- ANIMATIONS
 -- Detects the Idle / Walk / Run / Jump / Fall / Swim / Climb animations your character has right now
 -- (from its Animate script) and remembers them as "Default". The three dots open a pop-up with
 -- one drop-down per animation: Default or any animation package, and a Reset All button.
 -- It changes the AnimationId values inside your Animate script and restarts that script, so the
 -- animations are played by your own client and Roblox shows them to every other player.
 -- Packages are R15 only. Turning the switch off (or unloading) puts your defaults back.
---
 -- NO MIXING: every change is done in one clean step: the Animate script is switched off, every
 -- movement animation that is still playing (old default or old package) is stopped, the new ids are
 -- written, then the script is switched on again. Changes are queued so two of them never overlap.
---
--- DROP-DOWNS: built in this file (hand-drawn rounded chevron that turns when open), so no patch to
--- extra.lua's dropdownRow is needed any more.
---
 -- RESET ALL: puts every drop-down back on Default, restores your default ids, stops every movement
--- animation and restarts the Animate script so the character animates from a clean start.
--- Set RESPAWN_ON_RESET = true to also respawn your character (off by default: it kills you in game).
+-- animation and restarts the Animate script. Set RESPAWN_ON_RESET = true to also respawn (off by default).
 --
--- ANTI AFK: a second small card (Enable switch only, no dots) on the third row, left side. While it is on,
--- the game's idle kick is blocked by sending a fake click when Roblox says you went idle.
+-- ANTI AFK
+-- Enable switch only. While it is on, the game's idle kick is blocked by sending a fake click when Roblox
+-- says you went idle.
 --
--- HITBOX EXPANDER: a third small card on the right side of the third row (next to Anti AFK).
--- Enable switch + three dots. Makes every other player's real HumanoidRootPart bigger on YOUR client
--- (never Massless; CanCollide forced off before every physics step; everything restored when turned off).
+-- PING SPOOFER
+-- Built by pingspoofer.lua into ctx.Rows.ping (found through ctx.PingSpooferModule / ctx.PingSpoofer /
+-- ctx.Modules.PingSpoofer or getgenv().Y1_MODULES.PingSpoofer).
+--
+-- HITBOX EXPANDER
+-- Makes every other player's real HumanoidRootPart bigger on YOUR client (never Massless; CanCollide forced
+-- off before every physics step; everything restored when turned off).
 -- Pop-up: Visualize, Team Check, Knocked Check (BodyEffects["K.O"], Zee Hood), Size (slider 2-50 +
 -- typed box 1-100), Dynamic (smaller hitbox when they are close: Min Size + Full At),
 -- Hitbox Spoofer (switch at the bottom, ON by default): while the expander is on, hitboxspoofer.lua puts
 -- blood where it normally lands and keeps the armor visual at its normal size and position for every player.
--- hitboxspoofer.lua is found through ctx (HitboxSpoofer / HitboxSpooferModule / Modules.HitboxSpoofer) or,
--- if extra.lua does not pass it on, through getgenv().Y1_MODULES.HitboxSpoofer (main.lua sets that).
 --
--- ORBIT: a fourth small card (row 4, left). Enable switch + three dots.
+-- ORBIT
 -- Set a keybind in the pop-up. Press it to start orbiting the player closest to your mouse
 -- (or the nearest player if nobody is on screen); press it again to stop. It also stops by itself
 -- when the target dies / leaves or you die.
--- Pop-up: Keybind (click it, then press a key; Escape = none), Visualize (a ring showing the radius,
--- around the target while orbiting, around you while you adjust it), Speed, Distance (radius, studs).
+-- Pop-up: Keybind (click it, then press a key; Escape = none), Visualize (a ring showing the radius),
+-- Team Check, Knocked Check, Speed, Distance (radius, studs).
 --
--- SPIN BOT: a fifth small card (row 4, right). Enable switch + three dots.
--- Your character spins (or is turned over) while you walk around normally and the camera stays normal.
--- The spin turns the HumanoidRootPart (AutoRotate is switched off while it is on); the tilt modes change
--- the root joint (Root / RootJoint C0), so the camera and your walking are not affected.
--- Modes: Normal = spins. Upside = upside down (+ spin). Side = lying on your side (+ spin).
---        Backwards = your character faces away from where you walk (no spin).
--- Speed 0 stops the spinning, so Upside and Side become a fixed pose. Everything is put back when
--- you turn it off, change character or unload.
---
--- SPIN BOT: a fifth small card (row 4, right). Enable switch + three dots. Only YOUR character is turned;
--- you still walk normally and the camera is untouched (the Humanoid's AutoRotate is switched off and the
--- root part's rotation is set every frame while its position is left alone). Modes (drop-down):
---   Normal    = spins around (Speed slider)
---   Upside    = upside down, facing where your camera looks
---   Side      = lying on your side, facing where your camera looks
---   Backwards = facing away from where your camera looks
--- Turning it off (or unloading) stands the character back up.
+-- SPIN BOT
+-- Only YOUR character is turned; you still walk normally and the camera is untouched (the Humanoid's
+-- AutoRotate is switched off and the root part's rotation is set every frame while its position is left alone).
+-- Modes (drop-down): Normal = spins (Speed slider), Upside = upside down, Side = lying on your side,
+-- Backwards = facing away from where your camera looks. Turning it off (or unloading) stands you back up.
 --
 -- Build signature: Animation.build(container, T, H, ctx) -> { Unload = fn }
--- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, drop-down, placement).
 
 local AnimationPage = {}
 
@@ -77,11 +68,13 @@ function AnimationPage.build(parent, T, H, ctx)
 	local RESPAWN_ON_RESET = false
 
 	local X = nil
+	local R = nil
 	if type(ctx) == "table" then
 		X = ctx.Helpers
+		R = ctx.Rows
 	end
-	if type(X) ~= "table" then
-		warn("[animation] extra.lua did not pass its helpers")
+	if type(X) ~= "table" or type(R) ~= "table" then
+		warn("[animation] extra.lua did not pass its helpers / rows")
 		return { Unload = function() end }
 	end
 
@@ -186,44 +179,34 @@ function AnimationPage.build(parent, T, H, ctx)
 		return nil
 	end
 
-	---------------------------------------------------------------------
-	-- card (right half, second row of the Extra page) + settings pop-up
-	---------------------------------------------------------------------
-	local card = new("Frame", {
-		Name = "AnimationsCard",
-		Position = UDim2.new(0.5, 4, 0, 98),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(card, RADIUS + 4)
-	stroke(card, T.BORDER, 1, 0)
-
-	local caption = label(parent, "ANIMATIONS", UDim2.new(0.5, 6, 0, 80), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local sub = label(card, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	sub.RichText = true
-
-	local function refreshSub()
+	local function statusText(on, extra)
 		local state = '<font color="rgb(116,116,124)">Off</font>'
-		if enabled then
+		if on then
 			state = '<font color="rgb(52,199,120)">Active</font>'
 		end
-		sub.Text = state
+		if extra then
+			state = state .. ' <font color="rgb(116,116,124)">- ' .. extra .. '</font>'
+		end
+		return state
+	end
+
+	---------------------------------------------------------------------
+	-- ANIMATIONS row (Quality Of Life) + settings pop-up
+	---------------------------------------------------------------------
+	local sub = X.rowHead(R.anim, "Animations")
+
+	local function refreshSub()
+		sub.Text = statusText(enabled)
 	end
 	refreshSub()
 
-	X.makeSwitch(card, false, function(on)
+	X.makeSwitch(R.anim, false, function(on)
 		enabled = on
 		refreshSub()
 		schedule()
 	end, 23)
 
-	local dots = X.makeDots(card, UDim2.new(1, -58, 0, 23))
+	local dots = X.makeDots(R.anim, UDim2.new(1, -58, 0, 23))
 
 	local PW = 300
 	local PH = 352
@@ -243,7 +226,7 @@ function AnimationPage.build(parent, T, H, ctx)
 
 	local dropdowns = {}
 
-	-- the drop-down used by every row here. It is built in this file (not in extra.lua) so it can
+	-- the drop-down used by every animation row (and the Spin Bot mode). It is built in this file so it can
 	-- be set back to "Default" by Reset All, and it has a hand-drawn rounded chevron that turns
 	-- smoothly when the list opens.
 	local function animDropdown(c, y, title, names, startIndex, onPick, beside)
@@ -713,39 +696,17 @@ function AnimationPage.build(parent, T, H, ctx)
 	refreshStatus()
 
 	---------------------------------------------------------------------
-	-- ANTI AFK (third row, left side): just an Enable switch
+	-- ANTI AFK row (Quality Of Life): just an Enable switch
 	---------------------------------------------------------------------
 	local afkOn = false
-
-	local afkCard = new("Frame", {
-		Name = "AntiAfkCard",
-		Position = UDim2.fromOffset(2, 172),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(afkCard, RADIUS + 4)
-	stroke(afkCard, T.BORDER, 1, 0)
-
-	local afkCaption = label(parent, "ANTI AFK", UDim2.fromOffset(4, 154), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(afkCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -90, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local afkSub = label(afkCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -90, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	afkSub.RichText = true
+	local afkSub = X.rowHead(R.afk, "Anti AFK")
 
 	local function refreshAfk()
-		local state = '<font color="rgb(116,116,124)">Off</font>'
-		if afkOn then
-			state = '<font color="rgb(52,199,120)">Active</font>'
-		end
-		afkSub.Text = state
+		afkSub.Text = statusText(afkOn)
 	end
 	refreshAfk()
 
-	X.makeSwitch(afkCard, false, function(on)
+	X.makeSwitch(R.afk, false, function(on)
 		afkOn = on
 		refreshAfk()
 	end, 23)
@@ -1132,9 +1093,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end
 
-
 	---------------------------------------------------------------------
-	-- HITBOX EXPANDER (third row, right side)
+	-- slider used by the Extra Needs pop-ups
 	---------------------------------------------------------------------
 	local function makeSlider(c, y, name, labelW, minV, maxV, stepV, startValue, fmt, setValue)
 		label(c, name, UDim2.fromOffset(16, y), UDim2.fromOffset(labelW, 20),
@@ -1233,41 +1193,23 @@ function AnimationPage.build(parent, T, H, ctx)
 		return api
 	end
 
-	local hbCard = new("Frame", {
-		Name = "HitboxCard",
-		Position = UDim2.new(0.5, 4, 0, 172),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(hbCard, RADIUS + 4)
-	stroke(hbCard, T.BORDER, 1, 0)
-
-	local hbCaption = label(parent, "HITBOX EXPANDER", UDim2.new(0.5, 6, 0, 154), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(hbCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local hbSub = label(hbCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	hbSub.RichText = true
+	---------------------------------------------------------------------
+	-- HITBOX EXPANDER row (Extra Needs, row 3)
+	---------------------------------------------------------------------
+	local hbSub = X.rowHead(R.hitbox, "Hitbox Expander")
 
 	local function refreshHbStatus()
-		local state = '<font color="rgb(116,116,124)">Off</font>'
-		if HB.enabled then
-			state = '<font color="rgb(52,199,120)">Active</font>'
-		end
-		hbSub.Text = state
+		hbSub.Text = statusText(HB.enabled)
 	end
 	refreshHbStatus()
 
-	X.makeSwitch(hbCard, false, function(on)
+	X.makeSwitch(R.hitbox, false, function(on)
 		HB.enabled = on
 		refreshHbStatus()
 		spooferSync()
 	end, 23)
 
-	local hbDots = X.makeDots(hbCard, UDim2.new(1, -58, 0, 23))
+	local hbDots = X.makeDots(R.hitbox, UDim2.new(1, -58, 0, 23))
 
 	local HBW = 290
 	local HBH = 366
@@ -1406,10 +1348,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		hit = { hbPop, hbDots.btn },
 	})
 
-
-
 	---------------------------------------------------------------------
-	-- ORBIT (row 4, left)
+	-- ORBIT row (Extra Needs, row 1)
 	---------------------------------------------------------------------
 	local OB = {
 		enabled = false,
@@ -1426,26 +1366,8 @@ function AnimationPage.build(parent, T, H, ctx)
 	local obRadius = -1
 	local obRing = nil
 	local obDashes = {}
-	local obName = ""
 
-	local obCard = new("Frame", {
-		Name = "OrbitCard",
-		Position = UDim2.fromOffset(2, 246),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(obCard, RADIUS + 4)
-	stroke(obCard, T.BORDER, 1, 0)
-
-	local obCaption = label(parent, "ORBIT", UDim2.fromOffset(4, 228), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(obCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local obSub = label(obCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	obSub.RichText = true
+	local obSub = X.rowHead(R.orbit, "Orbit")
 
 	local function refreshObStatus()
 		local state = '<font color="rgb(116,116,124)">Off</font>'
@@ -1454,9 +1376,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		elseif OB.enabled then
 			state = '<font color="rgb(52,199,120)">Ready</font>'
 		end
-		local txt = state
-		if obSub.Text ~= txt then
-			obSub.Text = txt
+		if obSub.Text ~= state then
+			obSub.Text = state
 		end
 	end
 
@@ -1476,7 +1397,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		refreshObStatus()
 	end
 
-	X.makeSwitch(obCard, false, function(on)
+	X.makeSwitch(R.orbit, false, function(on)
 		OB.enabled = on
 		if not on then
 			stopOrbit()
@@ -1485,7 +1406,7 @@ function AnimationPage.build(parent, T, H, ctx)
 	end, 23)
 	refreshObStatus()
 
-	local obDots = X.makeDots(obCard, UDim2.new(1, -58, 0, 23))
+	local obDots = X.makeDots(R.orbit, UDim2.new(1, -58, 0, 23))
 
 	local OBW = 290
 	local OBH = 262
@@ -1665,7 +1586,6 @@ function AnimationPage.build(parent, T, H, ctx)
 			return
 		end
 		OB.target = p
-		obName = p.Name
 		local d = mroot.Position - thrp.Position
 		OB.angle = math.atan2(d.Z, d.X)
 		refreshObStatus()
@@ -1785,244 +1705,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		hideRing()
 	end
 
-
 	---------------------------------------------------------------------
-	-- SPIN BOT (row 4, right)
-	---------------------------------------------------------------------
-	local SP_MODES = { "Normal", "Upside", "Side", "Backwards" }
-	local SP = {
-		enabled = false,
-		mode = "Normal",
-		speed = 30,
-		spin = 0,
-		facing = 0,
-		facingSet = false,
-		yaw = 0,
-		joint = nil,
-		jointC0 = nil,
-		autoRotate = nil,
-		hum = nil,
-	}
-
-	local spCard = new("Frame", {
-		Name = "SpinBotCard",
-		Position = UDim2.new(0.5, 4, 0, 246),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(spCard, RADIUS + 4)
-	stroke(spCard, T.BORDER, 1, 0)
-
-	local spCaption = label(parent, "SPIN BOT", UDim2.new(0.5, 6, 0, 228), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(spCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local spSub = label(spCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	spSub.RichText = true
-
-	local function refreshSpStatus()
-		local state = '<font color="rgb(116,116,124)">Off</font>'
-		if SP.enabled then
-			state = '<font color="rgb(52,199,120)">Active</font> <font color="rgb(116,116,124)">- ' .. SP.mode .. '</font>'
-		end
-		spSub.Text = state
-	end
-	refreshSpStatus()
-
-	-- puts the root joint and AutoRotate back the way they were
-	local function spRestore()
-		if SP.joint and SP.joint.Parent and SP.jointC0 then
-			pcall(function()
-				SP.joint.C0 = SP.jointC0
-			end)
-		end
-		if SP.hum and SP.hum.Parent and SP.autoRotate ~= nil then
-			pcall(function()
-				SP.hum.AutoRotate = SP.autoRotate
-			end)
-		end
-		SP.joint = nil
-		SP.jointC0 = nil
-		SP.autoRotate = nil
-		SP.hum = nil
-		SP.facingSet = false
-	end
-
-	X.makeSwitch(spCard, false, function(on)
-		SP.enabled = on
-		if not on then
-			spRestore()
-		end
-		refreshSpStatus()
-	end, 23)
-
-	local spDots = X.makeDots(spCard, UDim2.new(1, -58, 0, 23))
-
-	local SPW = 290
-	local SPH = 140
-	local spF = X.makeFloating("SpinBotSettings", SPW, SPH)
-	local spPop = spF.frame
-
-	label(spPop, "Spin Bot", UDim2.fromOffset(16, 12), UDim2.new(1, -32, 0, 20),
-		Enum.Font.GothamBold, 14, T.TEXT_COLOR)
-	new("Frame", {
-		Position = UDim2.fromOffset(16, 40),
-		Size = UDim2.new(1, -32, 0, 1),
-		BackgroundColor3 = T.BORDER,
-		BorderSizePixel = 0,
-	}, spPop)
-
-	local spDrop = X.dropdownRow(spPop, 50, "Mode", 100, 128, SP_MODES, 1, function(i)
-		SP.mode = SP_MODES[i]
-		refreshSpStatus()
-	end, spPop)
-
-	makeSlider(spPop, 94, "Speed", 64, 0, 100, 1, SP.speed, "%d", function(v)
-		SP.speed = v
-	end)
-
-	local function openSp()
-		if spF.isOpen() then
-			return
-		end
-		spF.open(X.placeNear(spDots.btn, SPW, SPH, nil))
-		spDots.open = true
-		spDots.paint()
-	end
-
-	local function closeSp()
-		spF.close()
-		spDrop.close()
-		spDots.open = false
-		spDots.paint()
-	end
-
-	spDots.btn.Activated:Connect(function()
-		if spF.isOpen() then
-			closeSp()
-		else
-			openSp()
-		end
-	end)
-
-	X.addPopup({
-		isOpen = function()
-			return spF.isOpen()
-		end,
-		close = closeSp,
-		hit = { spPop, spDots.btn, spDrop.frame },
-	})
-
-	local function findRootJoint(char, hrp)
-		local j = char:FindFirstChild("Root", true)
-		if j and j:IsA("Motor6D") then
-			return j
-		end
-		j = hrp:FindFirstChild("RootJoint")
-		if j and j:IsA("Motor6D") then
-			return j
-		end
-		return nil
-	end
-
-	-- the tilt of the body for the current mode (applied to the root joint)
-	local function tiltFor(mode)
-		if mode == "Upside" then
-			return CFrame.Angles(math.pi, 0, 0)
-		elseif mode == "Side" then
-			return CFrame.Angles(0, 0, math.pi / 2)
-		end
-		return CFrame.new()
-	end
-
-	local function spApply()
-		local char = player.Character
-		local hrp = nil
-		local hum = nil
-		if char then
-			hrp = char:FindFirstChild("HumanoidRootPart")
-			hum = char:FindFirstChildOfClass("Humanoid")
-		end
-		if not hrp or not hum or hum.Health <= 0 then
-			return
-		end
-
-		-- new character: forget the old joint / humanoid (they are gone)
-		if SP.hum ~= hum then
-			SP.joint = nil
-			SP.jointC0 = nil
-			SP.autoRotate = hum.AutoRotate
-			SP.hum = hum
-			SP.facingSet = false
-		end
-		if hum.AutoRotate then
-			hum.AutoRotate = false
-		end
-
-		if not SP.joint or not SP.joint.Parent then
-			SP.joint = findRootJoint(char, hrp)
-			if SP.joint then
-				SP.jointC0 = SP.joint.C0
-			end
-		end
-
-		if not SP.facingSet then
-			local look = hrp.CFrame.LookVector
-			SP.facing = math.atan2(-look.X, -look.Z)
-			SP.facingSet = true
-		end
-
-		-- the direction you are walking in (stays as it was while you stand still)
-		local md = hum.MoveDirection
-		if md.Magnitude > 0.1 then
-			SP.facing = math.atan2(-md.X, -md.Z)
-		end
-
-		local yaw = SP.facing
-		if SP.mode == "Backwards" then
-			yaw = yaw + math.pi
-		else
-			yaw = yaw + SP.spin
-		end
-		SP.yaw = yaw
-		hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
-
-		if SP.joint and SP.jointC0 then
-			local want = SP.jointC0 * tiltFor(SP.mode)
-			if SP.joint.C0 ~= want then
-				SP.joint.C0 = want
-			end
-		end
-	end
-
-	conns[#conns + 1] = RunService.Heartbeat:Connect(function(dt)
-		if not running or not SP.enabled then
-			return
-		end
-		if SP.mode ~= "Backwards" then
-			SP.spin = (SP.spin + SP.speed * 0.5 * dt) % (math.pi * 2)
-		end
-		pcall(spApply)
-	end)
-
-	conns[#conns + 1] = RunService.RenderStepped:Connect(function()
-		if not running or not SP.enabled then
-			return
-		end
-		pcall(spApply)
-	end)
-
-	local function spinUnload()
-		SP.enabled = false
-		spRestore()
-	end
-
-
-	---------------------------------------------------------------------
-	-- SPIN BOT (row 4, right)
+	-- SPIN BOT row (Extra Needs, row 2)
 	---------------------------------------------------------------------
 	local SB_MODES = { "Normal", "Upside", "Side", "Backwards" }
 	local SB = {
@@ -2033,31 +1717,14 @@ function AnimationPage.build(parent, T, H, ctx)
 		savedAuto = nil,
 	}
 
-	local sbCard = new("Frame", {
-		Name = "SpinBotCard",
-		Position = UDim2.new(0.5, 4, 0, 246),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
-		BorderSizePixel = 0,
-	}, parent)
-	corner(sbCard, RADIUS + 4)
-	stroke(sbCard, T.BORDER, 1, 0)
-
-	local sbCaption = label(parent, "SPIN BOT", UDim2.new(0.5, 6, 0, 228), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(sbCard, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local sbSub = label(sbCard, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	sbSub.RichText = true
+	local sbSub = X.rowHead(R.spin, "Spin Bot")
 
 	local function refreshSbStatus()
-		local state = '<font color="rgb(116,116,124)">Off</font>'
 		if SB.enabled then
-			state = '<font color="rgb(52,199,120)">Active</font> - ' .. SB.mode
+			sbSub.Text = statusText(true, SB.mode)
+		else
+			sbSub.Text = statusText(false)
 		end
-		sbSub.Text = state
 	end
 	refreshSbStatus()
 
@@ -2081,7 +1748,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end
 
-	X.makeSwitch(sbCard, false, function(on)
+	X.makeSwitch(R.spin, false, function(on)
 		if on then
 			SB.enabled = true
 		else
@@ -2091,7 +1758,7 @@ function AnimationPage.build(parent, T, H, ctx)
 		refreshSbStatus()
 	end, 23)
 
-	local sbDots = X.makeDots(sbCard, UDim2.new(1, -58, 0, 23))
+	local sbDots = X.makeDots(R.spin, UDim2.new(1, -58, 0, 23))
 
 	local SBW = 290
 	local SBH = 140
@@ -2207,8 +1874,8 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end
 
-		---------------------------------------------------------------------
-	-- PING SPOOFER (row 5, left) - built by pingspoofer.lua
+	---------------------------------------------------------------------
+	-- PING SPOOFER row (Quality Of Life, row 3) - built by pingspoofer.lua
 	---------------------------------------------------------------------
 	local pingObj = nil
 	do
@@ -2234,10 +1901,14 @@ function AnimationPage.build(parent, T, H, ctx)
 			else
 				warn("[animation] pingspoofer failed: " .. tostring(obj))
 			end
+		else
+			-- the row stays visible so the page looks complete, with a hint on why it does nothing
+			local pSub = X.rowHead(R.ping, "Ping Spoofer")
+			pSub.Text = '<font color="rgb(232,176,70)">pingspoofer.lua not loaded</font>'
 		end
 	end
 
-		---------------------------------------------------------------------
+	---------------------------------------------------------------------
 	-- unload: put the original animations back
 	---------------------------------------------------------------------
 	local function unload()
@@ -2249,7 +1920,6 @@ function AnimationPage.build(parent, T, H, ctx)
 		running = false
 		pcall(hitboxUnload)
 		pcall(orbitUnload)
-		pcall(spinUnload)
 		pcall(spinUnload)
 		if pingObj then
 			pcall(function()
@@ -2265,23 +1935,12 @@ function AnimationPage.build(parent, T, H, ctx)
 			end)
 		end
 		conns = {}
+		-- the rows belong to extra.lua; only the pop-ups made here are removed
 		pcall(function()
-			card:Destroy()
-			caption:Destroy()
-			afkCard:Destroy()
-			afkCaption:Destroy()
-			hbCard:Destroy()
-			hbCaption:Destroy()
+			pop:Destroy()
 			hbPop:Destroy()
-			obCard:Destroy()
-			obCaption:Destroy()
 			obPop:Destroy()
-			sbCard:Destroy()
-			sbCaption:Destroy()
 			sbPop:Destroy()
-			spCard:Destroy()
-			spCaption:Destroy()
-			spPop:Destroy()
 		end)
 	end
 
