@@ -38,6 +38,9 @@
 --       Base = "https://.../main/",      -- must end with a slash
 --       NoCache = true,
 --       LocalDir = nil,                  -- for testing: workspace folder to use readfile
+--       Fetch = nil,                     -- optional function(name) -> source text. When given, it is used
+--                                        -- instead of downloading (main.lua uses it to hand over files it
+--                                        -- already downloaded and verified). It may yield or error.
 --       Checks = 10,
 --       Modules = {
 --           { Id = "UI", Name = "ui.lua", Key = "new", Required = true },
@@ -65,6 +68,7 @@ function Welcome.new(opts)
 	local BASE = opts.Base or ""
 	local NO_CACHE = (opts.NoCache ~= false)
 	local LOCAL_DIR = opts.LocalDir
+	local CUSTOM_FETCH = opts.Fetch
 	local CHECKS = opts.Checks or 10
 	local moduleList = opts.Modules or {}
 
@@ -926,6 +930,9 @@ function Welcome.new(opts)
 
 	-- one download, no retries
 	local function fetchOnce(name)
+		if CUSTOM_FETCH then
+			return CUSTOM_FETCH(name)
+		end
 		if LOCAL_DIR then
 			return readfile(LOCAL_DIR .. name)
 		end
