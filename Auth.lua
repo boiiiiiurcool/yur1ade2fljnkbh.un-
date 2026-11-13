@@ -9,18 +9,25 @@
 --   LOGIN page    Username + Password side by side -> "Log in"
 --                 The server checks the password and the HWID. The first time an account logs in, the
 --                 HWID of that device is saved on the account; from then on only that device can log in.
---   WELCOME page  Shown on load when this device already has a saved session.
+--   WELCOME page  Shown on load when this device already has a saved session (small, compact window).
 --                 "Welcome back, We remembered who you are" + the account info + Continue / Log out.
 --                 Continue -> OnSuccess. Log out -> the saved session is deleted and the KEY page shows.
 --
--- The session is saved to a file in the executor workspace after every successful login
--- (writefile / readfile / isfile / delfile). It is dropped when it is expired, when it was made on a
--- different device (HWID), or when the file cannot be read.
+-- ANTI TAMPERING
+--   1. The saved session file is signed. The signature covers token, username, expiry and HWID, so
+--      changing the name (or anything else) in the file makes the signature wrong. A session with a
+--      wrong signature is deleted and the KEY page shows. A copy of the file from another device
+--      fails too, because the HWID is part of the signature.
+--   2. Verify = true makes "Continue" ask the server first (POST <ApiUrl>verify). The username and the
+--      expiry shown and passed on come from the server's answer, never from the file. Revoked accounts
+--      and revoked tokens stop working at once. This is the strong protection; the local signature
+--      alone can be beaten by someone who edits this script, because the Secret is inside it.
 --
--- Nothing is checked on this device: every decision is made by the website (the Lovable server).
--- This file only shows the UI and sends two requests:
+-- Nothing is decided on this device: every decision is made by the website (the Lovable server).
+-- This file only shows the UI and sends these requests:
 --   POST <ApiUrl>register   { key, username, password, hwid }
 --   POST <ApiUrl>login      { username, password, hwid }
+--   POST <ApiUrl>verify     { token, username, hwid }      (only when Verify = true)
 -- Every answer is JSON: { ok = true/false, message = "...", token = "...", username = "...", expires_at = "..." }
 --
 --   local auth = Auth.new({
@@ -28,6 +35,8 @@
 --       Title = "yur1",                                      -- last character is drawn in white, the rest in red
 --       ApiUrl = "https://xxxx.supabase.co/functions/v1/",   -- must end with a slash
 --       SessionFile = "Y1Auth_session.json",                 -- optional, where the session is remembered
+--       Secret = "change-this-to-your-own-random-text",      -- optional, used to sign the session file
+--       Verify = true,                                       -- optional, ask the server on Continue
 --       OnSuccess = function(session, position) end,         -- session = { token, username, expires_at, hwid }
 --       OnClose = function() end,                            -- only fires if you call auth:Close(false) yourself
 --   })
@@ -41,6 +50,8 @@ function Auth.new(opts)
 	local title = opts.Title or "yur1"
 	local API = opts.ApiUrl or ""
 	local SESSION_FILE = opts.SessionFile or "Y1Auth_session.json"
+	local SECRET = opts.Secret or "y1-session-secret-change-me"
+	local VERIFY = (opts.Verify == true)
 	-- optional: full URLs per endpoint, for when register / login do not share one base url
 	local EP = opts.Endpoints or {}
 
@@ -194,12 +205,34 @@ function Auth.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- REMEMBERED SESSION (saved in a file, never throws)
+	-- REMEMBERED SESSION (saved in a signed file, never throws)
 	---------------------------------------------------------------------
+	-- a 64 bit keyed checksum (two 32 bit parts) over everything that matters in the session.
+	-- Change any character of token, username, expiry or HWID and the signature no longer matches.
+	local function sign(s)
+		local str = tostring(s.token) .. "|" .. tostring(s.username) .. "|" .. tostring(s.expires_at)
+			.. "|" .. tostring(s.hwid) .. "|" .. SECRET
+		local h1 = 5381
+		local h2 = 52711
+		for i = 1, #str do
+			local b = string.byte(str, i)
+			h1 = (h1 * 131 + b + i) % 4294967291
+			h2 = (h2 * 257 + b * (i % 7 + 1)) % 4294967279
+		end
+		return string.format("%08x%08x", h1, h2)
+	end
+
 	local function saveSession(session)
 		pcall(function()
 			if type(writefile) == "function" then
-				writefile(SESSION_FILE, HttpService:JSONEncode(session))
+				local out = {
+					token = session.token,
+					username = session.username,
+					expires_at = session.expires_at,
+					hwid = session.hwid,
+				}
+				out.sig = sign(out)
+				writefile(SESSION_FILE, HttpService:JSONEncode(out))
 			end
 		end)
 	end
@@ -235,7 +268,8 @@ function Auth.new(opts)
 		return false
 	end
 
-	-- returns the saved session when it is still good, else nil (and removes a bad file)
+	-- returns the saved session when it is genuine and still good, else nil (and removes a bad file)
+	-- second value: a short reason when a file was thrown away
 	local function loadSession()
 		local raw = nil
 		local ok, res = pcall(function()
@@ -248,21 +282,31 @@ function Auth.new(opts)
 			raw = res
 		end
 		if raw == nil then
-			return nil
+			return nil, nil
 		end
 		local okDec, s = pcall(function()
 			return HttpService:JSONDecode(raw)
 		end)
 		if not okDec or type(s) ~= "table" or type(s.token) ~= "string" or s.token == ""
-			or type(s.username) ~= "string" or s.username == "" then
+			or type(s.username) ~= "string" or s.username == "" or type(s.sig) ~= "string" then
 			clearSession()
-			return nil
+			return nil, "Saved login was damaged. Please log in again."
 		end
-		if isExpired(s.expires_at) or (s.hwid ~= nil and s.hwid ~= getHwid()) then
+		-- tamper check: the signature must match what is in the file
+		if s.sig ~= sign(s) then
 			clearSession()
-			return nil
+			return nil, "Saved login was changed. Please log in again."
 		end
-		return s
+		-- the file must belong to this device
+		if s.hwid ~= getHwid() then
+			clearSession()
+			return nil, "Saved login is from another device. Please log in again."
+		end
+		if isExpired(s.expires_at) then
+			clearSession()
+			return nil, "Saved login expired. Please log in again."
+		end
+		return s, nil
 	end
 
 	---------------------------------------------------------------------
@@ -270,6 +314,8 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	local WIN_W = 520
 	local WIN_H = 430
+	local SMALL_W = 400 -- the welcome page uses a smaller window
+	local SMALL_H = 290
 	local SIDE = 44
 	local HEAD_H = 118 -- logo + subtitle area on top
 
@@ -314,6 +360,15 @@ function Auth.new(opts)
 		}, window)
 		corner(outline, 7)
 		stroke(outline, BORDER, 1, 0)
+	end
+
+	local function setWinSize(w, h, animate)
+		local size = UDim2.fromOffset(w, h)
+		if animate then
+			TweenService:Create(window, SMOOTH, { Size = size }):Play()
+		else
+			window.Size = size
+		end
 	end
 
 	-- LOGO: "yur" in a calm red, the last character (the 1) keeps the white gradient
@@ -614,7 +669,8 @@ function Auth.new(opts)
 
 	-- col: nil = full width, "L" = left half, "R" = right half
 	-- secondary = dark button with a border (used for "Log out")
-	local function makeButton(parent, y, text, col, secondary)
+	-- height: optional, default 42
+	local function makeButton(parent, y, text, col, secondary, height)
 		local xs = 0
 		local xo = 0
 		local ws = 1
@@ -631,7 +687,6 @@ function Auth.new(opts)
 		local baseBg = JOIN_BG
 		local hoverBg = Color3.fromRGB(255, 255, 255)
 		local textC = BLACK
-		local font = Enum.Font.GothamBold
 		if secondary then
 			baseBg = WELL
 			hoverBg = PILL
@@ -640,10 +695,10 @@ function Auth.new(opts)
 		local b = new("TextButton", {
 			AutoButtonColor = false,
 			Position = UDim2.new(xs, xo, 0, y),
-			Size = UDim2.new(ws, wo, 0, 42),
+			Size = UDim2.new(ws, wo, 0, height or 42),
 			BackgroundColor3 = baseBg,
 			BorderSizePixel = 0,
-			Font = font,
+			Font = Enum.Font.GothamBold,
 			Text = text,
 			TextSize = 14,
 			TextColor3 = textC,
@@ -707,7 +762,8 @@ function Auth.new(opts)
 	local lPass = makeField(loginPage, 0, "Password", "Your password", true, "R")
 	local lBtn = makeButton(loginPage, LOGIN_BTN_Y, "Log in")
 
-	-- WELCOME page: the remembered account (info card) + Continue / Log out
+	-- WELCOME page: the remembered account (read only info card) + Continue / Log out
+	-- these are labels, not text boxes: nothing on this page can be typed into or edited
 	local welcomePage = new("Frame", {
 		Name = "WelcomePage",
 		Position = UDim2.fromOffset(0, 0),
@@ -719,7 +775,7 @@ function Auth.new(opts)
 
 	local infoCard = new("Frame", {
 		Name = "Info",
-		Size = UDim2.new(1, 0, 0, 112),
+		Size = UDim2.new(1, 0, 0, 84),
 		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
 	}, welcomePage)
@@ -727,20 +783,20 @@ function Auth.new(opts)
 	stroke(infoCard, BORDER, 1, 0)
 
 	local function infoRow(y, caption)
-		local cap = label(infoCard, string.upper(caption), UDim2.fromOffset(16, y), UDim2.new(0.4, -16, 0, 24),
+		local cap = label(infoCard, string.upper(caption), UDim2.fromOffset(14, y), UDim2.new(0.4, -14, 0, 22),
 			Enum.Font.GothamMedium, 10, DIM_TEXT)
 		cap.ZIndex = 3
-		local val = label(infoCard, "", UDim2.new(0.4, 0, 0, y), UDim2.new(0.6, -16, 0, 24),
+		local val = label(infoCard, "", UDim2.new(0.4, 0, 0, y), UDim2.new(0.6, -14, 0, 22),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Right)
 		val.ZIndex = 3
 		return val
 	end
-	local infoUser = infoRow(12, "Username")
-	local infoExpires = infoRow(44, "Session ends")
-	local infoDevice = infoRow(76, "Device")
+	local infoUser = infoRow(8, "Username")
+	local infoExpires = infoRow(31, "Session ends")
+	local infoDevice = infoRow(54, "Device")
 
-	local wContinue = makeButton(welcomePage, 132, "Continue", "L", false)
-	local wLogout = makeButton(welcomePage, 132, "Log out", "R", true)
+	local wContinue = makeButton(welcomePage, 98, "Continue", "L", false, 38)
+	local wLogout = makeButton(welcomePage, 98, "Log out", "R", true, 38)
 
 	-- Enter jumps to the next field (the last one submits, see below)
 	kKey.onEnter = function()
@@ -772,6 +828,7 @@ function Auth.new(opts)
 
 	local function showPage(name, animate)
 		page = name
+		setWinSize(WIN_W, WIN_H, animate)
 		tabs.Visible = true
 		formArea.Visible = true
 		welcomePage.Visible = false
@@ -787,9 +844,10 @@ function Auth.new(opts)
 		paintTabs(animate)
 	end
 
-	local function showWelcome(session)
+	local function showWelcome(session, animate)
 		current = session
 		page = "welcome"
+		setWinSize(SMALL_W, SMALL_H, animate)
 		tabs.Visible = false
 		formArea.Visible = false
 		keyPage.Visible = false
@@ -797,7 +855,7 @@ function Auth.new(opts)
 		welcomePage.Visible = true
 		subtitle.Text = "Welcome back, We remembered who you are"
 		statusLine.Text = ""
-		statusLine.Position = UDim2.fromOffset(0, 190)
+		statusLine.Position = UDim2.fromOffset(0, 142)
 
 		infoUser.Text = tostring(session.username)
 		local ends = "No expiry"
@@ -941,23 +999,55 @@ function Auth.new(opts)
 		end)
 	end
 
+	-- throws the remembered session away and goes back to the starting page
+	local function dropToStart(message, good)
+		clearSession()
+		current = nil
+		lPass.clear()
+		lUser.clear()
+		showPage("key", true)
+		if message ~= nil then
+			setStatus(message, good)
+		end
+	end
+
 	local function doContinue()
 		if busy or not alive or finished or current == nil then
 			return
 		end
-		finish(current, 0)
+		if not VERIFY then
+			finish(current, 0)
+			return
+		end
+		-- ask the server: the name and expiry that are passed on come from its answer, not from the file
+		local sess = current
+		setBusy(true, wContinue, "Continue", "Checking...")
+		task.spawn(function()
+			local res = post("verify", { token = sess.token, username = sess.username, hwid = sess.hwid })
+			if not alive then
+				return
+			end
+			setBusy(false, wContinue, "Continue", "Checking...")
+			if res.ok then
+				local checked = {
+					token = sess.token,
+					username = res.username or sess.username,
+					expires_at = res.expires_at or sess.expires_at,
+					hwid = sess.hwid,
+				}
+				saveSession(checked)
+				finish(checked, 0)
+			else
+				dropToStart(tostring(res.message or "Session is no longer valid. Please log in again."), false)
+			end
+		end)
 	end
 
 	local function doLogout()
 		if busy or not alive or finished then
 			return
 		end
-		clearSession()
-		current = nil
-		lPass.clear()
-		lUser.clear()
-		showPage("key", false)
-		setStatus("You have been logged out.", true)
+		dropToStart("You have been logged out.", true)
 	end
 
 	kBtn.Activated:Connect(doRegister)
@@ -1001,10 +1091,12 @@ function Auth.new(opts)
 		end
 	end
 
-	-- a saved session on this device: open on the welcome page instead of the key page
-	local saved = loadSession()
+	-- a genuine saved session on this device: open on the small welcome page instead of the key page
+	local saved, why = loadSession()
 	if saved ~= nil then
-		showWelcome(saved)
+		showWelcome(saved, false)
+	elseif why ~= nil then
+		setStatus(why, false)
 	end
 
 	-- intro
