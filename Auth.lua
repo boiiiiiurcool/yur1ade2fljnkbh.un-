@@ -1,8 +1,8 @@
 -- Auth.lua  (key + account creation page, then login page; runs BEFORE Welcome.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same look as Welcome.lua / ui.lua. Layout: a side panel on the left (logo + short facts) and the form
--- on the right with a two-tab switch (Create account | Log in) on top. Two pages in one window:
+-- Layout: a side panel on the left (logo + short facts) and the form on the right with a
+-- two-tab switch (Create account | Log in) on top. Two pages in one window:
 --   KEY page    Key + Username + Password -> "Create account"
 --               The server checks the key (it must exist, be unused and not revoked), makes the account
 --               and marks the key as used. Then the window goes to the LOGIN page.
@@ -18,10 +18,10 @@
 --
 --   local auth = Auth.new({
 --       Name = "Y1Auth",
---       Title = "yur1",
+--       Title = "yur1",                                      -- last character is drawn in white, the rest in red
 --       ApiUrl = "https://xxxx.supabase.co/functions/v1/",   -- must end with a slash
 --       OnSuccess = function(session, position) end,         -- session = { token, username, expires_at, hwid }
---       OnClose = function() end,                            -- the X was pressed
+--       OnClose = function() end,                            -- only fires if you call auth:Close(false) yourself
 --   })
 --   auth:Close(instant)
 
@@ -57,28 +57,27 @@ function Auth.new(opts)
 	local page = "key"
 
 	---------------------------------------------------------------------
-	-- THEME (same colours as Welcome.lua)
+	-- THEME
 	---------------------------------------------------------------------
-	local BLACK      = Color3.fromRGB(10, 10, 11)
-	local BORDER     = Color3.fromRGB(36, 36, 39)
-	local CLUSTER_BG = Color3.fromRGB(30, 30, 33)
+	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (from the screenshot)
+	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on light buttons
+	local BORDER     = Color3.fromRGB(58, 58, 58)
+	local CLUSTER_BG = Color3.fromRGB(45, 45, 45)     -- fields + tab bar
+	local PANEL_BG   = Color3.fromRGB(29, 29, 29)
 	local ICON       = Color3.fromRGB(176, 176, 182)
-	local ICON_HOVER = Color3.fromRGB(240, 240, 244)
-	local HOVER_RED  = Color3.fromRGB(214, 62, 62)
+	local HOVER_RED  = Color3.fromRGB(214, 62, 62)    -- error text
 	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
-	local DIM_TEXT   = Color3.fromRGB(116, 116, 124)
+	local DIM_TEXT   = Color3.fromRGB(128, 128, 134)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
+	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo
 
 	local RADIUS = 4
-	local PANEL_BG = Color3.fromRGB(17, 17, 19)
 
 	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local SMOOTH = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 	local POP = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 	local LEAVE = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-
-	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 	---------------------------------------------------------------------
 	-- HELPERS
@@ -189,7 +188,7 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	local WIN_W = 560
 	local WIN_H = 360
-	local BAR_H = 34
+	local TOP_PAD = 18 -- space above the form (there is no title bar any more)
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
@@ -214,7 +213,7 @@ function Auth.new(opts)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(WIN_W, WIN_H),
-		BackgroundColor3 = BLACK,
+		BackgroundColor3 = BG,
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
 	}, gui)
@@ -222,23 +221,6 @@ function Auth.new(opts)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
 	do
-		local backdrop = new("Frame", {
-			Name = "Backdrop",
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BorderSizePixel = 0,
-			ZIndex = 0,
-		}, window)
-		corner(backdrop, RADIUS)
-		new("UIGradient", {
-			Rotation = 45,
-			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 31)),
-				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(16, 16, 17)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
-			}),
-		}, backdrop)
-
 		local outline = new("Frame", {
 			Name = "Outline",
 			Position = UDim2.fromOffset(1, 1),
@@ -251,89 +233,12 @@ function Auth.new(opts)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	local bar = new("Frame", {
-		Name = "TopBar",
-		Size = UDim2.new(1, 0, 0, BAR_H),
-		BackgroundTransparency = 1,
-	}, window)
-
-	-- close button (top right)
-	local closeBtn = nil
-	do
-		local PAD = 3
-		local bw = 26
-		local bh = 20
-		if touch then
-			bw = 40
-			bh = 28
-		end
-		local ch = bh + PAD * 2
-		local cluster = new("Frame", {
-			Name = "Controls",
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -8, 0, (BAR_H - ch) / 2),
-			Size = UDim2.fromOffset(bw + PAD * 2, ch),
-			BackgroundColor3 = CLUSTER_BG,
-			BorderSizePixel = 0,
-		}, bar)
-		corner(cluster, RADIUS + 2)
-
-		closeBtn = new("TextButton", {
-			Name = "close",
-			AutoButtonColor = false,
-			Text = "",
-			Position = UDim2.fromOffset(PAD, PAD),
-			Size = UDim2.fromOffset(bw, bh),
-			BackgroundColor3 = HOVER_RED,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-		}, cluster)
-		corner(closeBtn, 4)
-
-		local parts = {}
-		local function line(rot)
-			local f = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(12, 2),
-				Rotation = rot,
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-			}, closeBtn)
-			corner(f, 1)
-			table.insert(parts, f)
-		end
-		line(45)
-		line(-45)
-
-		local function paint(isOver)
-			local bgT = 1
-			if isOver then
-				bgT = 0
-			end
-			TweenService:Create(closeBtn, FAST, { BackgroundTransparency = bgT }):Play()
-			local color = ICON
-			if isOver then
-				color = ICON_HOVER
-			end
-			for i = 1, #parts do
-				TweenService:Create(parts[i], FAST, { BackgroundColor3 = color }):Play()
-			end
-		end
-		closeBtn.MouseEnter:Connect(function()
-			paint(true)
-		end)
-		closeBtn.MouseLeave:Connect(function()
-			paint(false)
-		end)
-	end
-
-	-- LEFT: side panel with the logo, what the page is for, and three short facts
+	-- LEFT: side panel with the logo at the top, what the page is for, and three short facts
 	local PANEL_W = 190
 	local panel = new("Frame", {
 		Name = "Panel",
-		Position = UDim2.fromOffset(6, 6),
-		Size = UDim2.new(0, PANEL_W, 1, -12),
+		Position = UDim2.fromOffset(8, 8),
+		Size = UDim2.new(0, PANEL_W, 1, -16),
 		BackgroundColor3 = PANEL_BG,
 		BorderSizePixel = 0,
 		ZIndex = 2,
@@ -341,27 +246,52 @@ function Auth.new(opts)
 	corner(panel, RADIUS + 2)
 	stroke(panel, BORDER, 1, 0)
 
-	local titleLabel = new("TextLabel", {
+	-- logo: "yur" in a calm red, the last character (the 1) keeps the white gradient
+	local titleHead = string.sub(title, 1, -2)
+	local titleTail = string.sub(title, -1)
+
+	local titleRow = new("Frame", {
+		Name = "Logo",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 16),
+		Size = UDim2.fromOffset(0, 44),
+		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 34),
-		Size = UDim2.new(1, 0, 0, 48),
-		Font = Enum.Font.GothamBlack,
-		Text = title,
-		TextSize = 38,
-		TextColor3 = Color3.new(1, 1, 1),
-		TextXAlignment = Enum.TextXAlignment.Center,
-		TextYAlignment = Enum.TextYAlignment.Center,
 		ZIndex = 3,
 	}, panel)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, titleRow)
+
+	local function logoPart(text, order, color)
+		return new("TextLabel", {
+			LayoutOrder = order,
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(0, 44),
+			AutomaticSize = Enum.AutomaticSize.X,
+			Font = Enum.Font.GothamBlack,
+			Text = text,
+			TextSize = 36,
+			TextColor3 = color,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 3,
+		}, titleRow)
+	end
+
+	logoPart(titleHead, 1, CALM_RED)
+	local oneLabel = logoPart(titleTail, 2, Color3.new(1, 1, 1))
 	new("UIGradient", {
 		Rotation = 90,
 		Color = ColorSequence.new({
 			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
 			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
 		}),
-	}, titleLabel)
+	}, oneLabel)
 
-	local subtitle = label(panel, "", UDim2.fromOffset(18, 90), UDim2.new(1, -36, 0, 36),
+	local subtitle = label(panel, "", UDim2.fromOffset(18, 68), UDim2.new(1, -36, 0, 32),
 		Enum.Font.Gotham, 12, ICON, Enum.TextXAlignment.Center)
 	subtitle.TextWrapped = true
 	subtitle.TextTruncate = Enum.TextTruncate.None
@@ -369,7 +299,7 @@ function Auth.new(opts)
 	subtitle.ZIndex = 3
 
 	new("Frame", {
-		Position = UDim2.fromOffset(28, 150),
+		Position = UDim2.fromOffset(28, 112),
 		Size = UDim2.new(1, -56, 0, 1),
 		BackgroundColor3 = BORDER,
 		BorderSizePixel = 0,
@@ -382,7 +312,7 @@ function Auth.new(opts)
 		"Powered by reruinz server auth",
 	}
 	for i = 1, #facts do
-		local ft = label(panel, facts[i], UDim2.fromOffset(18, 168 + (i - 1) * 28), UDim2.new(1, -36, 0, 20),
+		local ft = label(panel, facts[i], UDim2.fromOffset(18, 130 + (i - 1) * 26), UDim2.new(1, -36, 0, 20),
 			Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 		ft.ZIndex = 3
 	end
@@ -390,15 +320,15 @@ function Auth.new(opts)
 	-- RIGHT: the form
 	local content = new("Frame", {
 		Name = "Content",
-		Position = UDim2.fromOffset(PANEL_W + 6 + 18, BAR_H),
-		Size = UDim2.new(1, -(PANEL_W + 6 + 18 + 18), 1, -(BAR_H + 18)),
+		Position = UDim2.fromOffset(PANEL_W + 8 + 18, TOP_PAD),
+		Size = UDim2.new(1, -(PANEL_W + 8 + 18 + 18), 1, -(TOP_PAD + 18)),
 		BackgroundTransparency = 1,
 	}, window)
 
 	-- two-tab switch: a light pill slides between "Create account" and "Log in"
 	local tabs = new("Frame", {
 		Name = "Tabs",
-		Position = UDim2.fromOffset(0, 6),
+		Position = UDim2.fromOffset(0, 0),
 		Size = UDim2.new(1, 0, 0, 36),
 		BackgroundColor3 = CLUSTER_BG,
 		BorderSizePixel = 0,
@@ -572,10 +502,11 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- THE TWO PAGES
 	---------------------------------------------------------------------
+	local FORM_Y = 50
 	local formArea = new("Frame", {
 		Name = "Form",
-		Position = UDim2.fromOffset(0, 56),
-		Size = UDim2.new(1, 0, 1, -56),
+		Position = UDim2.fromOffset(0, FORM_Y),
+		Size = UDim2.new(1, 0, 1, -FORM_Y),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, content)
@@ -638,10 +569,10 @@ function Auth.new(opts)
 		loginPage.Visible = (name == "login")
 		if name == "key" then
 			subtitle.Text = "Enter your key and create your account"
-			statusLine.Position = UDim2.fromOffset(0, 56 + 184 + 38 + 10)
+			statusLine.Position = UDim2.fromOffset(0, FORM_Y + 184 + 38 + 10)
 		else
 			subtitle.Text = "Log in to continue"
-			statusLine.Position = UDim2.fromOffset(0, 56 + 126 + 38 + 10)
+			statusLine.Position = UDim2.fromOffset(0, FORM_Y + 126 + 38 + 10)
 		end
 		paintTabs(animate)
 	end
@@ -790,20 +721,6 @@ function Auth.new(opts)
 		end
 		setStatus("")
 		showPage("login", true)
-	end)
-
-	closeBtn.Activated:Connect(function()
-		if not alive or finished then
-			return
-		end
-		local cb = opts.OnClose
-		W:Close(false)
-		if cb then
-			local okCb, err = pcall(cb)
-			if not okCb then
-				warn("[auth] OnClose error: " .. tostring(err))
-			end
-		end
 	end)
 
 	---------------------------------------------------------------------
