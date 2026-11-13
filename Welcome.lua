@@ -460,7 +460,7 @@ function Welcome.new(opts)
 
 	local loaderGroup = new("CanvasGroup", {
 		Name = "Loader",
-		Size = UDim2.new(1, 0, 0, 46 + SKIP_H),
+		Size = UDim2.new(1, 0, 0, 52 + SKIP_H),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 0,
@@ -485,49 +485,69 @@ function Welcome.new(opts)
 	corner(overallFill, 3)
 
 	local paintSkip = nil
+	local skipLabel = nil
 
-	-- SKIP BUTTON: secondary look next to the light Continue button.
-	-- Flat dark well + thin border + double chevron. Hover: red border, brighter text,
-	-- chevrons slide forward. Press: small squeeze.
+	-- SKIP BUTTON: compact, centered under the bar. Flat dark pill with a thin border and a small
+	-- double chevron. Hover: red border, brighter text, chevrons nudge forward. No scaling, so
+	-- nothing can be cut off by the container.
 	local skipBtn = new("TextButton", {
 		Name = "Skip",
 		AutoButtonColor = false,
-		Position = UDim2.fromOffset(2, 46),
-		Size = UDim2.new(1, -4, 0, SKIP_H),
+		Text = "",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 48),
+		Size = UDim2.fromOffset(0, SKIP_H),
+		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
+	}, loaderGroup)
+	corner(skipBtn, 8)
+	new("UIPadding", {
+		PaddingLeft = UDim.new(0, 18),
+		PaddingRight = UDim.new(0, 14),
+	}, skipBtn)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 8),
+	}, skipBtn)
+	local skipStroke = stroke(skipBtn, BORDER, 1, 0)
+
+	skipLabel = new("TextLabel", {
+		LayoutOrder = 1,
+		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(0, SKIP_H),
+		AutomaticSize = Enum.AutomaticSize.X,
 		Font = Enum.Font.GothamBold,
 		Text = skipText,
 		TextSize = 12,
 		TextColor3 = DIM_TEXT,
-	}, loaderGroup)
-	corner(skipBtn, 8)
-	local skipScale = new("UIScale", { Scale = 1 }, skipBtn)
-	local skipStroke = stroke(skipBtn, BORDER, 1, 0)
+	}, skipBtn)
 
 	local skipChev = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(1, -24, 0.5, 0),
-		Size = UDim2.fromOffset(16, 12),
+		LayoutOrder = 2,
 		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(14, 12),
 	}, skipBtn)
 	local skipBars = {}
 	local function skipBar(x, y, rot)
 		local f = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.new(0.5, x, 0.5, y),
-			Size = UDim2.fromOffset(7, 2),
+			Size = UDim2.fromOffset(6, 2),
 			Rotation = rot,
 			BackgroundColor3 = DIM_TEXT,
 			BorderSizePixel = 0,
 		}, skipChev)
 		corner(f, 1)
-		table.insert(skipBars, f)
+		table.insert(skipBars, { f = f, x = x, y = y })
 	end
-	skipBar(-3.5, -2.5, 45)
-	skipBar(-3.5, 2.5, -45)
-	skipBar(2.5, -2.5, 45)
-	skipBar(2.5, 2.5, -45)
+	skipBar(-3, -2.5, 45)
+	skipBar(-3, 2.5, -45)
+	skipBar(2, -2.5, 45)
+	skipBar(2, 2.5, -45)
 
 	local skipOver = false
 	local skipDown = false
@@ -536,24 +556,26 @@ function Welcome.new(opts)
 		local bg = WELL
 		local strokeC = BORDER
 		local textC = DIM_TEXT
-		local cx = -24
-		local sc = 1
+		local shift = 0
 		if over then
 			bg = Color3.fromRGB(38, 38, 38)
 			strokeC = CALM_RED
 			textC = ICON_HOVER
-			cx = -19
-			sc = 1.02
+			shift = 2
 			if skipDown then
-				sc = 0.97
+				bg = Color3.fromRGB(31, 31, 31)
 			end
 		end
-		TweenService:Create(skipBtn, FAST, { BackgroundColor3 = bg, TextColor3 = textC }):Play()
+		skipChev.Visible = not skipping
+		TweenService:Create(skipBtn, FAST, { BackgroundColor3 = bg }):Play()
 		TweenService:Create(skipStroke, FAST, { Color = strokeC }):Play()
-		TweenService:Create(skipChev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
-		TweenService:Create(skipScale, SPRING, { Scale = sc }):Play()
+		TweenService:Create(skipLabel, FAST, { TextColor3 = textC }):Play()
 		for i = 1, #skipBars do
-			TweenService:Create(skipBars[i], FAST, { BackgroundColor3 = textC }):Play()
+			local bar = skipBars[i]
+			TweenService:Create(bar.f, SPRING, {
+				BackgroundColor3 = textC,
+				Position = UDim2.new(0.5, bar.x + shift, 0.5, bar.y),
+			}):Play()
 		end
 	end
 	skipBtn.MouseEnter:Connect(function()
@@ -809,7 +831,7 @@ function Welcome.new(opts)
 		end
 		skipping = true
 		waitDone = true
-		skipBtn.Text = "Skipping..."
+		skipLabel.Text = "Skipping..."
 		paintSkip()
 		refreshBottom()
 	end
