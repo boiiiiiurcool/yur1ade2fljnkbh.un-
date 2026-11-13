@@ -2,12 +2,11 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- One centered card: the logo on top, a two-tab switch (Create account | Log in) and the form.
--- A small notice card slides in at the bottom right of the screen and hides itself after a few seconds.
 -- Two pages in one window:
---   KEY page    Key + Username + Password -> "Create account"
+--   KEY page    Key (full width), then Username + Password side by side -> "Create account"
 --               The server checks the key (it must exist, be unused and not revoked), makes the account
 --               and marks the key as used. Then the window goes to the LOGIN page.
---   LOGIN page  Username + Password -> "Log in"
+--   LOGIN page  Username + Password side by side -> "Log in"
 --               The server checks the password and the HWID. The first time an account logs in, the
 --               HWID of that device is saved on the account; from then on only that device can log in.
 --
@@ -59,7 +58,7 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- THEME
 	---------------------------------------------------------------------
-	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (from the screenshot)
+	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (flat, no gradient)
 	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on the light button
 	local WELL       = Color3.fromRGB(28, 28, 28)     -- recessed surfaces: fields + tab bar
 	local PILL       = Color3.fromRGB(54, 54, 56)     -- the sliding tab pill
@@ -72,7 +71,6 @@ function Auth.new(opts)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
 	local BAD        = Color3.fromRGB(214, 90, 90)
 	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, focus ring, accent bar
-	local TOAST_BG   = Color3.fromRGB(24, 24, 24)
 
 	local RADIUS = 4
 
@@ -123,84 +121,6 @@ function Auth.new(opts)
 		l.TextTruncate = Enum.TextTruncate.AtEnd
 		l.Parent = parent
 		return l
-	end
-
-	---------------------------------------------------------------------
-	-- FINGERPRINT ICON (drawn from rounded lines, 24 x 24 units, matches the reference icon)
-	---------------------------------------------------------------------
-	-- arcs: { centerX, centerY, radius, startAngle, endAngle }  (degrees, 0 = right, 90 = down)
-	local FP_ARCS = {
-		{ 11.5, 11.5, 11.0, 168, 335 },
-		{ 11.5, 12.0, 7.4, 180, 360 },
-		{ 11.5, 13.0, 4.0, 180, 360 },
-	}
-	-- lines: { x1, y1, x2, y2 }
-	local FP_LINES = {
-		{ 0.9, 15.2, 0.9, 16.4 },
-		{ 4.1, 12.0, 4.1, 20.5 },
-		{ 18.9, 12.0, 18.9, 15.5 },
-		{ 17.8, 19.0, 17.8, 23.0 },
-		{ 22.3, 9.0, 22.3, 15.5 },
-		{ 7.5, 13.0, 7.5, 15.5 },
-		{ 9.6, 11.5, 9.6, 18.0 },
-		{ 13.2, 12.0, 13.2, 23.5 },
-		{ 15.5, 13.0, 15.5, 19.5 },
-	}
-	local FP_THICK = 1.7
-
-	local function fpSegment(parent, x1, y1, x2, y2, k, color)
-		local thick = FP_THICK * k
-		local dx = (x2 - x1) * k
-		local dy = (y2 - y1) * k
-		local len = math.sqrt(dx * dx + dy * dy)
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromOffset((x1 + x2) / 2 * k, (y1 + y2) / 2 * k),
-			Size = UDim2.fromOffset(len + thick, thick),
-			Rotation = math.deg(math.atan2(dy, dx)),
-			BackgroundColor3 = color,
-			BorderSizePixel = 0,
-		}, parent)
-		corner(f, thick / 2)
-		return f
-	end
-
-	local function makeFingerprint(parent, pos, px, color)
-		local k = px / 24
-		local holder = new("Frame", {
-			Name = "Fingerprint",
-			Position = pos,
-			Size = UDim2.fromOffset(px, px),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-		}, parent)
-		for i = 1, #FP_ARCS do
-			local a = FP_ARCS[i]
-			local cx = a[1]
-			local cy = a[2]
-			local r = a[3]
-			local a0 = a[4]
-			local a1 = a[5]
-			local arcLen = r * math.rad(a1 - a0)
-			local n = math.max(8, math.ceil(arcLen / 1.5))
-			local px0 = nil
-			local py0 = nil
-			for s = 0, n do
-				local ang = math.rad(a0 + (a1 - a0) * s / n)
-				local x = cx + r * math.cos(ang)
-				local y = cy + r * math.sin(ang)
-				if px0 ~= nil then
-					fpSegment(holder, px0, py0, x, y, k, color)
-				end
-				px0 = x
-				py0 = y
-			end
-		end
-		for i = 1, #FP_LINES do
-			local l = FP_LINES[i]
-			fpSegment(holder, l[1], l[2], l[3], l[4], k, color)
-		end
-		return holder
 	end
 
 	---------------------------------------------------------------------
@@ -266,9 +186,9 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 400
-	local WIN_H = 480
-	local SIDE = 32
+	local WIN_W = 520
+	local WIN_H = 430
+	local SIDE = 44
 	local HEAD_H = 118 -- logo + subtitle area on top
 
 	local gui = new("ScreenGui", {
@@ -302,23 +222,6 @@ function Auth.new(opts)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
 	do
-		-- a very soft light from the top, so the flat color has some depth
-		local sheen = new("Frame", {
-			Name = "Sheen",
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BorderSizePixel = 0,
-			ZIndex = 0,
-		}, window)
-		new("UIGradient", {
-			Rotation = 90,
-			Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0.94),
-				NumberSequenceKeypoint.new(0.45, 1),
-				NumberSequenceKeypoint.new(1, 1),
-			}),
-		}, sheen)
-
 		local outline = new("Frame", {
 			Name = "Outline",
 			Position = UDim2.fromOffset(1, 1),
@@ -490,14 +393,30 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- a labelled text field. masked = shows * instead of the text (the real text is kept in f.real)
 	-- and gets a Show / Hide switch on the right
-	local function makeField(parent, y, caption, placeholder, masked)
+	-- col: nil = full width, "L" = left half, "R" = right half
+	local function makeField(parent, y, caption, placeholder, masked, col)
 		local f = { real = "", revealed = false }
-		local cap = label(parent, string.upper(caption), UDim2.fromOffset(2, y), UDim2.new(1, -4, 0, 14),
+		local xs = 0
+		local xo = 0
+		local ws = 1
+		local wo = 0
+		if col == "L" then
+			xs = 0
+			xo = 0
+			ws = 0.5
+			wo = -6
+		elseif col == "R" then
+			xs = 0.5
+			xo = 6
+			ws = 0.5
+			wo = -6
+		end
+		local cap = label(parent, string.upper(caption), UDim2.new(xs, xo + 2, 0, y), UDim2.new(ws, wo - 4, 0, 14),
 			Enum.Font.GothamMedium, 10, DIM_TEXT)
 		cap.ZIndex = 3
 		local box = new("TextBox", {
-			Position = UDim2.fromOffset(0, y + 16),
-			Size = UDim2.new(1, 0, 0, 38),
+			Position = UDim2.new(xs, xo, 0, y + 16),
+			Size = UDim2.new(ws, wo, 0, 38),
 			BackgroundColor3 = WELL,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamMedium,
@@ -657,8 +576,8 @@ function Auth.new(opts)
 	-- THE TWO PAGES
 	---------------------------------------------------------------------
 	local FORM_Y = 58
-	local KEY_BTN_Y = 194
-	local LOGIN_BTN_Y = 142
+	local KEY_BTN_Y = 134
+	local LOGIN_BTN_Y = 80
 	local formArea = new("Frame", {
 		Name = "Form",
 		Position = UDim2.fromOffset(0, FORM_Y),
@@ -680,15 +599,15 @@ function Auth.new(opts)
 		Visible = false,
 	}, formArea)
 
-	-- KEY page: key, username, password, create account
+	-- KEY page: key on top, username + password side by side, create account
 	local kKey = makeField(keyPage, 0, "Key", "Y1-XXXX-XXXX-XXXX", false)
-	local kUser = makeField(keyPage, 62, "Username", "Create a username", false)
-	local kPass = makeField(keyPage, 124, "Password", "Create a password", true)
+	local kUser = makeField(keyPage, 62, "Username", "Create a username", false, "L")
+	local kPass = makeField(keyPage, 62, "Password", "Create a password", true, "R")
 	local kBtn = makeButton(keyPage, KEY_BTN_Y, "Create account")
 
-	-- LOGIN page: username, password, log in
-	local lUser = makeField(loginPage, 0, "Username", "Your username", false)
-	local lPass = makeField(loginPage, 62, "Password", "Your password", true)
+	-- LOGIN page: username + password side by side, log in
+	local lUser = makeField(loginPage, 0, "Username", "Your username", false, "L")
+	local lPass = makeField(loginPage, 0, "Password", "Your password", true, "R")
 	local lBtn = makeButton(loginPage, LOGIN_BTN_Y, "Log in")
 
 	-- Enter jumps to the next field (the last one submits, see below)
@@ -799,8 +718,6 @@ function Auth.new(opts)
 		end)
 	end
 
-	local hideToast = nil
-
 	local function doLogin()
 		if busy or not alive or finished then
 			return
@@ -840,7 +757,6 @@ function Auth.new(opts)
 					end
 					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-					hideToast()
 					task.delay(LEAVE.Time + 0.03, function()
 						if not alive then
 							return
@@ -883,50 +799,6 @@ function Auth.new(opts)
 	end)
 
 	---------------------------------------------------------------------
-	-- NOTICE CARD (bottom right of the screen, hides itself after a few seconds)
-	---------------------------------------------------------------------
-	local TOAST_W = 350
-	local TOAST_H = 96
-	local toastIn = UDim2.new(1, -18, 1, -18)
-	local toastOut = UDim2.new(1, TOAST_W + 40, 1, -18)
-	local toastHidden = false
-
-	local toast = new("Frame", {
-		Name = "Notice",
-		AnchorPoint = Vector2.new(1, 1),
-		Position = toastOut,
-		Size = UDim2.fromOffset(TOAST_W, TOAST_H),
-		BackgroundColor3 = TOAST_BG,
-		BorderSizePixel = 0,
-		ZIndex = 50,
-	}, gui)
-	corner(toast, 10)
-	stroke(toast, BORDER, 1, 0)
-
-	makeFingerprint(toast, UDim2.fromOffset(20, 22), 38, ICON)
-
-	local tTitle = label(toast, "Reruinz Server Auth", UDim2.fromOffset(76, 14), UDim2.new(1, -92, 0, 16),
-		Enum.Font.GothamBold, 12, DIM_TEXT)
-	tTitle.ZIndex = 51
-	local tBody = label(toast, "Dont attempt to do anything silly because its not worth the pain",
-		UDim2.fromOffset(76, 33), UDim2.new(1, -92, 0, 34), Enum.Font.GothamMedium, 13, TEXT_COLOR)
-	tBody.TextWrapped = true
-	tBody.TextTruncate = Enum.TextTruncate.None
-	tBody.TextYAlignment = Enum.TextYAlignment.Top
-	tBody.ZIndex = 51
-	local tFoot = label(toast, "rock and roll", UDim2.fromOffset(76, 72), UDim2.new(1, -92, 0, 16),
-		Enum.Font.Gotham, 12, DIM_TEXT)
-	tFoot.ZIndex = 51
-
-	hideToast = function()
-		if toastHidden then
-			return
-		end
-		toastHidden = true
-		TweenService:Create(toast, LEAVE, { Position = toastOut }):Play()
-	end
-
-	---------------------------------------------------------------------
 	-- PUBLIC API
 	---------------------------------------------------------------------
 	function W:Close(instant)
@@ -939,7 +811,6 @@ function Auth.new(opts)
 		else
 			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
 			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-			hideToast()
 			task.delay(LEAVE.Time + 0.03, function()
 				gui:Destroy()
 			end)
@@ -949,16 +820,6 @@ function Auth.new(opts)
 	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-	task.delay(0.4, function()
-		if alive and not toastHidden then
-			TweenService:Create(toast, SMOOTH, { Position = toastIn }):Play()
-		end
-	end)
-	task.delay(8.5, function()
-		if alive then
-			hideToast()
-		end
-	end)
 
 	return W
 end
