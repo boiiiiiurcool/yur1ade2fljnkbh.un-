@@ -23,6 +23,10 @@
 -- The Continue button only appears after WaitSeconds (default 10) AND once loading finished.
 -- Enter cannot skip the wait either.
 --
+-- SKIP button (under the overall bar while loading): loads faster (each module is downloaded
+-- once, no final scan, no wait) and then continues by itself as soon as everything is ready.
+-- Also available as welcome:Skip(). Text can be changed with opts.SkipText.
+--
 -- The window is NOT draggable. It always opens in the middle of the screen.
 -- OnContinue receives (position, modules). modules is a table keyed by each entry's Id.
 --
@@ -55,6 +59,7 @@ function Welcome.new(opts)
 	local guiName = opts.Name or "Y1Welcome"
 	local title = opts.Title or "yur1"
 	local buttonText = opts.ButtonText or "Continue"
+	local skipText = opts.SkipText or "Skip"
 	local WAIT_SECONDS = opts.WaitSeconds or 10
 
 	local BASE = opts.Base or ""
@@ -84,6 +89,7 @@ function Welcome.new(opts)
 	local state = "loading"
 	local waitDone = false      -- true once WAIT_SECONDS have passed
 	local btnShown = false      -- true while the Continue button is the thing on screen
+	local skipping = false      -- true once Skip was pressed
 	local loaded = {}           -- Id -> module table
 	local sources = {}          -- file name -> source text we are holding
 	local lastError = nil       -- last error text (never printed)
@@ -169,6 +175,10 @@ function Welcome.new(opts)
 	local BTN_H = 42
 	if touch then
 		BTN_H = 48
+	end
+	local SKIP_H = 28
+	if touch then
+		SKIP_H = 36
 	end
 
 	local gui = new("ScreenGui", {
@@ -344,7 +354,7 @@ function Welcome.new(opts)
 	local CONTENT_H = WIN_H - (HEAD_H + 20)
 	local ROW_H = 34
 	local LIST_Y = 18
-	local LIST_H = 170
+	local LIST_H = 150
 	local BOT_Y = LIST_Y + LIST_H + 12
 	local BOT_H = CONTENT_H - BOT_Y
 	local total = #moduleList
@@ -446,7 +456,7 @@ function Welcome.new(opts)
 
 	local loaderGroup = new("CanvasGroup", {
 		Name = "Loader",
-		Size = UDim2.new(1, 0, 0, 48),
+		Size = UDim2.new(1, 0, 0, 46 + SKIP_H),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 0,
@@ -469,6 +479,36 @@ function Welcome.new(opts)
 		BorderSizePixel = 0,
 	}, overallTrack)
 	corner(overallFill, 3)
+
+	-- skip button: flat, outlined, under the overall bar
+	local skipBtn = new("TextButton", {
+		Name = "Skip",
+		AutoButtonColor = false,
+		Position = UDim2.fromOffset(2, 46),
+		Size = UDim2.new(1, -4, 0, SKIP_H),
+		BackgroundColor3 = WELL,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		Text = skipText,
+		TextSize = 12,
+		TextColor3 = DIM_TEXT,
+	}, loaderGroup)
+	corner(skipBtn, 8)
+	local skipStroke = stroke(skipBtn, BORDER, 1, 0)
+	skipBtn.MouseEnter:Connect(function()
+		if skipping then
+			return
+		end
+		TweenService:Create(skipBtn, FAST, { TextColor3 = ICON_HOVER }):Play()
+		TweenService:Create(skipStroke, FAST, { Color = ICON }):Play()
+	end)
+	skipBtn.MouseLeave:Connect(function()
+		if skipping then
+			return
+		end
+		TweenService:Create(skipBtn, FAST, { TextColor3 = DIM_TEXT }):Play()
+		TweenService:Create(skipStroke, FAST, { Color = BORDER }):Play()
+	end)
 
 	local btnGroup = new("CanvasGroup", {
 		Name = "ButtonGroup",
@@ -516,7 +556,7 @@ function Welcome.new(opts)
 	chevBar(2.5, -45)
 
 	-- what is being checked right now (also text from SetState), under the bar / button
-	local status = label(bottom, "", UDim2.fromOffset(2, 54), UDim2.new(1, -4, 0, 34),
+	local status = label(bottom, "", UDim2.fromOffset(2, 46 + SKIP_H + 8), UDim2.new(1, -4, 0, 20),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 	status.TextWrapped = true
 	status.TextTruncate = Enum.TextTruncate.None
@@ -610,6 +650,8 @@ function Welcome.new(opts)
 		TweenService:Create(chev, SPRING, { Position = UDim2.new(1, cx, 0.5, 0) }):Play()
 	end
 
+	local doContinue = nil
+
 	-- decides what the bottom shows
 	local function refreshBottom()
 		if not alive then
@@ -632,6 +674,8 @@ function Welcome.new(opts)
 			overallFill.BackgroundColor3 = ICON_HOVER
 			subtitle.Text = "Loading everything safely"
 		end
+
+		skipBtn.Visible = (state ~= "error")
 
 		local showBtn = (state == "ready" and waitDone)
 		if showBtn and not btnShown then
@@ -659,6 +703,11 @@ function Welcome.new(opts)
 				end
 			end)
 		end
+
+		-- Skip was pressed: continue by itself as soon as everything is ready
+		if skipping and state == "ready" and btnShown then
+			task.defer(doContinue)
+		end
 	end
 
 	local function leaveAndCallback(leavePos)
@@ -672,7 +721,7 @@ function Welcome.new(opts)
 		end
 	end
 
-	local function doContinue()
+	doContinue = function()
 		if not alive or continued or state ~= "ready" or not waitDone or not btnShown then
 			return
 		end
@@ -686,6 +735,22 @@ function Welcome.new(opts)
 			end
 		end)
 	end
+
+	local function requestSkip()
+		if not alive or skipping or continued then
+			return
+		end
+		if state ~= "loading" and state ~= "ready" then
+			return
+		end
+		skipping = true
+		waitDone = true
+		skipBtn.Text = "Skipping..."
+		TweenService:Create(skipBtn, FAST, { TextColor3 = DIM_TEXT }):Play()
+		TweenService:Create(skipStroke, FAST, { Color = BORDER }):Play()
+		refreshBottom()
+	end
+	skipBtn.Activated:Connect(requestSkip)
 
 	btn.MouseEnter:Connect(function()
 		hovering = true
@@ -748,6 +813,10 @@ function Welcome.new(opts)
 			status.TextColor3 = DIM_TEXT
 		end
 		refreshBottom()
+	end
+
+	function W:Skip()
+		requestSkip()
 	end
 
 	function W:GetPosition()
@@ -868,6 +937,9 @@ function Welcome.new(opts)
 			if not alive then
 				return nil
 			end
+			if skipping and count >= 1 then
+				break    -- Skip pressed: one good copy is enough
+			end
 			setInfo("[" .. index .. "/" .. count_total .. "] Checking module " .. index)
 			local src = fetch(entry.Name)
 			if ref == nil or src == ref then
@@ -882,7 +954,9 @@ function Welcome.new(opts)
 				end
 			end
 			setRow(index, 0.85 * count / CHECKS, "Checking " .. count .. "/" .. CHECKS, "active")
-			task.wait(0.05)
+			if not skipping then
+				task.wait(0.05)
+			end
 		end
 		return ref
 	end
@@ -931,8 +1005,12 @@ function Welcome.new(opts)
 				return
 			end
 			if sources[entry.Name] then
-				setInfo("Final scan: module " .. i .. " of " .. count_total)
-				local ok, src = pcall(fetch, entry.Name)
+				local ok = false
+				local src = nil
+				if not skipping then
+					setInfo("Final scan: module " .. i .. " of " .. count_total)
+					ok, src = pcall(fetch, entry.Name)
+				end
 				if ok and src ~= sources[entry.Name] then
 					local ok2, mod = pcall(compile, entry, src)
 					if ok2 then
