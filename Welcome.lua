@@ -358,7 +358,7 @@ function Welcome.new(opts)
 	local CONTENT_H = WIN_H - (HEAD_H + 20)
 	local ROW_H = 34
 	local LIST_Y = 18
-	local LIST_H = 150
+	local LIST_H = 140
 	local BOT_Y = LIST_Y + LIST_H + 12
 	local BOT_H = CONTENT_H - BOT_Y
 	local total = #moduleList
@@ -460,7 +460,7 @@ function Welcome.new(opts)
 
 	local loaderGroup = new("CanvasGroup", {
 		Name = "Loader",
-		Size = UDim2.new(1, 0, 0, 52 + SKIP_H),
+		Size = UDim2.new(1, 0, 0, 48),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 0,
@@ -487,50 +487,53 @@ function Welcome.new(opts)
 	local paintSkip = nil
 	local skipLabel = nil
 
-	-- SKIP BUTTON: compact, centered under the bar. Flat dark pill with a thin border and a small
-	-- double chevron. Hover: red border, brighter text, chevrons nudge forward. No scaling, so
-	-- nothing can be cut off by the container.
+	-- SKIP BUTTON: fixed size, lives in the bottom area (NOT inside the clipping loader group), and
+	-- draws its own 1px border with an inner face instead of a UIStroke, so nothing can be cut off.
+	local skipW = 124
+	if touch then
+		skipW = 140
+	end
 	local skipBtn = new("TextButton", {
 		Name = "Skip",
 		AutoButtonColor = false,
 		Text = "",
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 48),
-		Size = UDim2.fromOffset(0, SKIP_H),
-		AutomaticSize = Enum.AutomaticSize.X,
+		Position = UDim2.new(0.5, 0, 0, 52),
+		Size = UDim2.fromOffset(skipW, SKIP_H),
+		BackgroundColor3 = BORDER,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, bottom)
+	corner(skipBtn, 8)
+	local skipFace = new("Frame", {
+		Position = UDim2.fromOffset(1, 1),
+		Size = UDim2.new(1, -2, 1, -2),
 		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
-	}, loaderGroup)
-	corner(skipBtn, 8)
-	new("UIPadding", {
-		PaddingLeft = UDim.new(0, 18),
-		PaddingRight = UDim.new(0, 14),
+		ZIndex = 3,
 	}, skipBtn)
-	new("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		HorizontalAlignment = Enum.HorizontalAlignment.Center,
-		VerticalAlignment = Enum.VerticalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 8),
-	}, skipBtn)
-	local skipStroke = stroke(skipBtn, BORDER, 1, 0)
+	corner(skipFace, 7)
 
 	skipLabel = new("TextLabel", {
-		LayoutOrder = 1,
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.new(1, -26, 1, 0),
 		BackgroundTransparency = 1,
-		Size = UDim2.fromOffset(0, SKIP_H),
-		AutomaticSize = Enum.AutomaticSize.X,
 		Font = Enum.Font.GothamBold,
 		Text = skipText,
 		TextSize = 12,
 		TextColor3 = DIM_TEXT,
-	}, skipBtn)
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextTruncate = Enum.TextTruncate.None,
+		ZIndex = 4,
+	}, skipFace)
 
 	local skipChev = new("Frame", {
-		LayoutOrder = 2,
-		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(1, -20, 0.5, 0),
 		Size = UDim2.fromOffset(14, 12),
-	}, skipBtn)
+		BackgroundTransparency = 1,
+		ZIndex = 4,
+	}, skipFace)
 	local skipBars = {}
 	local function skipBar(x, y, rot)
 		local f = new("Frame", {
@@ -540,6 +543,7 @@ function Welcome.new(opts)
 			Rotation = rot,
 			BackgroundColor3 = DIM_TEXT,
 			BorderSizePixel = 0,
+			ZIndex = 4,
 		}, skipChev)
 		corner(f, 1)
 		table.insert(skipBars, { f = f, x = x, y = y })
@@ -553,22 +557,22 @@ function Welcome.new(opts)
 	local skipDown = false
 	paintSkip = function()
 		local over = skipOver and not skipping
-		local bg = WELL
-		local strokeC = BORDER
+		local face = WELL
+		local edge = BORDER
 		local textC = DIM_TEXT
 		local shift = 0
 		if over then
-			bg = Color3.fromRGB(38, 38, 38)
-			strokeC = CALM_RED
+			face = Color3.fromRGB(38, 38, 38)
+			edge = CALM_RED
 			textC = ICON_HOVER
 			shift = 2
 			if skipDown then
-				bg = Color3.fromRGB(31, 31, 31)
+				face = Color3.fromRGB(31, 31, 31)
 			end
 		end
 		skipChev.Visible = not skipping
-		TweenService:Create(skipBtn, FAST, { BackgroundColor3 = bg }):Play()
-		TweenService:Create(skipStroke, FAST, { Color = strokeC }):Play()
+		TweenService:Create(skipBtn, FAST, { BackgroundColor3 = edge }):Play()
+		TweenService:Create(skipFace, FAST, { BackgroundColor3 = face }):Play()
 		TweenService:Create(skipLabel, FAST, { TextColor3 = textC }):Play()
 		for i = 1, #skipBars do
 			local bar = skipBars[i]
@@ -642,7 +646,7 @@ function Welcome.new(opts)
 	chevBar(2.5, -45)
 
 	-- what is being checked right now (also text from SetState), under the bar / button
-	local status = label(bottom, "", UDim2.fromOffset(2, 46 + SKIP_H + 8), UDim2.new(1, -4, 0, 20),
+	local status = label(bottom, "", UDim2.fromOffset(2, 52 + SKIP_H + 6), UDim2.new(1, -4, 0, 18),
 		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
 	status.TextWrapped = true
 	status.TextTruncate = Enum.TextTruncate.None
@@ -761,9 +765,8 @@ function Welcome.new(opts)
 			subtitle.Text = "Loading everything safely"
 		end
 
-		skipBtn.Visible = (state ~= "error")
-
 		local showBtn = (state == "ready" and waitDone)
+		skipBtn.Visible = (state ~= "error") and not showBtn
 		if showBtn and not btnShown then
 			btnShown = true
 			swapToken = swapToken + 1
