@@ -1,8 +1,12 @@
--- pingspoofer.lua  (Y1 module: a Ping Spoofer card on the Misc > Extra page, built by animation.lua)
+-- pingspoofer.lua  (Y1 module: the Ping Spoofer row on the Misc > Extra page, built by animation.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same style as the other cards (Hitbox Expander, Orbit, Spin Bot): a small card with an Enable switch and
--- three dots. The dots open a pop-up with the Ping / Jitter / Speed sliders and live readouts.
+-- LOCATION: this module no longer makes its own card at a fixed spot. extra.lua already builds the
+-- "Quality Of Life" group (Animations / Anti AFK / Ping Spoofer) and hands the empty third row over in
+-- ctx.Rows.ping. This file fills that row the same way animation.lua fills the others:
+-- feature name + status text, an Enable switch, and three dots. Because the row lives inside the page's
+-- scrolling body, it scrolls with the page and can never overlap anything.
+-- The dots open a pop-up with the Ping / Jitter / Speed sliders and live readouts.
 --
 -- ONE METHOD: value override.
 -- Every place the ping is READ or DRAWN gets your number instead of the real one:
@@ -19,8 +23,7 @@
 -- Jitter: +/- 0..100 ms, random ups and drops. Speed: 1 (slow) .. 10 (fast) = how often it jumps.
 --
 -- Build signature: PingSpoofer.build(container, T, H, ctx) -> { Unload = fn }
--- ctx.Helpers is handed over by extra.lua (switch, dots, floating pop-up, placement).
--- Optional: ctx.PingY = y position (pixels) of the card on the page (default 320, the row under Orbit / Spin Bot).
+-- ctx.Helpers and ctx.Rows are handed over by extra.lua (through animation.lua).
 
 local PingSpoofer = {}
 
@@ -32,14 +35,15 @@ function PingSpoofer.build(parent, T, H, ctx)
 	local player = Players.LocalPlayer
 
 	local new, corner, stroke, label = H.new, H.corner, H.stroke, H.label
-	local RADIUS = T.RADIUS
 
 	local X = nil
+	local R = nil
 	if type(ctx) == "table" then
 		X = ctx.Helpers
+		R = ctx.Rows
 	end
-	if type(X) ~= "table" then
-		warn("[pingspoofer] extra.lua did not pass its helpers")
+	if type(X) ~= "table" or type(R) ~= "table" or typeof(R.ping) ~= "Instance" then
+		warn("[pingspoofer] extra.lua did not pass its helpers / the ping row")
 		return { Unload = function() end }
 	end
 
@@ -668,31 +672,17 @@ function PingSpoofer.build(parent, T, H, ctx)
 	end
 
 	---------------------------------------------------------------------
-	-- card (row 5, left) + settings pop-up
+	-- the row (Quality Of Life, row 3) + settings pop-up
 	---------------------------------------------------------------------
-	local cardY = 320
-	if type(ctx) == "table" and type(ctx.PingY) == "number" then
-		cardY = ctx.PingY
-	end
-
-	local card = new("Frame", {
-		Name = "PingSpooferCard",
-		Position = UDim2.fromOffset(2, cardY),
-		Size = UDim2.new(0.5, -6, 0, 46),
-		BackgroundColor3 = T.SIDEBAR_BG,
+	-- everything this module puts on the row lives in one holder, so unloading removes exactly that
+	local holder = new("Frame", {
+		Name = "PingSpooferHolder",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-	}, parent)
-	corner(card, RADIUS + 4)
-	stroke(card, T.BORDER, 1, 0)
+	}, R.ping)
 
-	local caption = label(parent, "PING SPOOFER", UDim2.fromOffset(4, cardY - 18), UDim2.new(0.5, -10, 0, 14),
-		Enum.Font.GothamMedium, 11, T.DIM_TEXT)
-
-	label(card, "Enable", UDim2.fromOffset(14, 7), UDim2.new(1, -140, 0, 16),
-		Enum.Font.GothamMedium, 13, T.TEXT_COLOR)
-	local sub = label(card, "", UDim2.fromOffset(14, 25), UDim2.new(1, -110, 0, 14),
-		Enum.Font.Gotham, 11, T.DIM_TEXT)
-	sub.RichText = true
+	local sub = X.rowHead(holder, "Ping Spoofer")
 
 	local function refreshSub()
 		local state = '<font color="rgb(116,116,124)">Off</font>'
@@ -703,7 +693,7 @@ function PingSpoofer.build(parent, T, H, ctx)
 	end
 	refreshSub()
 
-	X.makeSwitch(card, false, function(on)
+	X.makeSwitch(holder, false, function(on)
 		S.on = on
 		shared.on = on
 		if on then
@@ -716,7 +706,7 @@ function PingSpoofer.build(parent, T, H, ctx)
 		refreshSub()
 	end, 23)
 
-	local dotsBtn = X.makeDots(card, UDim2.new(1, -58, 0, 23))
+	local dotsBtn = X.makeDots(holder, UDim2.new(1, -58, 0, 23))
 
 	local PW = 290
 	local PH = 268
@@ -989,9 +979,9 @@ function PingSpoofer.build(parent, T, H, ctx)
 		pcall(function()
 			F.close()
 		end)
+		-- the row itself belongs to extra.lua; only what this module added is removed
 		pcall(function()
-			card:Destroy()
-			caption:Destroy()
+			holder:Destroy()
 			pop:Destroy()
 		end)
 		if okEnv and genv and genv.__Y1_PING_STOP == unload then
