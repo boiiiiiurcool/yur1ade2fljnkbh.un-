@@ -2,13 +2,20 @@
 -- ASCII only, conservative syntax (no += and no continue).
 --
 -- One centered card: the logo on top, a two-tab switch (Create account | Log in) and the form.
--- Two pages in one window:
---   KEY page    Key (full width), then Username + Password side by side -> "Create account"
---               The server checks the key (it must exist, be unused and not revoked), makes the account
---               and marks the key as used. Then the window goes to the LOGIN page.
---   LOGIN page  Username + Password side by side -> "Log in"
---               The server checks the password and the HWID. The first time an account logs in, the
---               HWID of that device is saved on the account; from then on only that device can log in.
+-- Three pages in one window:
+--   KEY page      Key (full width), then Username + Password side by side -> "Create account"
+--                 The server checks the key (it must exist, be unused and not revoked), makes the account
+--                 and marks the key as used. Then the window goes to the LOGIN page.
+--   LOGIN page    Username + Password side by side -> "Log in"
+--                 The server checks the password and the HWID. The first time an account logs in, the
+--                 HWID of that device is saved on the account; from then on only that device can log in.
+--   WELCOME page  Shown on load when this device already has a saved session.
+--                 "Welcome back, We remembered who you are" + the account info + Continue / Log out.
+--                 Continue -> OnSuccess. Log out -> the saved session is deleted and the KEY page shows.
+--
+-- The session is saved to a file in the executor workspace after every successful login
+-- (writefile / readfile / isfile / delfile). It is dropped when it is expired, when it was made on a
+-- different device (HWID), or when the file cannot be read.
 --
 -- Nothing is checked on this device: every decision is made by the website (the Lovable server).
 -- This file only shows the UI and sends two requests:
@@ -20,6 +27,7 @@
 --       Name = "Y1Auth",
 --       Title = "yur1",                                      -- last character is drawn in white, the rest in red
 --       ApiUrl = "https://xxxx.supabase.co/functions/v1/",   -- must end with a slash
+--       SessionFile = "Y1Auth_session.json",                 -- optional, where the session is remembered
 --       OnSuccess = function(session, position) end,         -- session = { token, username, expires_at, hwid }
 --       OnClose = function() end,                            -- only fires if you call auth:Close(false) yourself
 --   })
@@ -32,6 +40,7 @@ function Auth.new(opts)
 	local guiName = opts.Name or "Y1Auth"
 	local title = opts.Title or "yur1"
 	local API = opts.ApiUrl or ""
+	local SESSION_FILE = opts.SessionFile or "Y1Auth_session.json"
 	-- optional: full URLs per endpoint, for when register / login do not share one base url
 	local EP = opts.Endpoints or {}
 
@@ -54,13 +63,14 @@ function Auth.new(opts)
 	local busy = false
 	local finished = false
 	local page = "key"
+	local current = nil -- the remembered session shown on the welcome page
 
 	---------------------------------------------------------------------
 	-- THEME
 	---------------------------------------------------------------------
 	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (flat, no gradient)
 	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on the light button
-	local WELL       = Color3.fromRGB(28, 28, 28)     -- recessed surfaces: fields + tab bar
+	local WELL       = Color3.fromRGB(28, 28, 28)     -- recessed surfaces: fields + tab bar + info card
 	local PILL       = Color3.fromRGB(54, 54, 56)     -- the sliding tab pill
 	local BORDER     = Color3.fromRGB(54, 54, 54)
 	local BORDER_HI  = Color3.fromRGB(78, 78, 80)     -- field border on hover
@@ -70,7 +80,7 @@ function Auth.new(opts)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
 	local BAD        = Color3.fromRGB(214, 90, 90)
-	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, focus ring, accent bar
+	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, focus ring
 
 	local RADIUS = 4
 
@@ -184,6 +194,78 @@ function Auth.new(opts)
 	end
 
 	---------------------------------------------------------------------
+	-- REMEMBERED SESSION (saved in a file, never throws)
+	---------------------------------------------------------------------
+	local function saveSession(session)
+		pcall(function()
+			if type(writefile) == "function" then
+				writefile(SESSION_FILE, HttpService:JSONEncode(session))
+			end
+		end)
+	end
+
+	local function clearSession()
+		pcall(function()
+			if type(isfile) == "function" and type(delfile) == "function" and isfile(SESSION_FILE) then
+				delfile(SESSION_FILE)
+			end
+		end)
+	end
+
+	-- true when an ISO date like 2026-12-01T10:00:00Z is in the past (unreadable dates count as not expired)
+	local function isExpired(stamp)
+		if type(stamp) ~= "string" then
+			return false
+		end
+		local y, mo, d, h, mi, s = string.match(stamp, "(%d+)-(%d+)-(%d+)[T ](%d+):(%d+):(%d+)")
+		if y == nil then
+			return false
+		end
+		local ok, res = pcall(function()
+			local t = os.time({
+				year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+				hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
+			})
+			local off = os.time(os.date("*t")) - os.time(os.date("!*t"))
+			return (t + off) < os.time()
+		end)
+		if ok then
+			return res
+		end
+		return false
+	end
+
+	-- returns the saved session when it is still good, else nil (and removes a bad file)
+	local function loadSession()
+		local raw = nil
+		local ok, res = pcall(function()
+			if type(isfile) == "function" and type(readfile) == "function" and isfile(SESSION_FILE) then
+				return readfile(SESSION_FILE)
+			end
+			return nil
+		end)
+		if ok and type(res) == "string" and res ~= "" then
+			raw = res
+		end
+		if raw == nil then
+			return nil
+		end
+		local okDec, s = pcall(function()
+			return HttpService:JSONDecode(raw)
+		end)
+		if not okDec or type(s) ~= "table" or type(s.token) ~= "string" or s.token == ""
+			or type(s.username) ~= "string" or s.username == "" then
+			clearSession()
+			return nil
+		end
+		if isExpired(s.expires_at) or (s.hwid ~= nil and s.hwid ~= getHwid()) then
+			clearSession()
+			return nil
+		end
+		return s
+	end
+
+	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
 	local WIN_W = 520
@@ -232,18 +314,6 @@ function Auth.new(opts)
 		}, window)
 		corner(outline, 7)
 		stroke(outline, BORDER, 1, 0)
-
-		-- small accent bar on the top edge
-		local accent = new("Frame", {
-			Name = "Accent",
-			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 0, 0),
-			Size = UDim2.fromOffset(44, 2),
-			BackgroundColor3 = CALM_RED,
-			BorderSizePixel = 0,
-			ZIndex = 21,
-		}, window)
-		corner(accent, 1)
 	end
 
 	-- LOGO: "yur" in a calm red, the last character (the 1) keeps the white gradient
@@ -542,25 +612,52 @@ function Auth.new(opts)
 		return f
 	end
 
-	local function makeButton(parent, y, text)
+	-- col: nil = full width, "L" = left half, "R" = right half
+	-- secondary = dark button with a border (used for "Log out")
+	local function makeButton(parent, y, text, col, secondary)
+		local xs = 0
+		local xo = 0
+		local ws = 1
+		local wo = 0
+		if col == "L" then
+			ws = 0.5
+			wo = -6
+		elseif col == "R" then
+			xs = 0.5
+			xo = 6
+			ws = 0.5
+			wo = -6
+		end
+		local baseBg = JOIN_BG
+		local hoverBg = Color3.fromRGB(255, 255, 255)
+		local textC = BLACK
+		local font = Enum.Font.GothamBold
+		if secondary then
+			baseBg = WELL
+			hoverBg = PILL
+			textC = TEXT_COLOR
+		end
 		local b = new("TextButton", {
 			AutoButtonColor = false,
-			Position = UDim2.fromOffset(0, y),
-			Size = UDim2.new(1, 0, 0, 42),
-			BackgroundColor3 = JOIN_BG,
+			Position = UDim2.new(xs, xo, 0, y),
+			Size = UDim2.new(ws, wo, 0, 42),
+			BackgroundColor3 = baseBg,
 			BorderSizePixel = 0,
-			Font = Enum.Font.GothamBold,
+			Font = font,
 			Text = text,
 			TextSize = 14,
-			TextColor3 = BLACK,
+			TextColor3 = textC,
 		}, parent)
 		corner(b, 8)
+		if secondary then
+			stroke(b, BORDER, 1, 0)
+		end
 		local sc = new("UIScale", { Scale = 1 }, b)
 		b.MouseEnter:Connect(function()
-			TweenService:Create(b, FAST, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+			TweenService:Create(b, FAST, { BackgroundColor3 = hoverBg }):Play()
 		end)
 		b.MouseLeave:Connect(function()
-			TweenService:Create(b, FAST, { BackgroundColor3 = JOIN_BG }):Play()
+			TweenService:Create(b, FAST, { BackgroundColor3 = baseBg }):Play()
 			TweenService:Create(sc, FAST, { Scale = 1 }):Play()
 		end)
 		b.MouseButton1Down:Connect(function()
@@ -573,7 +670,7 @@ function Auth.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- THE TWO PAGES
+	-- THE PAGES
 	---------------------------------------------------------------------
 	local FORM_Y = 58
 	local KEY_BTN_Y = 134
@@ -610,6 +707,41 @@ function Auth.new(opts)
 	local lPass = makeField(loginPage, 0, "Password", "Your password", true, "R")
 	local lBtn = makeButton(loginPage, LOGIN_BTN_Y, "Log in")
 
+	-- WELCOME page: the remembered account (info card) + Continue / Log out
+	local welcomePage = new("Frame", {
+		Name = "WelcomePage",
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, content)
+
+	local infoCard = new("Frame", {
+		Name = "Info",
+		Size = UDim2.new(1, 0, 0, 112),
+		BackgroundColor3 = WELL,
+		BorderSizePixel = 0,
+	}, welcomePage)
+	corner(infoCard, 8)
+	stroke(infoCard, BORDER, 1, 0)
+
+	local function infoRow(y, caption)
+		local cap = label(infoCard, string.upper(caption), UDim2.fromOffset(16, y), UDim2.new(0.4, -16, 0, 24),
+			Enum.Font.GothamMedium, 10, DIM_TEXT)
+		cap.ZIndex = 3
+		local val = label(infoCard, "", UDim2.new(0.4, 0, 0, y), UDim2.new(0.6, -16, 0, 24),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Right)
+		val.ZIndex = 3
+		return val
+	end
+	local infoUser = infoRow(12, "Username")
+	local infoExpires = infoRow(44, "Session ends")
+	local infoDevice = infoRow(76, "Device")
+
+	local wContinue = makeButton(welcomePage, 132, "Continue", "L", false)
+	local wLogout = makeButton(welcomePage, 132, "Log out", "R", true)
+
 	-- Enter jumps to the next field (the last one submits, see below)
 	kKey.onEnter = function()
 		kUser.box:CaptureFocus()
@@ -640,6 +772,9 @@ function Auth.new(opts)
 
 	local function showPage(name, animate)
 		page = name
+		tabs.Visible = true
+		formArea.Visible = true
+		welcomePage.Visible = false
 		keyPage.Visible = (name == "key")
 		loginPage.Visible = (name == "login")
 		if name == "key" then
@@ -651,6 +786,28 @@ function Auth.new(opts)
 		end
 		paintTabs(animate)
 	end
+
+	local function showWelcome(session)
+		current = session
+		page = "welcome"
+		tabs.Visible = false
+		formArea.Visible = false
+		keyPage.Visible = false
+		loginPage.Visible = false
+		welcomePage.Visible = true
+		subtitle.Text = "Welcome back, We remembered who you are"
+		statusLine.Text = ""
+		statusLine.Position = UDim2.fromOffset(0, 190)
+
+		infoUser.Text = tostring(session.username)
+		local ends = "No expiry"
+		if type(session.expires_at) == "string" and session.expires_at ~= "" then
+			ends = string.match(session.expires_at, "^(%d+-%d+-%d+)") or session.expires_at
+		end
+		infoExpires.Text = ends
+		infoDevice.Text = "This device"
+	end
+
 	showPage("key", false)
 
 	---------------------------------------------------------------------
@@ -669,6 +826,32 @@ function Auth.new(opts)
 
 	local function trim(s)
 		return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
+	end
+
+	-- fades the window out, closes it and hands the session to OnSuccess
+	local function finish(session, wait)
+		finished = true
+		local leavePos = window.Position
+		task.delay(wait, function()
+			if not alive then
+				return
+			end
+			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
+			TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
+			task.delay(LEAVE.Time + 0.03, function()
+				if not alive then
+					return
+				end
+				local cb = opts.OnSuccess
+				W:Close(true)
+				if cb then
+					local okCb, err = pcall(cb, session, leavePos)
+					if not okCb then
+						warn("[auth] OnSuccess error: " .. tostring(err))
+					end
+				end
+			end)
+		end)
 	end
 
 	local function doRegister()
@@ -742,35 +925,15 @@ function Auth.new(opts)
 			end
 			setBusy(false, lBtn, "Log in", "Logging in...")
 			if res.ok and type(res.token) == "string" and res.token ~= "" then
-				finished = true
-				setStatus("Welcome, " .. tostring(res.username or user) .. "!", true)
 				local session = {
 					token = res.token,
 					username = res.username or user,
 					expires_at = res.expires_at,
 					hwid = hwid,
 				}
-				local leavePos = window.Position
-				task.delay(0.6, function()
-					if not alive then
-						return
-					end
-					TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-					TweenService:Create(windowScale, LEAVE, { Scale = fitScale * 0.94 }):Play()
-					task.delay(LEAVE.Time + 0.03, function()
-						if not alive then
-							return
-						end
-						local cb = opts.OnSuccess
-						W:Close(true)
-						if cb then
-							local okCb, err = pcall(cb, session, leavePos)
-							if not okCb then
-								warn("[auth] OnSuccess error: " .. tostring(err))
-							end
-						end
-					end)
-				end)
+				saveSession(session)
+				setStatus("Welcome, " .. tostring(session.username) .. "!", true)
+				finish(session, 0.6)
 			else
 				lPass.clear()
 				setStatus(tostring(res.message or "Login failed."))
@@ -778,8 +941,29 @@ function Auth.new(opts)
 		end)
 	end
 
+	local function doContinue()
+		if busy or not alive or finished or current == nil then
+			return
+		end
+		finish(current, 0)
+	end
+
+	local function doLogout()
+		if busy or not alive or finished then
+			return
+		end
+		clearSession()
+		current = nil
+		lPass.clear()
+		lUser.clear()
+		showPage("key", false)
+		setStatus("You have been logged out.", true)
+	end
+
 	kBtn.Activated:Connect(doRegister)
 	lBtn.Activated:Connect(doLogin)
+	wContinue.Activated:Connect(doContinue)
+	wLogout.Activated:Connect(doLogout)
 	kPass.onEnter = doRegister
 	lPass.onEnter = doLogin
 
@@ -815,6 +999,12 @@ function Auth.new(opts)
 				gui:Destroy()
 			end)
 		end
+	end
+
+	-- a saved session on this device: open on the welcome page instead of the key page
+	local saved = loadSession()
+	if saved ~= nil then
+		showWelcome(saved)
 	end
 
 	-- intro
