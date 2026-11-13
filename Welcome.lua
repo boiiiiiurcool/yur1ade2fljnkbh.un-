@@ -1,9 +1,9 @@
 -- Welcome.lua  (welcome screen + module loader)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Same look as Auth.lua / ui.lua: a side panel on the left (logo + what is happening right now) and,
--- on the right, a list with ONE LOADING BAR PER MODULE (waiting -> checking 3/10 -> ready), a
--- counter, an overall bar, and the Continue button once everything is loaded.
+-- Same look as Auth.lua: one centered flat card with the logo on top ("yur" in red, the 1 in white),
+-- a subtitle, a list with ONE LOADING BAR PER MODULE (waiting -> checking 3/10 -> ready), a counter,
+-- an overall bar, and the Continue button once everything is loaded.
 --
 -- SILENT: nothing is printed or warned in the console. A failure shows in the window instead
 -- (the row turns red); the last error text is available with welcome:GetError().
@@ -24,7 +24,7 @@
 --
 --   local welcome = Welcome.new({
 --       Name = "Y1Welcome",
---       Title = "yur1",
+--       Title = "yur1",                  -- last character is drawn in white, the rest in red
 --       ButtonText = "Continue",
 --       WaitSeconds = 10,
 --       Base = "https://.../main/",      -- must end with a slash
@@ -85,19 +85,20 @@ function Welcome.new(opts)
 	local lastError = nil       -- last error text (never printed)
 
 	---------------------------------------------------------------------
-	-- THEME (same colours as ui.lua)
+	-- THEME (same colours as Auth.lua)
 	---------------------------------------------------------------------
-	local BLACK      = Color3.fromRGB(10, 10, 11)
-	local BORDER     = Color3.fromRGB(36, 36, 39)
-	local CLUSTER_BG = Color3.fromRGB(30, 30, 33)
+	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (flat, no gradient)
+	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on the light button
+	local WELL       = Color3.fromRGB(28, 28, 28)     -- recessed surfaces: list + bars
+	local BORDER     = Color3.fromRGB(54, 54, 54)
 	local ICON       = Color3.fromRGB(176, 176, 182)
 	local ICON_HOVER = Color3.fromRGB(240, 240, 244)
-	local HOVER_RED  = Color3.fromRGB(214, 62, 62)
-	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
-	local DIM_TEXT   = Color3.fromRGB(116, 116, 124)
+	local TEXT_COLOR = Color3.fromRGB(232, 232, 236)
+	local DIM_TEXT   = Color3.fromRGB(122, 122, 128)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
-	local PANEL_BG   = Color3.fromRGB(17, 17, 19)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
+	local BAD        = Color3.fromRGB(214, 90, 90)
+	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, close button hover
 
 	local RADIUS = 4
 
@@ -156,12 +157,13 @@ function Welcome.new(opts)
 	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 560
-	local WIN_H = 360
-	local BAR_H = 34
-	local BTN_H = 38
+	local WIN_W = 520
+	local WIN_H = 430
+	local SIDE = 44
+	local HEAD_H = 118 -- logo + subtitle area on top
+	local BTN_H = 42
 	if touch then
-		BTN_H = 46
+		BTN_H = 48
 	end
 
 	local gui = new("ScreenGui", {
@@ -188,32 +190,12 @@ function Welcome.new(opts)
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(WIN_W, WIN_H),
-		BackgroundColor3 = BLACK,
+		BackgroundColor3 = BG,
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
 	}, gui)
-	corner(window)
+	corner(window, 8)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
-
-	-- clean gradient background behind everything
-	do
-		local backdrop = new("Frame", {
-			Name = "Backdrop",
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = Color3.new(1, 1, 1),
-			BorderSizePixel = 0,
-			ZIndex = 0,
-		}, window)
-		corner(backdrop, RADIUS)
-		new("UIGradient", {
-			Rotation = 45,
-			Color = ColorSequence.new({
-				ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 31)),
-				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(16, 16, 17)),
-				ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 11)),
-			}),
-		}, backdrop)
-	end
 
 	do
 		local outline = new("Frame", {
@@ -224,49 +206,79 @@ function Welcome.new(opts)
 			BorderSizePixel = 0,
 			ZIndex = 20,
 		}, window)
-		corner(outline, RADIUS)
+		corner(outline, 7)
 		stroke(outline, BORDER, 1, 0)
 	end
 
-	-- top bar (holds the close button)
-	local bar = new("Frame", {
-		Name = "TopBar",
-		Size = UDim2.new(1, 0, 0, BAR_H),
-		BackgroundTransparency = 1,
-	}, window)
+	-- LOGO: "yur" in a calm red, the last character (the 1) keeps the white gradient
+	local titleHead = string.sub(title, 1, -2)
+	local titleTail = string.sub(title, -1)
 
-	-- close button (top right), same look as the control cluster in ui.lua
+	local titleRow = new("Frame", {
+		Name = "Logo",
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 28),
+		Size = UDim2.fromOffset(0, 52),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1,
+		ZIndex = 3,
+	}, window)
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, titleRow)
+
+	local function logoPart(text, order, color)
+		return new("TextLabel", {
+			LayoutOrder = order,
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(0, 52),
+			AutomaticSize = Enum.AutomaticSize.X,
+			Font = Enum.Font.GothamBlack,
+			Text = text,
+			TextSize = 46,
+			TextColor3 = color,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 3,
+		}, titleRow)
+	end
+
+	logoPart(titleHead, 1, CALM_RED)
+	local oneLabel = logoPart(titleTail, 2, Color3.new(1, 1, 1))
+	new("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+		}),
+	}, oneLabel)
+
+	local subtitle = label(window, "Loading everything safely", UDim2.fromOffset(SIDE, 86),
+		UDim2.new(1, -SIDE * 2, 0, 16), Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
+	subtitle.ZIndex = 3
+
+	-- close button (top right): two rounded bars, turns red on hover
 	local closeBtn = nil
 	do
-		local PAD = 3
-		local bw = 26
-		local bh = 20
+		local size = 26
 		if touch then
-			bw = 40
-			bh = 28
+			size = 38
 		end
-		local ch = bh + PAD * 2
-		local cluster = new("Frame", {
-			Name = "Controls",
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -8, 0, (BAR_H - ch) / 2),
-			Size = UDim2.fromOffset(bw + PAD * 2, ch),
-			BackgroundColor3 = CLUSTER_BG,
-			BorderSizePixel = 0,
-		}, bar)
-		corner(cluster, RADIUS + 2)
-
 		closeBtn = new("TextButton", {
 			Name = "close",
 			AutoButtonColor = false,
 			Text = "",
-			Position = UDim2.fromOffset(PAD, PAD),
-			Size = UDim2.fromOffset(bw, bh),
-			BackgroundColor3 = HOVER_RED,
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -12, 0, 12),
+			Size = UDim2.fromOffset(size, size),
+			BackgroundColor3 = CALM_RED,
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-		}, cluster)
-		corner(closeBtn, 4)
+			ZIndex = 25,
+		}, window)
+		corner(closeBtn, 6)
 
 		local parts = {}
 		local function line(rot)
@@ -277,6 +289,7 @@ function Welcome.new(opts)
 				Rotation = rot,
 				BackgroundColor3 = ICON,
 				BorderSizePixel = 0,
+				ZIndex = 26,
 			}, closeBtn)
 			corner(f, 1)
 			table.insert(parts, f)
@@ -320,100 +333,43 @@ function Welcome.new(opts)
 	end
 
 	---------------------------------------------------------------------
-	-- LEFT: side panel (logo + what is happening right now)
+	-- CONTENT COLUMN: header, one loading bar per module, overall bar / Continue button
 	---------------------------------------------------------------------
-	local PANEL_W = 190
-	local panel = new("Frame", {
-		Name = "Panel",
-		Position = UDim2.fromOffset(6, 6),
-		Size = UDim2.new(0, PANEL_W, 1, -12),
-		BackgroundColor3 = PANEL_BG,
-		BorderSizePixel = 0,
-		ZIndex = 2,
-	}, window)
-	corner(panel, RADIUS + 2)
-	stroke(panel, BORDER, 1, 0)
-
-	local titleLabel = new("TextLabel", {
-		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 34),
-		Size = UDim2.new(1, 0, 0, 48),
-		Font = Enum.Font.GothamBlack,
-		Text = title,
-		TextSize = 38,
-		TextColor3 = Color3.new(1, 1, 1),
-		TextXAlignment = Enum.TextXAlignment.Center,
-		TextYAlignment = Enum.TextYAlignment.Center,
-		ZIndex = 3,
-	}, panel)
-	new("UIGradient", {
-		Rotation = 90,
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
-			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
-		}),
-	}, titleLabel)
-
-	local subtitle = label(panel, "Loading everything safely", UDim2.fromOffset(18, 90), UDim2.new(1, -36, 0, 36),
-		Enum.Font.Gotham, 12, ICON, Enum.TextXAlignment.Center)
-	subtitle.TextWrapped = true
-	subtitle.TextTruncate = Enum.TextTruncate.None
-	subtitle.TextYAlignment = Enum.TextYAlignment.Top
-	subtitle.ZIndex = 3
-
-	new("Frame", {
-		Position = UDim2.fromOffset(28, 150),
-		Size = UDim2.new(1, -56, 0, 1),
-		BackgroundColor3 = BORDER,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, panel)
-
-	-- what is being checked right now (also text from SetState)
-	local status = label(panel, "", UDim2.fromOffset(18, 166), UDim2.new(1, -36, 0, 70),
-		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
-	status.TextWrapped = true
-	status.TextTruncate = Enum.TextTruncate.None
-	status.TextYAlignment = Enum.TextYAlignment.Top
-	status.ZIndex = 3
-
-	---------------------------------------------------------------------
-	-- RIGHT: header, one loading bar per module, overall bar / Continue button
-	---------------------------------------------------------------------
-	local CONTENT_X = PANEL_W + 6 + 18
-	local CONTENT_W = WIN_W - CONTENT_X - 18
-	local CONTENT_H = WIN_H - (BAR_H + 18)
+	local CONTENT_W = WIN_W - SIDE * 2
+	local CONTENT_H = WIN_H - (HEAD_H + 20)
 	local ROW_H = 34
-	local LIST_Y = 30
-	local LIST_H = 200
+	local LIST_Y = 18
+	local LIST_H = 170
 	local BOT_Y = LIST_Y + LIST_H + 12
 	local BOT_H = CONTENT_H - BOT_Y
 	local total = #moduleList
 
 	local content = new("Frame", {
 		Name = "Content",
-		Position = UDim2.fromOffset(CONTENT_X, BAR_H),
+		Position = UDim2.fromOffset(SIDE, HEAD_H),
 		Size = UDim2.fromOffset(CONTENT_W, CONTENT_H),
 		BackgroundTransparency = 1,
 	}, window)
 
-	label(content, "Modules", UDim2.fromOffset(2, 4), UDim2.new(0.5, 0, 0, 18),
-		Enum.Font.GothamMedium, 13, TEXT_COLOR)
-	local counter = label(content, "0 / " .. tostring(total), UDim2.new(0.5, 0, 0, 4), UDim2.new(0.5, -2, 0, 18),
-		Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Right)
+	local headCap = label(content, "MODULES", UDim2.fromOffset(2, 0), UDim2.new(0.5, 0, 0, 14),
+		Enum.Font.GothamMedium, 10, DIM_TEXT)
+	headCap.ZIndex = 3
+	local counter = label(content, "0 / " .. tostring(total), UDim2.new(0.5, 0, 0, 0), UDim2.new(0.5, -2, 0, 14),
+		Enum.Font.GothamMedium, 10, DIM_TEXT, Enum.TextXAlignment.Right)
+	counter.ZIndex = 3
 
 	local list = new("ScrollingFrame", {
 		Name = "ModuleList",
 		Position = UDim2.fromOffset(0, LIST_Y),
 		Size = UDim2.new(1, 0, 0, LIST_H),
-		BackgroundColor3 = PANEL_BG,
+		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
 		ScrollBarThickness = 2,
 		ScrollBarImageColor3 = BORDER,
 		CanvasSize = UDim2.fromOffset(0, total * ROW_H + 8),
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 	}, content)
-	corner(list, RADIUS + 2)
+	corner(list, 8)
 	stroke(list, BORDER, 1, 0)
 
 	local rowsUI = {}
@@ -434,7 +390,7 @@ function Welcome.new(opts)
 		local track = new("Frame", {
 			Position = UDim2.fromOffset(14, 23),
 			Size = UDim2.new(1, -28, 0, 4),
-			BackgroundColor3 = CLUSTER_BG,
+			BackgroundColor3 = BG,
 			BorderSizePixel = 0,
 		}, row)
 		corner(track, 2)
@@ -460,22 +416,23 @@ function Welcome.new(opts)
 
 	local loaderGroup = new("CanvasGroup", {
 		Name = "Loader",
-		Size = UDim2.fromScale(1, 1),
+		Size = UDim2.new(1, 0, 0, 48),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 0,
 	}, bottom)
-	local loaderText = label(loaderGroup, "Loading everything safely", UDim2.fromOffset(2, 8),
+	local loaderText = label(loaderGroup, "Checking modules", UDim2.fromOffset(2, 6),
 		UDim2.new(1, -60, 0, 16), Enum.Font.GothamMedium, 12, TEXT_COLOR)
-	local percent = label(loaderGroup, "0%", UDim2.new(1, -52, 0, 8), UDim2.fromOffset(50, 16),
+	local percent = label(loaderGroup, "0%", UDim2.new(1, -52, 0, 6), UDim2.fromOffset(50, 16),
 		Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Right)
 	local overallTrack = new("Frame", {
-		Position = UDim2.fromOffset(2, 32),
+		Position = UDim2.fromOffset(2, 30),
 		Size = UDim2.new(1, -4, 0, 6),
-		BackgroundColor3 = CLUSTER_BG,
+		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
 	}, loaderGroup)
 	corner(overallTrack, 3)
+	stroke(overallTrack, BORDER, 1, 0)
 	local overallFill = new("Frame", {
 		Size = UDim2.new(0, 0, 1, 0),
 		BackgroundColor3 = ICON_HOVER,
@@ -485,7 +442,7 @@ function Welcome.new(opts)
 
 	local btnGroup = new("CanvasGroup", {
 		Name = "ButtonGroup",
-		Size = UDim2.fromScale(1, 1),
+		Size = UDim2.new(1, 0, 0, 48),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
@@ -495,11 +452,11 @@ function Welcome.new(opts)
 	local btn = new("TextButton", {
 		Name = "Continue",
 		AutoButtonColor = false,
-		Position = UDim2.fromOffset(4, 6),
-		Size = UDim2.new(1, -8, 0, BTN_H),
+		Position = UDim2.fromOffset(0, 3),
+		Size = UDim2.new(1, 0, 0, BTN_H),
 		BackgroundColor3 = JOIN_BG,
 		BorderSizePixel = 0,
-		Font = Enum.Font.GothamMedium,
+		Font = Enum.Font.GothamBold,
 		Text = buttonText,
 		TextSize = 14,
 		TextColor3 = BLACK,
@@ -507,7 +464,7 @@ function Welcome.new(opts)
 	corner(btn, 8)
 	local btnScale = new("UIScale", { Scale = 1 }, btn)
 
-	-- rounded chevron drawn with two bars (same style as the arrows in the main window)
+	-- rounded chevron drawn with two bars
 	local chev = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.new(1, -24, 0.5, 0),
@@ -527,6 +484,14 @@ function Welcome.new(opts)
 	end
 	chevBar(-2.5, 45)
 	chevBar(2.5, -45)
+
+	-- what is being checked right now (also text from SetState), under the bar / button
+	local status = label(bottom, "", UDim2.fromOffset(2, 54), UDim2.new(1, -4, 0, 34),
+		Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Center)
+	status.TextWrapped = true
+	status.TextTruncate = Enum.TextTruncate.None
+	status.TextYAlignment = Enum.TextYAlignment.Top
+	status.ZIndex = 3
 
 	---------------------------------------------------------------------
 	-- PROGRESS (one bar per module + the overall bar)
@@ -571,8 +536,8 @@ function Welcome.new(opts)
 			fillC = GOOD
 		elseif kind == "fail" then
 			nameC = TEXT_COLOR
-			stC = HOVER_RED
-			fillC = HOVER_RED
+			stC = BAD
+			fillC = BAD
 		end
 		TweenService:Create(r.name, FAST, { TextColor3 = nameC }):Play()
 		TweenService:Create(r.st, FAST, { TextColor3 = stC }):Play()
@@ -613,16 +578,19 @@ function Welcome.new(opts)
 
 		if state == "error" then
 			loaderText.Text = "Could not load"
-			loaderText.TextColor3 = HOVER_RED
-			overallFill.BackgroundColor3 = HOVER_RED
+			loaderText.TextColor3 = BAD
+			overallFill.BackgroundColor3 = BAD
+			subtitle.Text = "Something went wrong"
 		elseif state == "ready" then
 			loaderText.Text = "Everything is ready"
 			loaderText.TextColor3 = TEXT_COLOR
 			overallFill.BackgroundColor3 = GOOD
+			subtitle.Text = "All modules are ready"
 		else
-			loaderText.Text = "Loading everything safely"
+			loaderText.Text = "Checking modules"
 			loaderText.TextColor3 = TEXT_COLOR
 			overallFill.BackgroundColor3 = ICON_HOVER
+			subtitle.Text = "Loading everything safely"
 		end
 
 		local showBtn = (state == "ready" and waitDone)
@@ -735,7 +703,7 @@ function Welcome.new(opts)
 		state = newState
 		status.Text = text or ""
 		if newState == "error" then
-			status.TextColor3 = HOVER_RED
+			status.TextColor3 = BAD
 		else
 			status.TextColor3 = DIM_TEXT
 		end
