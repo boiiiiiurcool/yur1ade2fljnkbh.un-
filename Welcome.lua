@@ -405,7 +405,7 @@ function Welcome.new(opts)
 			BorderSizePixel = 0,
 		}, track)
 		corner(fill, 2)
-		-- soft highlight behind the row that is being worked on (also flashes green when it becomes ready)
+		-- soft highlight behind the row that is being worked on 
 		local hl = new("Frame", {
 			Position = UDim2.fromOffset(4, 1),
 			Size = UDim2.new(1, -8, 1, -2),
@@ -551,7 +551,6 @@ function Welcome.new(opts)
 			return
 		end
 		f = math.clamp(f, 0, 1)
-		local prevKind = rowKind[i]
 		rowKind[i] = kind
 		rowProg[i] = f
 		r.st.Text = text
@@ -579,13 +578,6 @@ function Welcome.new(opts)
 
 		r.hl.BackgroundColor3 = hlC
 		TweenService:Create(r.hl, SMOOTH, { BackgroundTransparency = hlT }):Play()
-		if kind == "done" and prevKind ~= "done" then
-			-- a short green flash when a module becomes ready
-			r.hl.BackgroundColor3 = GOOD
-			r.hl.BackgroundTransparency = 0.7
-			TweenService:Create(r.hl, TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-				{ BackgroundTransparency = 1 }):Play()
-		end
 		r.shine.Visible = (kind == "active")
 		TweenService:Create(r.name, FAST, { TextColor3 = nameC }):Play()
 		TweenService:Create(r.st, FAST, { TextColor3 = stC }):Play()
