@@ -28,7 +28,8 @@
 --   POST <ApiUrl>register   { key, username, password, hwid }
 --   POST <ApiUrl>login      { username, password, hwid }
 --   POST <ApiUrl>verify     { token, username, hwid }      (only when Verify = true)
--- Every answer is JSON: { ok = true/false, message = "...", token = "...", username = "...", expires_at = "..." }
+-- Every answer is JSON: { ok = true/false, message = "...", token = "...", username = "...", expires_at = "...", key = "..." }
+-- (login and verify should send back key = the key the account was made with; the welcome page can show it)
 --
 --   local auth = Auth.new({
 --       Name = "Y1Auth",
@@ -219,7 +220,7 @@ function Auth.new(opts)
 	-- Change any character of token, username, expiry or HWID and the signature no longer matches.
 	local function sign(s)
 		local str = tostring(s.token) .. "|" .. tostring(s.username) .. "|" .. tostring(s.expires_at)
-			.. "|" .. tostring(s.hwid) .. "|" .. SECRET
+			.. "|" .. tostring(s.hwid) .. "|" .. tostring(s.key) .. "|" .. SECRET
 		local h1 = 5381
 		local h2 = 52711
 		for i = 1, #str do
@@ -239,6 +240,7 @@ function Auth.new(opts)
 					expires_at = session.expires_at,
 					hwid = session.hwid,
 				}
+				out.key = session.key
 				out.sig = sign(out)
 				writefile(SESSION_FILE, HttpService:JSONEncode(out))
 			end
@@ -274,6 +276,36 @@ function Auth.new(opts)
 			return res
 		end
 		return false
+	end
+
+	-- turns 2026-12-01T10:00:00Z into "2026-12-01 10:00 UTC (23d left)"
+	local function describeExpiry(stamp)
+		if type(stamp) ~= "string" or stamp == "" then
+			return "No expiry"
+		end
+		local y, mo, d, h, mi, s = string.match(stamp, "(%d+)-(%d+)-(%d+)[T ](%d+):(%d+):(%d+)")
+		if y == nil then
+			return stamp
+		end
+		local text = y .. "-" .. mo .. "-" .. d .. " " .. h .. ":" .. mi .. " UTC"
+		local ok, left = pcall(function()
+			local t = os.time({
+				year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+				hour = tonumber(h), min = tonumber(mi), sec = tonumber(s),
+			})
+			local off = os.time(os.date("*t")) - os.time(os.date("!*t"))
+			return (t + off) - os.time()
+		end)
+		if ok and type(left) == "number" and left > 0 then
+			if left >= 86400 then
+				text = text .. " (" .. math.floor(left / 86400) .. "d left)"
+			elseif left >= 3600 then
+				text = text .. " (" .. math.floor(left / 3600) .. "h left)"
+			else
+				text = text .. " (" .. math.max(1, math.floor(left / 60)) .. "m left)"
+			end
+		end
+		return text
 	end
 
 	-- returns the saved session when it is genuine and still good, else nil (and removes a bad file)
@@ -791,17 +823,67 @@ function Auth.new(opts)
 	stroke(infoCard, BORDER, 1, 0)
 
 	local function infoRow(y, caption)
-		local cap = label(infoCard, string.upper(caption), UDim2.fromOffset(14, y), UDim2.new(0.4, -14, 0, 22),
+		local cap = label(infoCard, string.upper(caption), UDim2.fromOffset(14, y), UDim2.new(0.3, -14, 0, 22),
 			Enum.Font.GothamMedium, 10, DIM_TEXT)
 		cap.ZIndex = 3
-		local val = label(infoCard, "", UDim2.new(0.4, 0, 0, y), UDim2.new(0.6, -14, 0, 22),
+		local val = label(infoCard, "", UDim2.new(0.3, 0, 0, y), UDim2.new(0.7, -14, 0, 22),
 			Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Right)
 		val.ZIndex = 3
 		return val
 	end
 	local infoUser = infoRow(8, "Username")
 	local infoExpires = infoRow(31, "Session ends")
-	local infoDevice = infoRow(54, "Device")
+	-- the key: shown as stars until Show is pressed
+	local keyCap = label(infoCard, "KEY", UDim2.fromOffset(14, 54), UDim2.new(0.3, -14, 0, 22),
+		Enum.Font.GothamMedium, 10, DIM_TEXT)
+	keyCap.ZIndex = 3
+	local keyVal = label(infoCard, "", UDim2.new(0.3, 0, 0, 54), UDim2.new(0.7, -62, 0, 22),
+		Enum.Font.GothamMedium, 13, TEXT_COLOR, Enum.TextXAlignment.Right)
+	keyVal.ZIndex = 3
+	local keyShown = false
+	local keyShow = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -10, 0, 54),
+		Size = UDim2.fromOffset(44, 22),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Font = Enum.Font.GothamMedium,
+		Text = "Show",
+		TextSize = 11,
+		TextColor3 = DIM_TEXT,
+		ZIndex = 3,
+	}, infoCard)
+	keyShow.MouseEnter:Connect(function()
+		TweenService:Create(keyShow, FAST, { TextColor3 = TEXT_COLOR }):Play()
+	end)
+	keyShow.MouseLeave:Connect(function()
+		TweenService:Create(keyShow, FAST, { TextColor3 = DIM_TEXT }):Play()
+	end)
+
+	local function paintKey()
+		local k = nil
+		if current ~= nil then
+			k = current.key
+		end
+		if type(k) ~= "string" or k == "" then
+			keyVal.Text = "Not available"
+			keyShow.Visible = false
+			return
+		end
+		keyShow.Visible = true
+		if keyShown then
+			keyVal.Text = k
+			keyShow.Text = "Hide"
+		else
+			keyVal.Text = string.rep("*", #k)
+			keyShow.Text = "Show"
+		end
+	end
+	keyShow.Activated:Connect(function()
+		keyShown = not keyShown
+		paintKey()
+	end)
 
 	local wContinue = makeButton(welcomePage, 98, "Continue", "L", false, 38)
 	local wLogout = makeButton(welcomePage, 98, "Log out", "R", true, 38)
@@ -866,12 +948,9 @@ function Auth.new(opts)
 		statusLine.Position = UDim2.fromOffset(0, 142)
 
 		infoUser.Text = tostring(session.username)
-		local ends = "No expiry"
-		if type(session.expires_at) == "string" and session.expires_at ~= "" then
-			ends = string.match(session.expires_at, "^(%d+-%d+-%d+)") or session.expires_at
-		end
-		infoExpires.Text = ends
-		infoDevice.Text = "This device"
+		infoExpires.Text = describeExpiry(session.expires_at)
+		keyShown = false
+		paintKey()
 	end
 
 	showPage("key", false)
@@ -994,6 +1073,7 @@ function Auth.new(opts)
 				local session = {
 					token = res.token,
 					username = res.username or user,
+					key = res.key,
 					expires_at = res.expires_at,
 					hwid = hwid,
 				}
@@ -1040,6 +1120,7 @@ function Auth.new(opts)
 				local checked = {
 					token = sess.token,
 					username = res.username or sess.username,
+					key = res.key or sess.key,
 					expires_at = res.expires_at or sess.expires_at,
 					hwid = sess.hwid,
 				}
