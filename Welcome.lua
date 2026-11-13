@@ -62,6 +62,7 @@ function Welcome.new(opts)
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
 	local UserInputService = game:GetService("UserInputService")
+	local RunService = game:GetService("RunService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
 
@@ -98,6 +99,7 @@ function Welcome.new(opts)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
 	local BAD        = Color3.fromRGB(214, 90, 90)
+	local WARN       = Color3.fromRGB(226, 168, 72)   -- failed modules and errors (ready is red now)
 	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, close button hover
 
 	local RADIUS = 4
@@ -383,7 +385,7 @@ function Welcome.new(opts)
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, list)
-		local nm = label(row, entry.Name, UDim2.fromOffset(14, 3), UDim2.new(1, -130, 0, 16),
+		local nm = label(row, entry.Name, UDim2.fromOffset(28, 3), UDim2.new(1, -144, 0, 16),
 			Enum.Font.GothamMedium, 12, DIM_TEXT)
 		local st = label(row, "Waiting", UDim2.new(1, -118, 0, 3), UDim2.fromOffset(104, 16),
 			Enum.Font.Gotham, 11, DIM_TEXT, Enum.TextXAlignment.Right)
@@ -400,7 +402,41 @@ function Welcome.new(opts)
 			BorderSizePixel = 0,
 		}, track)
 		corner(fill, 2)
-		rowsUI[i] = { name = nm, st = st, fill = fill }
+		-- soft highlight behind the row that is being worked on (also flashes red when it becomes ready)
+		local hl = new("Frame", {
+			Position = UDim2.fromOffset(4, 1),
+			Size = UDim2.new(1, -8, 1, -2),
+			BackgroundColor3 = BORDER,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 0,
+		}, row)
+		corner(hl, 6)
+		-- status dot: grey = waiting, pulsing = working, red = ready, amber = failed
+		local dot = new("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromOffset(14, 11),
+			Size = UDim2.fromOffset(6, 6),
+			BackgroundColor3 = DIM_TEXT,
+			BorderSizePixel = 0,
+		}, row)
+		corner(dot, 3)
+		-- a light band that sweeps over the bar while the module is being worked on
+		local shine = new("Frame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BorderSizePixel = 0,
+			Visible = false,
+		}, fill)
+		corner(shine, 2)
+		local shineGrad = new("UIGradient", {
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 1),
+				NumberSequenceKeypoint.new(0.5, 0.55),
+				NumberSequenceKeypoint.new(1, 1),
+			}),
+		}, shine)
+		rowsUI[i] = { name = nm, st = st, fill = fill, hl = hl, dot = dot, shine = shine, grad = shineGrad }
 		rowKind[i] = "wait"
 		rowProg[i] = 0
 	end
@@ -521,6 +557,7 @@ function Welcome.new(opts)
 			return
 		end
 		f = math.clamp(f, 0, 1)
+		local prevKind = rowKind[i]
 		rowKind[i] = kind
 		rowProg[i] = f
 		r.st.Text = text
@@ -532,13 +569,43 @@ function Welcome.new(opts)
 			stC = ICON
 		elseif kind == "done" then
 			nameC = TEXT_COLOR
-			stC = GOOD
-			fillC = GOOD
+			stC = CALM_RED
+			fillC = CALM_RED
 		elseif kind == "fail" then
 			nameC = TEXT_COLOR
-			stC = BAD
-			fillC = BAD
+			stC = WARN
+			fillC = WARN
 		end
+		local dotC = DIM_TEXT
+		local hlC = BORDER
+		local hlT = 1
+		if kind == "active" then
+			dotC = ICON_HOVER
+			hlT = 0.45
+		elseif kind == "hold" then
+			-- compiled, waiting for the final scan
+			dotC = ICON
+			nameC = TEXT_COLOR
+			stC = ICON
+		elseif kind == "done" then
+			dotC = CALM_RED
+		elseif kind == "fail" then
+			dotC = WARN
+			hlC = WARN
+			hlT = 0.8
+		end
+		r.dot.BackgroundTransparency = 0
+		TweenService:Create(r.dot, FAST, { BackgroundColor3 = dotC }):Play()
+		r.hl.BackgroundColor3 = hlC
+		TweenService:Create(r.hl, SMOOTH, { BackgroundTransparency = hlT }):Play()
+		if kind == "done" and prevKind ~= "done" then
+			-- a short red flash when a module becomes ready
+			r.hl.BackgroundColor3 = CALM_RED
+			r.hl.BackgroundTransparency = 0.7
+			TweenService:Create(r.hl, TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				{ BackgroundTransparency = 1 }):Play()
+		end
+		r.shine.Visible = (kind == "active")
 		TweenService:Create(r.name, FAST, { TextColor3 = nameC }):Play()
 		TweenService:Create(r.st, FAST, { TextColor3 = stC }):Play()
 		TweenService:Create(r.fill, FAST, { Size = UDim2.new(f, 0, 1, 0), BackgroundColor3 = fillC }):Play()
@@ -584,7 +651,7 @@ function Welcome.new(opts)
 		elseif state == "ready" then
 			loaderText.Text = "Everything is ready"
 			loaderText.TextColor3 = TEXT_COLOR
-			overallFill.BackgroundColor3 = GOOD
+			overallFill.BackgroundColor3 = CALM_RED
 			subtitle.Text = "All modules are ready"
 		else
 			loaderText.Text = "Checking modules"
