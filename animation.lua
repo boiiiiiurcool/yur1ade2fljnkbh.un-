@@ -2207,7 +2207,37 @@ function AnimationPage.build(parent, T, H, ctx)
 		end
 	end
 
+		---------------------------------------------------------------------
+	-- PING SPOOFER (row 5, left) - built by pingspoofer.lua
 	---------------------------------------------------------------------
+	local pingObj = nil
+	do
+		local pm = nil
+		if type(ctx) == "table" then
+			pm = ctx.PingSpooferModule or ctx.PingSpoofer
+			if not pm and type(ctx.Modules) == "table" then
+				pm = ctx.Modules.PingSpoofer
+			end
+		end
+		if not pm then
+			local okG, g = pcall(function()
+				return getgenv()
+			end)
+			if okG and type(g) == "table" and type(g.Y1_MODULES) == "table" then
+				pm = g.Y1_MODULES.PingSpoofer
+			end
+		end
+		if type(pm) == "table" and type(pm.build) == "function" then
+			local okP, obj = pcall(pm.build, parent, T, H, ctx)
+			if okP and type(obj) == "table" then
+				pingObj = obj
+			else
+				warn("[animation] pingspoofer failed: " .. tostring(obj))
+			end
+		end
+	end
+
+		---------------------------------------------------------------------
 	-- unload: put the original animations back
 	---------------------------------------------------------------------
 	local function unload()
@@ -2221,6 +2251,12 @@ function AnimationPage.build(parent, T, H, ctx)
 		pcall(orbitUnload)
 		pcall(spinUnload)
 		pcall(spinUnload)
+		if pingObj then
+			pcall(function()
+				pingObj:Unload()
+			end)
+			pingObj = nil
+		end
 		applyToken = applyToken + 1
 		runApply(true, false)
 		for i = 1, #conns do
