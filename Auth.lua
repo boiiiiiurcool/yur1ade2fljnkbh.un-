@@ -1,8 +1,9 @@
 -- Auth.lua  (key + account creation page, then login page; runs BEFORE Welcome.lua)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Layout: one centered column. The logo sits on top, then the two-tab switch (Create account | Log in)
--- and the form. A small notification card pops up at the bottom right of the screen. Two pages in one window:
+-- One centered card: the logo on top, a two-tab switch (Create account | Log in) and the form.
+-- A small notice card slides in at the bottom right of the screen and hides itself after a few seconds.
+-- Two pages in one window:
 --   KEY page    Key + Username + Password -> "Create account"
 --               The server checks the key (it must exist, be unused and not revoked), makes the account
 --               and marks the key as used. Then the window goes to the LOGIN page.
@@ -37,7 +38,6 @@ function Auth.new(opts)
 
 	local Players = game:GetService("Players")
 	local TweenService = game:GetService("TweenService")
-	local UserInputService = game:GetService("UserInputService")
 	local HttpService = game:GetService("HttpService")
 	local player = Players.LocalPlayer
 	local playerGui = player:WaitForChild("PlayerGui")
@@ -60,17 +60,19 @@ function Auth.new(opts)
 	-- THEME
 	---------------------------------------------------------------------
 	local BG         = Color3.fromRGB(35, 35, 35)     -- window background (from the screenshot)
-	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on light buttons
-	local BORDER     = Color3.fromRGB(58, 58, 58)
-	local CLUSTER_BG = Color3.fromRGB(45, 45, 45)     -- fields + tab bar
-	local TOAST_BG   = Color3.fromRGB(26, 26, 26)
+	local BLACK      = Color3.fromRGB(10, 10, 11)     -- dark text on the light button
+	local WELL       = Color3.fromRGB(28, 28, 28)     -- recessed surfaces: fields + tab bar
+	local PILL       = Color3.fromRGB(54, 54, 56)     -- the sliding tab pill
+	local BORDER     = Color3.fromRGB(54, 54, 54)
+	local BORDER_HI  = Color3.fromRGB(78, 78, 80)     -- field border on hover
 	local ICON       = Color3.fromRGB(176, 176, 182)
-	local HOVER_RED  = Color3.fromRGB(214, 62, 62)    -- error text
-	local TEXT_COLOR = Color3.fromRGB(230, 230, 234)
-	local DIM_TEXT   = Color3.fromRGB(128, 128, 134)
+	local TEXT_COLOR = Color3.fromRGB(232, 232, 236)
+	local DIM_TEXT   = Color3.fromRGB(122, 122, 128)
 	local JOIN_BG    = Color3.fromRGB(232, 232, 236)
 	local GOOD       = Color3.fromRGB(110, 200, 140)
-	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo
+	local BAD        = Color3.fromRGB(214, 90, 90)
+	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- "yur" in the logo, focus ring, accent bar
+	local TOAST_BG   = Color3.fromRGB(24, 24, 24)
 
 	local RADIUS = 4
 
@@ -121,6 +123,84 @@ function Auth.new(opts)
 		l.TextTruncate = Enum.TextTruncate.AtEnd
 		l.Parent = parent
 		return l
+	end
+
+	---------------------------------------------------------------------
+	-- FINGERPRINT ICON (drawn from rounded lines, 24 x 24 units, matches the reference icon)
+	---------------------------------------------------------------------
+	-- arcs: { centerX, centerY, radius, startAngle, endAngle }  (degrees, 0 = right, 90 = down)
+	local FP_ARCS = {
+		{ 11.5, 11.5, 11.0, 168, 335 },
+		{ 11.5, 12.0, 7.4, 180, 360 },
+		{ 11.5, 13.0, 4.0, 180, 360 },
+	}
+	-- lines: { x1, y1, x2, y2 }
+	local FP_LINES = {
+		{ 0.9, 15.2, 0.9, 16.4 },
+		{ 4.1, 12.0, 4.1, 20.5 },
+		{ 18.9, 12.0, 18.9, 15.5 },
+		{ 17.8, 19.0, 17.8, 23.0 },
+		{ 22.3, 9.0, 22.3, 15.5 },
+		{ 7.5, 13.0, 7.5, 15.5 },
+		{ 9.6, 11.5, 9.6, 18.0 },
+		{ 13.2, 12.0, 13.2, 23.5 },
+		{ 15.5, 13.0, 15.5, 19.5 },
+	}
+	local FP_THICK = 1.7
+
+	local function fpSegment(parent, x1, y1, x2, y2, k, color)
+		local thick = FP_THICK * k
+		local dx = (x2 - x1) * k
+		local dy = (y2 - y1) * k
+		local len = math.sqrt(dx * dx + dy * dy)
+		local f = new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset((x1 + x2) / 2 * k, (y1 + y2) / 2 * k),
+			Size = UDim2.fromOffset(len + thick, thick),
+			Rotation = math.deg(math.atan2(dy, dx)),
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+		}, parent)
+		corner(f, thick / 2)
+		return f
+	end
+
+	local function makeFingerprint(parent, pos, px, color)
+		local k = px / 24
+		local holder = new("Frame", {
+			Name = "Fingerprint",
+			Position = pos,
+			Size = UDim2.fromOffset(px, px),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+		}, parent)
+		for i = 1, #FP_ARCS do
+			local a = FP_ARCS[i]
+			local cx = a[1]
+			local cy = a[2]
+			local r = a[3]
+			local a0 = a[4]
+			local a1 = a[5]
+			local arcLen = r * math.rad(a1 - a0)
+			local n = math.max(8, math.ceil(arcLen / 1.5))
+			local px0 = nil
+			local py0 = nil
+			for s = 0, n do
+				local ang = math.rad(a0 + (a1 - a0) * s / n)
+				local x = cx + r * math.cos(ang)
+				local y = cy + r * math.sin(ang)
+				if px0 ~= nil then
+					fpSegment(holder, px0, py0, x, y, k, color)
+				end
+				px0 = x
+				py0 = y
+			end
+		end
+		for i = 1, #FP_LINES do
+			local l = FP_LINES[i]
+			fpSegment(holder, l[1], l[2], l[3], l[4], k, color)
+		end
+		return holder
 	end
 
 	---------------------------------------------------------------------
@@ -186,9 +266,10 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- WINDOW
 	---------------------------------------------------------------------
-	local WIN_W = 380
-	local WIN_H = 440
-	local HEAD_H = 104 -- the logo + subtitle area on top
+	local WIN_W = 400
+	local WIN_H = 480
+	local SIDE = 32
+	local HEAD_H = 118 -- logo + subtitle area on top
 
 	local gui = new("ScreenGui", {
 		Name = guiName,
@@ -217,10 +298,27 @@ function Auth.new(opts)
 		BorderSizePixel = 0,
 		GroupTransparency = 1,
 	}, gui)
-	corner(window)
+	corner(window, 8)
 	local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
 
 	do
+		-- a very soft light from the top, so the flat color has some depth
+		local sheen = new("Frame", {
+			Name = "Sheen",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BorderSizePixel = 0,
+			ZIndex = 0,
+		}, window)
+		new("UIGradient", {
+			Rotation = 90,
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.94),
+				NumberSequenceKeypoint.new(0.45, 1),
+				NumberSequenceKeypoint.new(1, 1),
+			}),
+		}, sheen)
+
 		local outline = new("Frame", {
 			Name = "Outline",
 			Position = UDim2.fromOffset(1, 1),
@@ -229,19 +327,31 @@ function Auth.new(opts)
 			BorderSizePixel = 0,
 			ZIndex = 20,
 		}, window)
-		corner(outline, RADIUS)
+		corner(outline, 7)
 		stroke(outline, BORDER, 1, 0)
+
+		-- small accent bar on the top edge
+		local accent = new("Frame", {
+			Name = "Accent",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 0),
+			Size = UDim2.fromOffset(44, 2),
+			BackgroundColor3 = CALM_RED,
+			BorderSizePixel = 0,
+			ZIndex = 21,
+		}, window)
+		corner(accent, 1)
 	end
 
-	-- TOP: the logo, centered. "yur" in a calm red, the last character (the 1) keeps the white gradient
+	-- LOGO: "yur" in a calm red, the last character (the 1) keeps the white gradient
 	local titleHead = string.sub(title, 1, -2)
 	local titleTail = string.sub(title, -1)
 
 	local titleRow = new("Frame", {
 		Name = "Logo",
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0, 20),
-		Size = UDim2.fromOffset(0, 48),
+		Position = UDim2.new(0.5, 0, 0, 28),
+		Size = UDim2.fromOffset(0, 52),
 		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundTransparency = 1,
 		ZIndex = 3,
@@ -257,11 +367,11 @@ function Auth.new(opts)
 		return new("TextLabel", {
 			LayoutOrder = order,
 			BackgroundTransparency = 1,
-			Size = UDim2.fromOffset(0, 48),
+			Size = UDim2.fromOffset(0, 52),
 			AutomaticSize = Enum.AutomaticSize.X,
 			Font = Enum.Font.GothamBlack,
 			Text = text,
-			TextSize = 42,
+			TextSize = 46,
 			TextColor3 = color,
 			TextYAlignment = Enum.TextYAlignment.Center,
 			ZIndex = 3,
@@ -278,32 +388,33 @@ function Auth.new(opts)
 		}),
 	}, oneLabel)
 
-	local subtitle = label(window, "", UDim2.fromOffset(28, 72), UDim2.new(1, -56, 0, 16),
-		Enum.Font.Gotham, 12, DIM_TEXT, Enum.TextXAlignment.Center)
+	local subtitle = label(window, "", UDim2.fromOffset(SIDE, 86), UDim2.new(1, -SIDE * 2, 0, 16),
+		Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
 	subtitle.ZIndex = 3
 
 	-- the form column
 	local content = new("Frame", {
 		Name = "Content",
-		Position = UDim2.fromOffset(28, HEAD_H),
-		Size = UDim2.new(1, -56, 1, -(HEAD_H + 20)),
+		Position = UDim2.fromOffset(SIDE, HEAD_H),
+		Size = UDim2.new(1, -SIDE * 2, 1, -(HEAD_H + 20)),
 		BackgroundTransparency = 1,
 	}, window)
 
-	-- two-tab switch: a light pill slides between "Create account" and "Log in"
+	-- two-tab switch: a pill slides between "Create account" and "Log in"
 	local tabs = new("Frame", {
 		Name = "Tabs",
 		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.new(1, 0, 0, 36),
-		BackgroundColor3 = CLUSTER_BG,
+		Size = UDim2.new(1, 0, 0, 38),
+		BackgroundColor3 = WELL,
 		BorderSizePixel = 0,
 	}, content)
 	corner(tabs, 10)
+	stroke(tabs, BORDER, 1, 0)
 
 	local indicator = new("Frame", {
 		Position = UDim2.new(0, 3, 0, 3),
-		Size = UDim2.new(0.5, -4, 1, -6),
-		BackgroundColor3 = JOIN_BG,
+		Size = UDim2.new(0.5, -5, 1, -6),
+		BackgroundColor3 = PILL,
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, tabs)
@@ -319,7 +430,7 @@ function Auth.new(opts)
 			Font = Enum.Font.GothamMedium,
 			Text = text,
 			TextSize = 13,
-			TextColor3 = ICON,
+			TextColor3 = DIM_TEXT,
 			ZIndex = 3,
 		}, tabs)
 		return b
@@ -330,22 +441,47 @@ function Auth.new(opts)
 	-- the message line (errors in red, good news in green); it sits under the button of each page
 	local statusLine = new("TextLabel", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 30),
-		Font = Enum.Font.Gotham,
+		Size = UDim2.new(1, 0, 0, 32),
+		Font = Enum.Font.GothamMedium,
 		Text = "",
-		TextColor3 = HOVER_RED,
+		TextColor3 = BAD,
 		TextSize = 12,
 		TextWrapped = true,
-		TextXAlignment = Enum.TextXAlignment.Left,
+		TextXAlignment = Enum.TextXAlignment.Center,
 		TextYAlignment = Enum.TextYAlignment.Top,
 	}, content)
+
+	-- a quick side-to-side shake of the window when something went wrong
+	local function shake()
+		task.spawn(function()
+			local base = window.Position
+			local offs = { 7, -7, 4, -4, 0 }
+			for i = 1, #offs do
+				if not alive or finished then
+					return
+				end
+				local tw = TweenService:Create(window, TweenInfo.new(0.045, Enum.EasingStyle.Quad), {
+					Position = UDim2.new(base.X.Scale, base.X.Offset + offs[i], base.Y.Scale, base.Y.Offset),
+				})
+				tw:Play()
+				tw.Completed:Wait()
+			end
+		end)
+	end
 
 	local function setStatus(text, good)
 		statusLine.Text = text or ""
 		if good then
 			statusLine.TextColor3 = GOOD
 		else
-			statusLine.TextColor3 = HOVER_RED
+			statusLine.TextColor3 = BAD
+		end
+		if text ~= nil and text ~= "" then
+			statusLine.TextTransparency = 1
+			TweenService:Create(statusLine, FAST, { TextTransparency = 0 }):Play()
+			if not good then
+				shake()
+			end
 		end
 	end
 
@@ -353,15 +489,16 @@ function Auth.new(opts)
 	-- CONTROLS
 	---------------------------------------------------------------------
 	-- a labelled text field. masked = shows * instead of the text (the real text is kept in f.real)
+	-- and gets a Show / Hide switch on the right
 	local function makeField(parent, y, caption, placeholder, masked)
-		local f = { real = "" }
+		local f = { real = "", revealed = false }
 		local cap = label(parent, string.upper(caption), UDim2.fromOffset(2, y), UDim2.new(1, -4, 0, 14),
 			Enum.Font.GothamMedium, 10, DIM_TEXT)
 		cap.ZIndex = 3
 		local box = new("TextBox", {
 			Position = UDim2.fromOffset(0, y + 16),
-			Size = UDim2.new(1, 0, 0, 34),
-			BackgroundColor3 = CLUSTER_BG,
+			Size = UDim2.new(1, 0, 0, 38),
+			BackgroundColor3 = WELL,
 			BorderSizePixel = 0,
 			Font = Enum.Font.GothamMedium,
 			TextSize = 13,
@@ -373,16 +510,33 @@ function Auth.new(opts)
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextTruncate = Enum.TextTruncate.AtEnd,
 		}, parent)
-		new("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, box)
-		corner(box, RADIUS + 2)
+		local padRight = 14
+		if masked then
+			padRight = 58
+		end
+		new("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, padRight) }, box)
+		corner(box, 8)
 		local st = stroke(box, BORDER, 1, 0)
 		f.box = box
 
+		local focused = false
+		box.MouseEnter:Connect(function()
+			if not focused then
+				TweenService:Create(st, FAST, { Color = BORDER_HI }):Play()
+			end
+		end)
+		box.MouseLeave:Connect(function()
+			if not focused then
+				TweenService:Create(st, FAST, { Color = BORDER }):Play()
+			end
+		end)
 		box.Focused:Connect(function()
-			TweenService:Create(st, FAST, { Color = ICON }):Play()
+			focused = true
+			TweenService:Create(st, FAST, { Color = CALM_RED }):Play()
 			TweenService:Create(cap, FAST, { TextColor3 = ICON }):Play()
 		end)
 		box.FocusLost:Connect(function(enterPressed)
+			focused = false
 			TweenService:Create(st, FAST, { Color = BORDER }):Play()
 			TweenService:Create(cap, FAST, { TextColor3 = DIM_TEXT }):Play()
 			if enterPressed and f.onEnter then
@@ -396,6 +550,10 @@ function Auth.new(opts)
 			local guard = false
 			box:GetPropertyChangedSignal("Text"):Connect(function()
 				if guard then
+					return
+				end
+				if f.revealed then
+					f.real = box.Text
 					return
 				end
 				local t = box.Text
@@ -419,6 +577,37 @@ function Auth.new(opts)
 					guard = false
 				end
 			end)
+
+			local eye = new("TextButton", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, 50, 0.5, 0),
+				Size = UDim2.fromOffset(44, 24),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				AutoButtonColor = false,
+				Font = Enum.Font.GothamMedium,
+				Text = "Show",
+				TextSize = 11,
+				TextColor3 = DIM_TEXT,
+			}, box)
+			eye.MouseEnter:Connect(function()
+				TweenService:Create(eye, FAST, { TextColor3 = TEXT_COLOR }):Play()
+			end)
+			eye.MouseLeave:Connect(function()
+				TweenService:Create(eye, FAST, { TextColor3 = DIM_TEXT }):Play()
+			end)
+			eye.Activated:Connect(function()
+				f.revealed = not f.revealed
+				guard = true
+				if f.revealed then
+					box.Text = f.real
+					eye.Text = "Hide"
+				else
+					box.Text = string.rep("*", #f.real)
+					eye.Text = "Show"
+				end
+				guard = false
+			end)
 		end
 
 		function f.get()
@@ -438,10 +627,10 @@ function Auth.new(opts)
 		local b = new("TextButton", {
 			AutoButtonColor = false,
 			Position = UDim2.fromOffset(0, y),
-			Size = UDim2.new(1, 0, 0, 38),
+			Size = UDim2.new(1, 0, 0, 42),
 			BackgroundColor3 = JOIN_BG,
 			BorderSizePixel = 0,
-			Font = Enum.Font.GothamMedium,
+			Font = Enum.Font.GothamBold,
 			Text = text,
 			TextSize = 14,
 			TextColor3 = BLACK,
@@ -467,7 +656,9 @@ function Auth.new(opts)
 	---------------------------------------------------------------------
 	-- THE TWO PAGES
 	---------------------------------------------------------------------
-	local FORM_Y = 50
+	local FORM_Y = 58
+	local KEY_BTN_Y = 194
+	local LOGIN_BTN_Y = 142
 	local formArea = new("Frame", {
 		Name = "Form",
 		Position = UDim2.fromOffset(0, FORM_Y),
@@ -491,14 +682,14 @@ function Auth.new(opts)
 
 	-- KEY page: key, username, password, create account
 	local kKey = makeField(keyPage, 0, "Key", "Y1-XXXX-XXXX-XXXX", false)
-	local kUser = makeField(keyPage, 58, "Username", "Create a username", false)
-	local kPass = makeField(keyPage, 116, "Password", "Create a password", true)
-	local kBtn = makeButton(keyPage, 184, "Create account")
+	local kUser = makeField(keyPage, 62, "Username", "Create a username", false)
+	local kPass = makeField(keyPage, 124, "Password", "Create a password", true)
+	local kBtn = makeButton(keyPage, KEY_BTN_Y, "Create account")
 
 	-- LOGIN page: username, password, log in
 	local lUser = makeField(loginPage, 0, "Username", "Your username", false)
-	local lPass = makeField(loginPage, 58, "Password", "Your password", true)
-	local lBtn = makeButton(loginPage, 126, "Log in")
+	local lPass = makeField(loginPage, 62, "Password", "Your password", true)
+	local lBtn = makeButton(loginPage, LOGIN_BTN_Y, "Log in")
 
 	-- Enter jumps to the next field (the last one submits, see below)
 	kKey.onEnter = function()
@@ -515,15 +706,15 @@ function Auth.new(opts)
 		local isKey = (page == "key")
 		local pos = UDim2.new(0, 3, 0, 3)
 		if not isKey then
-			pos = UDim2.new(0.5, 1, 0, 3)
+			pos = UDim2.new(0.5, 2, 0, 3)
 		end
 		if animate then
 			TweenService:Create(indicator, SMOOTH, { Position = pos }):Play()
 		else
 			indicator.Position = pos
 		end
-		local onC = BLACK
-		local offC = ICON
+		local onC = Color3.new(1, 1, 1)
+		local offC = DIM_TEXT
 		TweenService:Create(tabKey, FAST, { TextColor3 = isKey and onC or offC }):Play()
 		TweenService:Create(tabLogin, FAST, { TextColor3 = isKey and offC or onC }):Play()
 	end
@@ -533,11 +724,11 @@ function Auth.new(opts)
 		keyPage.Visible = (name == "key")
 		loginPage.Visible = (name == "login")
 		if name == "key" then
-			subtitle.Text = "Enter your key and create your account"
-			statusLine.Position = UDim2.fromOffset(0, FORM_Y + 184 + 38 + 10)
+			subtitle.Text = "Enter your key to create your account"
+			statusLine.Position = UDim2.fromOffset(0, FORM_Y + KEY_BTN_Y + 42 + 12)
 		else
-			subtitle.Text = "Log in to continue"
-			statusLine.Position = UDim2.fromOffset(0, FORM_Y + 126 + 38 + 10)
+			subtitle.Text = "Welcome back, log in to continue"
+			statusLine.Position = UDim2.fromOffset(0, FORM_Y + LOGIN_BTN_Y + 42 + 12)
 		end
 		paintTabs(animate)
 	end
@@ -607,6 +798,8 @@ function Auth.new(opts)
 			end
 		end)
 	end
+
+	local hideToast = nil
 
 	local function doLogin()
 		if busy or not alive or finished then
@@ -690,14 +883,18 @@ function Auth.new(opts)
 	end)
 
 	---------------------------------------------------------------------
-	-- NOTIFICATION (bottom right of the screen)
+	-- NOTICE CARD (bottom right of the screen, hides itself after a few seconds)
 	---------------------------------------------------------------------
-	local TOAST_W = 330
-	local TOAST_H = 92
+	local TOAST_W = 350
+	local TOAST_H = 96
+	local toastIn = UDim2.new(1, -18, 1, -18)
+	local toastOut = UDim2.new(1, TOAST_W + 40, 1, -18)
+	local toastHidden = false
+
 	local toast = new("Frame", {
 		Name = "Notice",
 		AnchorPoint = Vector2.new(1, 1),
-		Position = UDim2.new(1, TOAST_W + 40, 1, -18),
+		Position = toastOut,
 		Size = UDim2.fromOffset(TOAST_W, TOAST_H),
 		BackgroundColor3 = TOAST_BG,
 		BorderSizePixel = 0,
@@ -706,50 +903,27 @@ function Auth.new(opts)
 	corner(toast, 10)
 	stroke(toast, BORDER, 1, 0)
 
-	-- icon: a small fingerprint made of rings, with a gap cut through them
-	local iconBox = new("Frame", {
-		Position = UDim2.fromOffset(16, 16),
-		Size = UDim2.fromOffset(34, 34),
-		BackgroundTransparency = 1,
-		ZIndex = 51,
-	}, toast)
-	local ringSizes = { 32, 25, 18, 11 }
-	for i = 1, #ringSizes do
-		local r = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(ringSizes[i], ringSizes[i]),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ZIndex = 51,
-		}, iconBox)
-		corner(r, 100)
-		stroke(r, ICON, 1.5, 0)
-	end
-	new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 4, 0.5, 2),
-		Size = UDim2.fromOffset(3, 18),
-		BackgroundColor3 = TOAST_BG,
-		BorderSizePixel = 0,
-		ZIndex = 52,
-	}, iconBox)
+	makeFingerprint(toast, UDim2.fromOffset(20, 22), 38, ICON)
 
-	local tTitle = label(toast, "Reruinz Server Auth", UDim2.fromOffset(64, 12), UDim2.new(1, -78, 0, 16),
+	local tTitle = label(toast, "Reruinz Server Auth", UDim2.fromOffset(76, 14), UDim2.new(1, -92, 0, 16),
 		Enum.Font.GothamBold, 12, DIM_TEXT)
 	tTitle.ZIndex = 51
 	local tBody = label(toast, "Dont attempt to do anything silly because its not worth the pain",
-		UDim2.fromOffset(64, 30), UDim2.new(1, -78, 0, 34), Enum.Font.GothamMedium, 13, TEXT_COLOR)
+		UDim2.fromOffset(76, 33), UDim2.new(1, -92, 0, 34), Enum.Font.GothamMedium, 13, TEXT_COLOR)
 	tBody.TextWrapped = true
 	tBody.TextTruncate = Enum.TextTruncate.None
 	tBody.TextYAlignment = Enum.TextYAlignment.Top
 	tBody.ZIndex = 51
-	local tFoot = label(toast, "rock and roll", UDim2.fromOffset(64, 68), UDim2.new(1, -78, 0, 16),
+	local tFoot = label(toast, "rock and roll", UDim2.fromOffset(76, 72), UDim2.new(1, -92, 0, 16),
 		Enum.Font.Gotham, 12, DIM_TEXT)
 	tFoot.ZIndex = 51
 
-	local function hideToast()
-		TweenService:Create(toast, LEAVE, { Position = UDim2.new(1, TOAST_W + 40, 1, -18) }):Play()
+	hideToast = function()
+		if toastHidden then
+			return
+		end
+		toastHidden = true
+		TweenService:Create(toast, LEAVE, { Position = toastOut }):Play()
 	end
 
 	---------------------------------------------------------------------
@@ -775,9 +949,14 @@ function Auth.new(opts)
 	-- intro
 	TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
 	TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-	task.delay(0.35, function()
+	task.delay(0.4, function()
+		if alive and not toastHidden then
+			TweenService:Create(toast, SMOOTH, { Position = toastIn }):Play()
+		end
+	end)
+	task.delay(8.5, function()
 		if alive then
-			TweenService:Create(toast, SMOOTH, { Position = UDim2.new(1, -18, 1, -18) }):Play()
+			hideToast()
 		end
 	end)
 
