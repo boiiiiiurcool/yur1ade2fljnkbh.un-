@@ -11,7 +11,9 @@
 --       HomeModule = ..., Home = {...},            -- a tab is filled by  <Id>Module.build(container, T, H, ctx)
 --       InfoModule = ..., CombatModule = ..., Combat = {...}, VisualsModule = ..., Visuals = {...},
 --       WorldModule = ..., World = {...}, MiscModule = ..., Misc = {...},
---       -- optional: ConfigModule / Config, SettingsModule / Settings, ServerModule / Server, Binds = { {id, title, wired, default}, ... }
+--       -- optional: ConfigModule / Config, SettingsModule / Settings, ServerModule / Server,
+--       --           Binds   = { {id, title, wired, default}, ... }                (plain key rows)
+--       --           Toggles = { {id, title, default, enabled, onToggle}, ... }    (modules you can turn on / off)
 --   })
 --   * T = the theme table (the old names SIDEBAR_BG / POPUP_BG / CLUSTER_BG / JOIN_BG / BLACK ... still work)
 --   * H = { new, corner, stroke, label }
@@ -27,6 +29,16 @@
 --   win:AddBind({ id, title, wired, default = { kind = "Key", key = Enum.KeyCode.E } })
 --   win:IsBind(id, input)        win:GetBind(id)              win:SetHidden(bool)
 --   win:SetPageMessage(id, title, text, isError)
+--
+-- MODULE TOGGLES (Trigger Bot, Aimbot, ESP ... everything you can turn on / off)
+--   Every toggle gets a row in the Keybinds panel: a status dot (grey = off, green = on), its name and its key.
+--   Pressing the key flips the module (a small toast says "Trigger Bot on / off"). Click the key box to rebind.
+--   win:AddToggle({ id = "TriggerBot", title = "Trigger Bot", default = { kind = "Key", key = Enum.KeyCode.T },
+--                   enabled = false, wired = true, onToggle = function(on) end })
+--   win:SetToggle(id, bool)      -- set it from your own on-page switch (silent, no toast)
+--   win:Toggle(id)               -- flip it (with a toast)
+--   win:GetToggle(id)            -- true / false
+--   win:OnToggle(id, fn(on))     -- called whenever it changes (key press, SetToggle, Toggle) so your switch can follow
 --
 -- Left / Right arrow keys do NOT switch tabs on purpose (games use them to move); click the tabs.
 -- Run it on its own (no modules) for a preview:   loadstring(game:HttpGet("https://.../Y1UI.lua"))().new({})
@@ -80,6 +92,7 @@ function UI.new(opts)
 	local DIM_TEXT   = Color3.fromRGB(122, 122, 128)
 	local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- accent
 	local HOVER_GREY = Color3.fromRGB(62, 62, 66)
+	local ON_GREEN   = Color3.fromRGB(110, 200, 140)  -- "module is on" dot
 
 	local RADIUS = 4
 
@@ -105,7 +118,7 @@ function UI.new(opts)
 		ACCENT = CALM_RED,
 		CALM_RED = CALM_RED,
 		HOVER_GREY = HOVER_GREY,
-		GOOD = Color3.fromRGB(110, 200, 140),
+		GOOD = ON_GREEN,
 		BAD = Color3.fromRGB(214, 90, 90),
 		WARN = Color3.fromRGB(226, 168, 72),
 		-- names used by the module files
@@ -1101,9 +1114,11 @@ function UI.new(opts)
 	--   * drag it by its title bar; it stays where you put it
 	--   * opens / closes with the keyboard button in the top bar (left of minimize) and closes with its x
 	--   * click a key box, then press a key or a mouse button to change it (Escape = cancel, Backspace = none)
-	--   * rows are added by the modules:  win:AddBind({ id = "Aimbot", title = "Aimbot", wired = true,
+	--   * plain rows are added by the modules:  win:AddBind({ id = "Aimbot", title = "Aimbot", wired = true,
 	--         default = { kind = "Key", key = Enum.KeyCode.E } })      (or pass opts.Binds when creating the window)
 	--     and read with  win:IsBind(id, input)  /  win:GetBind(id)
+	--   * modules you can turn on / off are added with win:AddToggle (or opts.Toggles). They get the same row
+	--     plus a status dot, and their key flips them on / off. See the MODULE TOGGLES notes at the top.
 	---------------------------------------------------------------------
 	local BINDS = {}
 	local bindDef = {}
@@ -1147,6 +1162,7 @@ function UI.new(opts)
 	local kbToken = 0
 	local kbPills = {}
 	local kbLines = {}
+	local kbDots = {}           -- [id] = the on / off dot of a toggle row
 
 	local kbPanel = new("CanvasGroup", {
 		Name = "Keybinds",
@@ -1322,6 +1338,7 @@ function UI.new(opts)
 	end
 
 	-- adds a row to the panel (safe to call any time, a second call with the same id does nothing)
+	-- def.toggle = true adds the small on / off dot in front of the name (win:AddToggle does this for you)
 	local function addBind(def)
 		if type(def) ~= "table" or type(def.id) ~= "string" or bindDef[def.id] then
 			return
@@ -1336,7 +1353,23 @@ function UI.new(opts)
 		if not def.wired then
 			nameColor = DIM_TEXT
 		end
-		label(kbPanel, tostring(def.title or def.id), UDim2.fromOffset(16, y), UDim2.new(1, -130, 0, KB_ROW - 4),
+
+		local nameX = 16
+		if def.toggle then
+			nameX = 32
+			local dot = new("Frame", {
+				Name = def.id .. "Dot",
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.fromOffset(16, y + (KB_ROW - 4) / 2),
+				Size = UDim2.fromOffset(8, 8),
+				BackgroundColor3 = DIM_TEXT,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, kbPanel)
+			corner(dot, 100)
+			kbDots[def.id] = dot
+		end
+		label(kbPanel, tostring(def.title or def.id), UDim2.fromOffset(nameX, y), UDim2.new(1, -(nameX + 114), 0, KB_ROW - 4),
 			Enum.Font.GothamMedium, 13, nameColor).ZIndex = 3
 
 		local pill = new("TextButton", {
@@ -1431,6 +1464,82 @@ function UI.new(opts)
 		kbPaint(id)
 	end))
 
+	---------------------------------------------------------------------
+	-- MODULE TOGGLES: every module you can turn on / off (Trigger Bot, Aimbot, ESP ...) shows up in the
+	-- keybinds panel with a status dot (grey = off, green = on). Its key flips it.
+	---------------------------------------------------------------------
+	local toggles = {}   -- [id] = { def = def, on = bool, listeners = { fn(on) } }
+
+	local function paintDot(id)
+		local d = kbDots[id]
+		if not d then
+			return
+		end
+		local c = DIM_TEXT
+		if toggles[id] and toggles[id].on then
+			c = ON_GREEN
+		end
+		TweenService:Create(d, FAST, { BackgroundColor3 = c }):Play()
+	end
+
+	-- sets a toggle. silent = true skips the toast (used when the module's own switch changed it)
+	local function setToggle(id, on, silent)
+		local t = toggles[id]
+		if not t then
+			return
+		end
+		on = on and true or false
+		if t.on == on then
+			return
+		end
+		t.on = on
+		paintDot(id)
+		if type(t.def.onToggle) == "function" then
+			pcall(t.def.onToggle, on)
+		end
+		for i = 1, #t.listeners do
+			pcall(t.listeners[i], on)
+		end
+		if not silent then
+			local word = "off"
+			if on then
+				word = "on"
+			end
+			win:Toast(tostring(t.def.title or id) .. " " .. word, 1.5)
+		end
+	end
+
+	-- registers a module: adds its keybind row (with the dot) and makes the key flip it
+	local function addToggle(def)
+		if type(def) ~= "table" or type(def.id) ~= "string" or toggles[def.id] then
+			return
+		end
+		toggles[def.id] = { def = def, on = false, listeners = {} }
+		addBind({
+			id = def.id,
+			title = def.title or def.id,
+			wired = (def.wired ~= false),
+			default = def.default,
+			toggle = true,
+		})
+		if def.enabled then
+			setToggle(def.id, true, true)
+		end
+	end
+
+	-- the key / mouse button flips the module (not while typing in a box, not while rebinding)
+	-- (connected after the rebinding handler above, so the key that finishes a rebind is ignored by the guard)
+	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
+		if processed or kbListening or os.clock() - kbLastBind < 0.2 then
+			return
+		end
+		for id, t in pairs(toggles) do
+			if bindMatches(id, input) then
+				setToggle(id, not t.on)
+			end
+		end
+	end))
+
 	-- starts to the left of the window (top edges level) and then stays where it is: it does NOT follow the window.
 	-- Drag it by its title bar to move it.
 	local kbAbs = Vector2.new(START_LEFT - (KB_W + 10), START_TOP)
@@ -1480,6 +1589,11 @@ function UI.new(opts)
 	if type(opts.Binds) == "table" then
 		for i = 1, #opts.Binds do
 			addBind(opts.Binds[i])
+		end
+	end
+	if type(opts.Toggles) == "table" then
+		for i = 1, #opts.Toggles do
+			addToggle(opts.Toggles[i])
 		end
 	end
 
@@ -1635,6 +1749,18 @@ function UI.new(opts)
 			return
 		end
 		alive = false
+		-- every module is switched off first, so nothing keeps running after the window is gone
+		for id, t in pairs(toggles) do
+			if t.on then
+				t.on = false
+				if type(t.def.onToggle) == "function" then
+					pcall(t.def.onToggle, false)
+				end
+				for i = 1, #t.listeners do
+					pcall(t.listeners[i], false)
+				end
+			end
+		end
 		for i = 1, #handles do
 			local h = handles[i]
 			if type(h) == "table" and type(h.Unload) == "function" then
@@ -2289,6 +2415,31 @@ function UI.new(opts)
 	function win:GetBind(id)
 		return bindName(binds[id])
 	end
+
+	-- module toggles (see the notes at the top of this file)
+	function win:AddToggle(def)
+		addToggle(def)
+	end
+	function win:SetToggle(id, on)
+		setToggle(id, on, true)
+	end
+	function win:Toggle(id)
+		local t = toggles[id]
+		if t then
+			setToggle(id, not t.on)
+		end
+	end
+	function win:GetToggle(id)
+		local t = toggles[id]
+		return t ~= nil and t.on
+	end
+	function win:OnToggle(id, fn)
+		local t = toggles[id]
+		if t and type(fn) == "function" then
+			t.listeners[#t.listeners + 1] = fn
+		end
+	end
+
 	-- tells a tab's page that something went wrong (the message replaces the "will go here" text)
 	function win:SetPageMessage(id, title, text, isError)
 		local ph = placeholders[id]
