@@ -1,1802 +1,2466 @@
--- Y1UI.lua  (standalone preview UI, no modules needed)
+-- ui.lua  (Y1 window module)
 -- ASCII only, conservative syntax (no += and no continue).
 --
--- Run it by itself:
---   loadstring(game:HttpGet("https://.../Y1UI.lua"))()      or paste the whole file in your executor
+-- Black window with tiny rounded corners, slim sidebar, title card, window controls,
+-- Home tab (separate module), Settings page (UI toggle keybind + Touch Mode), unload dialog and toasts.
 --
--- Same look as Welcome.lua / Auth.lua: flat dark card, "Y" in calm red, the 1 in white,
--- thin borders, red accent. NO features: every tab is an empty placeholder, only the window
--- itself works (switch tabs, drag, minimize to the Y1 square, maximize, close, hide key).
+-- Sidebar layout: logo, then Home, Info, Combat, Visuals, World and Misc icons right under it
+-- (top group), and the server icon, gear and profile card at the bottom (bottom group).
 --
--- LAYOUT
---   top bar      logo, the name of the current tab, a search box (centre), minimize / maximize / close
---   middle       the content card (the page of the current tab)
---   bottom       a horizontal tab bar: icon + name for every tab, a red marker slides along its top edge
+--   local UI = <this file>
+--   local HomePage = <homepage.lua>
+--   local win = UI.new({
+--       Name = "Y1PlayerFinder", Logo = "Y1", MainTitle = "Server Locater", MainTip = "Server Locater",
+--       Position = positionFromWelcome,
+--       StartPage = "Home",            -- "Home" (default), "Info", "Combat", "Visuals", "World",
+--                                      -- "Misc", "Main" or "Settings"
+--       HomeModule = HomePage,         -- the homepage.lua module
+--       InfoModule = InfoPage,         -- the infopage.lua module
+--       CombatModule = CombatPage,     -- optional: a module with .build(page, T, H, opts) for the Combat tab
+--       VisualsModule = VisualsPage,   -- optional: same idea for the Visuals tab (opts.Visuals is passed in)
+--       WorldModule = WorldPage,       -- optional: same idea for the World tab (opts.World is passed in)
+--       MiscModule = MiscPage,         -- optional: same idea for the Misc tab (opts.Misc is passed in)
+--       Home = { Product = "yur1", Subtitle = "...", Access = "Lifetime access",
+--                Build = "Beta 0.6", Component = "Rock and Roll by reruinz" },
+--   })
 --
--- Tabs (left to right): Home, Info, Combat, Visuals, World, Misc, Server, Config, Settings.
--- To rename or reorder tabs, edit the TABS table near the bottom of the helpers section.
--- Left / Right arrow keys do NOT switch tabs on purpose (games use them to move); click the tabs.
+-- What you get back:
+--   win.HomePage / win.InfoPage / win.CombatPage / win.VisualsPage / win.WorldPage / win.MiscPage /
+--   win.MainPage / win.SettingsPage   frames you put your controls in
+--   win.T                             theme colours, radii and tween infos
+--   win.H                             helpers: new, corner, stroke, pad, label, hoverable
+--   win.Touch                         true while Touch Mode is on
+--   win:ShowPage("Home" | "Info" | "Combat" | "Visuals" | "World" | "Misc" | "Main" | "Settings")
+--   win:Toast(text)                   small pop-up at the bottom
+--   win:SetStats(text)                small text in the top bar (left of the window controls)
+--   win:OnTouchChange(fn)             fn(isTouch) runs whenever Touch Mode changes
+--   win:OnUnload(fn)                  fn() runs when the window is unloaded
+--   win:Track(connection)             connection is disconnected on unload
+--   win:IsHidden() / win:IsMinimized()
+--   win:SetTouch(bool)
+--   win:Unload()
 --
--- ICON NOTE: the Visuals, World and Misc icons (and the search magnifier) are drawn with real outlines (UIStroke) and
--- clipped shapes instead of "cut-out" frames painted in the bar colour, so nothing shows a dark patch on the hover
--- pill, and every line is a full 2 - 2.5 px wide.
+-- Minimize: the window shrinks away and a small draggable Y1 square appears at the
+-- left middle of the screen. Click the square (without dragging) to open the window again.
 
-local CONFIG = {
-	Name = "Y1Preview",
-	Logo = "Y1",                          -- first letter(s) red, last character white
-	HideKey = Enum.KeyCode.RightShift,    -- hides / shows the window
-	StartTab = "Home",
-}
+local UI = {}
 
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local GuiService = game:GetService("GuiService")
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+function UI.new(opts)
+	opts = opts or {}
+	local guiName = opts.Name or "Y1UI"
+	local logoName = opts.Logo or "Y1"
+	local mainTitle = opts.MainTitle or "Main"
+	local mainTip = opts.MainTip or mainTitle
 
--- only one copy at a time (also stops an older run of this script)
-do
-	local ok, env = pcall(getgenv)
-	if ok and type(env) == "table" and env.__Y1_PREVIEW_STOP then
-		pcall(env.__Y1_PREVIEW_STOP)
+	local Players = game:GetService("Players")
+	local TweenService = game:GetService("TweenService")
+	local UserInputService = game:GetService("UserInputService")
+	local player = Players.LocalPlayer
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	-- only one copy of this window at a time
+	do
+		local old = playerGui:FindFirstChild(guiName)
+		if old then
+			old:Destroy()
+		end
 	end
-	local old = playerGui:FindFirstChild(CONFIG.Name)
-	if old then
-		old:Destroy()
+
+	local W = {}
+	local conns = {}
+	local unloadFns = {}
+	local touchFns = {}
+	local unloaded = false
+	local minimized = false
+	local maximized = false
+	local uiHidden = false
+	local confirmOpen = false   -- true while the unload dialog is showing (the window is locked)
+	local currentPage = "Home"
+	local START_PAGES = {
+		Main = true, Settings = true, Info = true, Combat = true,
+		Visuals = true, World = true, Misc = true,
+	}
+	if START_PAGES[opts.StartPage] then
+		currentPage = opts.StartPage
 	end
-end
+	local returnPage = "Home"  -- where the back arrow on Settings goes
+	local bodyParts = {}      -- everything that hides while the window is minimized
+	local ui = {}             -- layout functions and buttons shared between sections
+	local showPage = function(_name) end
+	local closePopup = function() end
+	local toast = function(_msg, _seconds) end
+	local applyTouch = function(_on) end
 
----------------------------------------------------------------------
--- THEME (same colours as Welcome.lua)
----------------------------------------------------------------------
-local BG         = Color3.fromRGB(35, 35, 35)     -- window
-local WELL       = Color3.fromRGB(28, 28, 28)     -- tab bar + content card
-local BORDER     = Color3.fromRGB(54, 54, 54)
-local ICON       = Color3.fromRGB(176, 176, 182)
-local ICON_HOVER = Color3.fromRGB(240, 240, 244)
-local TEXT_COLOR = Color3.fromRGB(232, 232, 236)
-local DIM_TEXT   = Color3.fromRGB(122, 122, 128)
-local CALM_RED   = Color3.fromRGB(196, 92, 92)    -- accent
-local HOVER_GREY = Color3.fromRGB(62, 62, 66)
+	---------------------------------------------------------------------
+	-- THEME
+	---------------------------------------------------------------------
+	local BLACK        = Color3.fromRGB(10, 10, 11)    -- window
+	local BORDER       = Color3.fromRGB(36, 36, 39)    -- thin outline
+	local SIDEBAR_BG   = Color3.fromRGB(17, 17, 19)    -- sidebar, cards, input boxes
+	local CARD_BG      = Color3.fromRGB(28, 28, 31)    -- profile card, player rows
+	local CARD_HOVER   = Color3.fromRGB(36, 36, 40)
+	local POPUP_BG     = Color3.fromRGB(20, 20, 22)
+	local CLUSTER_BG   = Color3.fromRGB(30, 30, 33)    -- dark grey behind the control buttons
+	local ICON         = Color3.fromRGB(176, 176, 182) -- light grey icons
+	local ICON_HOVER   = Color3.fromRGB(240, 240, 244)
+	local HOVER_GREY   = Color3.fromRGB(66, 66, 72)    -- highlighted square
+	local HOVER_RED    = Color3.fromRGB(214, 62, 62)
+	local TEXT_COLOR   = Color3.fromRGB(230, 230, 234)
+	local DIM_TEXT     = Color3.fromRGB(116, 116, 124)
+	local GREEN        = Color3.fromRGB(52, 199, 120)
+	local JOIN_BG      = Color3.fromRGB(232, 232, 236)
+	local MATCH_BG     = Color3.fromRGB(50, 50, 57)
 
-local RADIUS = 4
+	local RADIUS = 4
+	local SQUARE_RADIUS = 10
 
-local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local SMOOTH = TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local POP = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local LEAVE = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-local GROW = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	local WINDOW_SIZE = UDim2.fromOffset(760, 480)
+	local BAR_H = 40
+	local SIDEBAR_W_MIN = 56
+	local TILE = 40
+	local CHIP_X = SIDEBAR_W_MIN + 14
+	local CHIP_W = 128
 
-local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local FAST = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local SMOOTH = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local EXPAND = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local COLLAPSE = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 
----------------------------------------------------------------------
--- HELPERS
----------------------------------------------------------------------
-local function new(class, props, parent)
-	local o = Instance.new(class)
-	for k, v in pairs(props) do
-		o[k] = v
+	-- sizes of the window chrome that switch in Touch Mode
+	local METRICS_NORMAL = {
+		ctrlW = 30, ctrlH = 24, backSize = 24,
+		keyW = 104, keyH = 28, setRowH = 54, setOff = 0,
+		switchW = 42, switchH = 22,
+		dlgBtn = 24,
+	}
+	local METRICS_TOUCH = {
+		ctrlW = 40, ctrlH = 30, backSize = 34,
+		keyW = 120, keyH = 38, setRowH = 62, setOff = 8,
+		switchW = 52, switchH = 28,
+		dlgBtn = 34,
+	}
+	local M = {}
+	local function setMetrics(on)
+		local src = METRICS_NORMAL
+		if on then
+			src = METRICS_TOUCH
+		end
+		for k, v in pairs(src) do
+			M[k] = v
+		end
 	end
-	o.Parent = parent
-	return o
-end
+	W.Touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	setMetrics(W.Touch)
 
-local function corner(obj, r)
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, r or RADIUS)
-	c.Parent = obj
-	return c
-end
+	W.T = {
+		BLACK = BLACK, BORDER = BORDER, SIDEBAR_BG = SIDEBAR_BG, CARD_BG = CARD_BG, CARD_HOVER = CARD_HOVER,
+		POPUP_BG = POPUP_BG, CLUSTER_BG = CLUSTER_BG, ICON = ICON, ICON_HOVER = ICON_HOVER,
+		HOVER_GREY = HOVER_GREY, HOVER_RED = HOVER_RED, TEXT_COLOR = TEXT_COLOR, DIM_TEXT = DIM_TEXT,
+		GREEN = GREEN, JOIN_BG = JOIN_BG, MATCH_BG = MATCH_BG,
+		RADIUS = RADIUS, SQUARE_RADIUS = SQUARE_RADIUS,
+		FAST = FAST, SMOOTH = SMOOTH, EXPAND = EXPAND, COLLAPSE = COLLAPSE,
+	}
 
-local function stroke(obj, color, thickness, transparency)
-	local s = Instance.new("UIStroke")
-	s.Color = color
-	s.Thickness = thickness or 1
-	s.Transparency = transparency or 0
-	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	s.Parent = obj
-	return s
-end
-
-local function label(parent, text, pos, size, font, textSize, color, align)
-	local l = Instance.new("TextLabel")
-	l.BackgroundTransparency = 1
-	l.Position = pos
-	l.Size = size
-	l.Font = font
-	l.Text = text
-	l.TextColor3 = color
-	l.TextSize = textSize
-	l.TextXAlignment = align or Enum.TextXAlignment.Left
-	l.TextTruncate = Enum.TextTruncate.AtEnd
-	l.Parent = parent
-	return l
-end
-
--- a centred block inside an icon (y = offset from the middle)
-local function block(glyph, w, h, y, color, z, r)
-	local f = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, y),
-		Size = UDim2.fromOffset(w, h),
-		BackgroundColor3 = color,
-		BorderSizePixel = 0,
-		ZIndex = z,
-	}, glyph)
-	if r then
-		corner(f, r)
+	---------------------------------------------------------------------
+	-- HELPERS
+	---------------------------------------------------------------------
+	local function new(class, props, parent)
+		local o = Instance.new(class)
+		for k, v in pairs(props) do
+			o[k] = v
+		end
+		o.Parent = parent
+		return o
 	end
-	return f
-end
 
--- one short 2px line between two points (measured from the middle of the glyph)
-local function segment(glyph, inks, x1, y1, x2, y2, z)
-	local dx = x2 - x1
-	local dy = y2 - y1
-	local len = math.sqrt(dx * dx + dy * dy)
-	local f = new("Frame", {
+	local function corner(obj, r)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, r or RADIUS)
+		c.Parent = obj
+		return c
+	end
+
+	local function stroke(obj, color, thickness, transparency)
+		local s = Instance.new("UIStroke")
+		s.Color = color
+		s.Thickness = thickness or 1
+		s.Transparency = transparency or 0
+		s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		s.Parent = obj
+		return s
+	end
+
+	local function pad(o, l, t, r, b)
+		local p = Instance.new("UIPadding")
+		p.PaddingLeft = UDim.new(0, l)
+		p.PaddingTop = UDim.new(0, t)
+		p.PaddingRight = UDim.new(0, r)
+		p.PaddingBottom = UDim.new(0, b)
+		p.Parent = o
+	end
+
+	local function label(parent, text, pos, size, font, textSize, color, align)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Position = pos
+		l.Size = size
+		l.Font = font
+		l.Text = text
+		l.TextColor3 = color
+		l.TextSize = textSize
+		l.TextXAlignment = align or Enum.TextXAlignment.Left
+		l.TextTruncate = Enum.TextTruncate.AtEnd
+		l.Parent = parent
+		return l
+	end
+
+	-- background + text colour change on hover
+	local function hoverable(btn, base, over, textBase, textOver)
+		btn.MouseEnter:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = over, TextColor3 = textOver }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			TweenService:Create(btn, FAST, { BackgroundColor3 = base, TextColor3 = textBase }):Play()
+		end)
+	end
+
+	W.H = { new = new, corner = corner, stroke = stroke, pad = pad, label = label, hoverable = hoverable }
+
+	local hover = { card = false, popup = false }
+
+	---------------------------------------------------------------------
+	-- WINDOW
+	---------------------------------------------------------------------
+	local gui = new("ScreenGui", {
+		Name = guiName,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 999,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+
+	-- small screens: shrink the whole window to fit
+	local fitScale = 1
+	do
+		local cam = workspace.CurrentCamera
+		if cam then
+			local vp = cam.ViewportSize
+			fitScale = math.min(1, (vp.X - 24) / WINDOW_SIZE.X.Offset, (vp.Y - 24) / WINDOW_SIZE.Y.Offset)
+			fitScale = math.max(0.5, fitScale)
+		end
+	end
+
+	local window = new("CanvasGroup", {
+		Name = "Window",
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, (x1 + x2) / 2, 0.5, (y1 + y2) / 2),
-		Size = UDim2.fromOffset(len + 1.5, 2),
-		Rotation = math.deg(math.atan2(dy, dx)),
-		BackgroundColor3 = ICON,
+		Position = opts.Position or UDim2.fromScale(0.5, 0.5),
+		Size = WINDOW_SIZE,
+		BackgroundColor3 = BLACK,
 		BorderSizePixel = 0,
-		ZIndex = z,
-	}, glyph)
-	corner(f, 1)
-	table.insert(inks, f)
-end
+	}, gui)
+	corner(window)
 
--- a true outline circle (a UIStroke, no cut-out colour): "outer" is the outside diameter, "thick" the line weight.
--- The stroke is added to inks, so the tab bar tints it like every other part of the icon.
-local function ring(glyph, inks, outer, thick, x, y, z)
-	local inner = outer - thick * 2
-	local f = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, x, 0.5, y),
-		Size = UDim2.fromOffset(inner, inner),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = z,
-	}, glyph)
-	corner(f, 100)
-	local s = stroke(f, ICON, thick, 0)
-	table.insert(inks, s)
-	return f
-end
+	local windowScale = new("UIScale", { Scale = fitScale }, window)
 
----------------------------------------------------------------------
--- ICONS (drawn with frames, they take the icon colour; cut-outs use the tab bar colour)
----------------------------------------------------------------------
-local CUT = WELL
-
-local function buildHome(glyph)
-	local R = 3
-	local SH = -1
-	local roof = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, SH),
-		Size = UDim2.fromOffset(16, 16),
-		Rotation = 45,
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, glyph)
-	corner(roof, R)
-	local walls = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0.5, SH),
-		Size = UDim2.fromOffset(20, 12),
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, glyph)
-	corner(walls, R)
-	local fill = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0.5, SH),
-		Size = UDim2.fromOffset(20, 4),
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, glyph)
-	local door = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0.5, 3),
-		Size = UDim2.fromOffset(6, 11),
-		BackgroundColor3 = CUT,
-		BorderSizePixel = 0,
-		ZIndex = 4,
-	}, glyph)
-	corner(door, 3)
-	return { roof, walls, fill }
-end
-
-local function buildInfo(glyph)
-	local card = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(24, 18),
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, glyph)
-	corner(card, 4)
-	local function cut(x, y, w, h, r, anchorX)
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(anchorX or 0, 0),
-			Position = UDim2.fromOffset(x, y),
-			Size = UDim2.fromOffset(w, h),
-			BackgroundColor3 = CUT,
+	do
+		local outline = new("Frame", {
+			Name = "Outline",
+			Position = UDim2.fromOffset(1, 1),
+			Size = UDim2.new(1, -2, 1, -2),
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
+			ZIndex = 20,
+		}, window)
+		corner(outline, RADIUS)
+		stroke(outline, BORDER, 1, 0)
+	end
+
+	local bar = new("Frame", {
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, BAR_H),
+		BackgroundTransparency = 1,
+	}, window)
+
+	local sidebar = new("Frame", {
+		Name = "Sidebar",
+		Position = UDim2.fromOffset(6, 6),
+		Size = UDim2.new(0, SIDEBAR_W_MIN, 1, -12),
+		BackgroundColor3 = SIDEBAR_BG,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, window)
+	corner(sidebar)
+
+	local content = new("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(SIDEBAR_W_MIN + 12, BAR_H),
+		Size = UDim2.new(1, -(SIDEBAR_W_MIN + 18), 1, -(BAR_H + 6)),
+		BackgroundTransparency = 1,
+	}, window)
+
+	-- pages are canvas groups so they can fade. A canvas group clips everything at its edge,
+	-- so the page has a small padding inside: outlines of controls that touch the edge
+	-- (search box, tiles, load button...) now have room to draw and are no longer cut off.
+	local PAGE_POS = UDim2.fromOffset(0, 0)
+	local PAGE_SIZE_UD = UDim2.fromScale(1, 1)
+
+	local function makePage(name)
+		local shown = (name == currentPage)
+		local gt = 1
+		if shown then
+			gt = 0
+		end
+		local p = new("CanvasGroup", {
+			Name = name .. "Page",
+			Position = PAGE_POS,
+			Size = PAGE_SIZE_UD,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			GroupTransparency = gt,
+			Visible = shown,
+		}, content)
+		pad(p, 2, 2, 2, 2)
+		return p
+	end
+
+	local homePage = makePage("Home")
+	local mainPage = makePage("Main")
+	local infoPage = makePage("Info")
+	local combatPage = makePage("Combat")
+	local visualsPage = makePage("Visuals")
+	local worldPage = makePage("World")
+	local miscPage = makePage("Misc")
+	local settingsPage = makePage("Settings")
+
+	table.insert(bodyParts, sidebar)
+	table.insert(bodyParts, content)
+
+	W.Gui = gui
+	W.Window = window
+	W.Bar = bar
+	W.HomePage = homePage
+	W.InfoPage = infoPage
+	W.CombatPage = combatPage
+	W.VisualsPage = visualsPage
+	W.WorldPage = worldPage
+	W.MiscPage = miscPage
+	W.MainPage = mainPage
+	W.SettingsPage = settingsPage
+
+	---------------------------------------------------------------------
+	-- HOME TAB CONTENT (comes from the separate homepage module)
+	---------------------------------------------------------------------
+	do
+		local mod = opts.HomeModule
+		local okBuild = false
+		if type(mod) == "table" and type(mod.build) == "function" then
+			local homeOpts = {}
+			for k, v in pairs(opts.Home or {}) do
+				homeOpts[k] = v
+			end
+			homeOpts.OnNext = function()
+				showPage("Info")
+			end
+			local ok, err = pcall(mod.build, homePage, W.T, W.H, homeOpts)
+			if ok then
+				okBuild = true
+			else
+				warn("[ui] home page error: " .. tostring(err))
+			end
+		end
+		if not okBuild then
+			label(homePage, "Home", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+				Enum.Font.GothamBold, 18, TEXT_COLOR)
+		end
+	end
+
+	---------------------------------------------------------------------
+	-- INFO TAB CONTENT (comes from the separate infopage module)
+	---------------------------------------------------------------------
+	do
+		local mod = opts.InfoModule
+		local okBuild = false
+		if type(mod) == "table" and type(mod.build) == "function" then
+			local ok, err = pcall(mod.build, infoPage, W.T, W.H, opts.Info or {})
+			if ok then
+				okBuild = true
+			else
+				warn("[ui] info page error: " .. tostring(err))
+			end
+		end
+		if not okBuild then
+			label(infoPage, "Info", UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+				Enum.Font.GothamBold, 18, TEXT_COLOR)
+		end
+	end
+
+	---------------------------------------------------------------------
+	-- COMBAT / VISUALS / WORLD / MISC TAB CONTENT
+	-- (each is an optional separate module with .build(page, T, H, opts),
+	--  otherwise the page is empty with just its title)
+	---------------------------------------------------------------------
+	do
+		local function buildTab(page, mod, tabOpts, title, tag)
+			local okBuild = false
+			if type(mod) == "table" and type(mod.build) == "function" then
+				local ok, err = pcall(mod.build, page, W.T, W.H, tabOpts or {})
+				if ok then
+					okBuild = true
+				else
+					warn("[ui] " .. tag .. " page error: " .. tostring(err))
+				end
+			end
+			if not okBuild then
+				label(page, title, UDim2.fromOffset(24, 16), UDim2.new(1, -48, 0, 24),
+					Enum.Font.GothamBold, 18, TEXT_COLOR)
+			end
+		end
+		buildTab(combatPage, opts.CombatModule, opts.Combat, "Combat", "combat")
+		buildTab(visualsPage, opts.VisualsModule, opts.Visuals, "Visuals", "visuals")
+		buildTab(worldPage, opts.WorldModule, opts.World, "World", "world")
+		buildTab(miscPage, opts.MiscModule, opts.Misc, "Misc", "misc")
+	end
+
+	---------------------------------------------------------------------
+	-- LOGO TEXT
+	---------------------------------------------------------------------
+	do
+		local logo = new("Frame", {
+			Name = "Logo",
+			Position = UDim2.fromOffset(14, 14),
+			Size = UDim2.fromOffset(TILE, 32),
+			BackgroundTransparency = 1,
+			ZIndex = 3,
+		}, window)
+
+		local logoLabel = new("TextLabel", {
+			Name = "LogoText",
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.new(1, 0, 0, 30),
+			Font = Enum.Font.GothamBlack,
+			Text = logoName,
+			TextSize = 24,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 4,
+		}, logo)
+
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, logoLabel)
+
+		table.insert(bodyParts, logo)
+	end
+
+	---------------------------------------------------------------------
+	-- SIDEBAR ICONS (house, ID card, crosshair, eye, globe and person at the top,
+	-- server + gear at the bottom; one marker slides between them)
+	---------------------------------------------------------------------
+	do
+		local TIP_X = 14 + TILE + 10
+		local GROW = TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local navIcons = {}   -- page name -> function(isActive)
+		local navPos = {}     -- page name -> marker position
+
+		local marker = new("Frame", {
+			Name = "NavMarker",
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 8, 0, 80),
+			Size = UDim2.fromOffset(3, 18),
+			BackgroundColor3 = ICON_HOVER,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, window)
+		corner(marker, 2)
+		table.insert(bodyParts, marker)
+
+		-- o.page / o.tip / o.tipW / o.anchorY / o.yScale / o.yOffset
+		-- anchorY 0 + yScale 0 = hangs from the top (yOffset = distance from the top of the window)
+		-- anchorY 1 + yScale 1 = stands on the bottom (yOffset is negative = distance from the bottom)
+		-- o.build(glyph) draws the icon and returns the frames that take the icon colour
+		local function makeNavIcon(o)
+			local slot = new("Frame", {
+				Name = o.page .. "Icon",
+				AnchorPoint = Vector2.new(0, o.anchorY),
+				Position = UDim2.new(0, 14, o.yScale, o.yOffset),
+				Size = UDim2.fromOffset(TILE, TILE),
+				BackgroundTransparency = 1,
+				ZIndex = 3,
+			}, window)
+			table.insert(bodyParts, slot)
+
+			local centerY = o.yOffset + TILE / 2
+			if o.anchorY == 1 then
+				centerY = o.yOffset - TILE / 2
+			end
+			navPos[o.page] = UDim2.new(0, 8, o.yScale, centerY)
+
+			-- everything drawn lives in "glyph" so one UIScale can grow it from the middle
+			local glyph = new("Frame", {
+				Name = "Glyph",
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				ZIndex = 3,
+			}, slot)
+			local glyphScale = new("UIScale", { Scale = 1 }, glyph)
+			local inks = o.build(glyph)
+
+			local active = false
+			local hovering = false
+			local function paint()
+				local color = ICON
+				if active or hovering then
+					color = ICON_HOVER
+				end
+				for i = 1, #inks do
+					if inks[i]:IsA("UIStroke") then
+						TweenService:Create(inks[i], FAST, { Color = color }):Play()
+					else
+						TweenService:Create(inks[i], FAST, { BackgroundColor3 = color }):Play()
+					end
+				end
+			end
+
+			local hit = new("TextButton", {
+				Name = "Hit",
+				Text = "",
+				AutoButtonColor = false,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 6,
+			}, slot)
+			hit.Activated:Connect(function()
+				showPage(o.page)
+			end)
+
+			-- tiny tooltip that fades in beside the icon
+			local tip = new("Frame", {
+				Name = o.page .. "Tip",
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, TIP_X - 4, o.yScale, centerY),
+				Size = UDim2.fromOffset(o.tipW, 24),
+				BackgroundColor3 = CLUSTER_BG,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 8,
+			}, window)
+			corner(tip, RADIUS + 3)
+			local tipStroke = stroke(tip, BORDER, 1, 1)
+			local tipText = new("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				Font = Enum.Font.GothamMedium,
+				Text = o.tip,
+				TextSize = 12,
+				TextColor3 = TEXT_COLOR,
+				TextTransparency = 1,
+				ZIndex = 9,
+			}, tip)
+
+			local function showTip(visible)
+				local x = TIP_X - 4
+				local bg = 1
+				local tt = 1
+				if visible then
+					x = TIP_X
+					bg = 0
+					tt = 0
+				end
+				TweenService:Create(tip, SMOOTH, {
+					Position = UDim2.new(0, x, o.yScale, centerY),
+					BackgroundTransparency = bg,
+				}):Play()
+				TweenService:Create(tipStroke, FAST, { Transparency = tt }):Play()
+				TweenService:Create(tipText, FAST, { TextTransparency = tt }):Play()
+			end
+
+			hit.MouseEnter:Connect(function()
+				hovering = true
+				showTip(true)
+				TweenService:Create(glyphScale, GROW, { Scale = 1.2 }):Play()
+				paint()
+			end)
+			hit.MouseLeave:Connect(function()
+				hovering = false
+				showTip(false)
+				TweenService:Create(glyphScale, GROW, { Scale = 1 }):Play()
+				paint()
+			end)
+			hit.MouseButton1Down:Connect(function()
+				TweenService:Create(glyphScale, FAST, { Scale = 0.9 }):Play()
+			end)
+			hit.MouseButton1Up:Connect(function()
+				local s = 1
+				if hovering then
+					s = 1.2
+				end
+				TweenService:Create(glyphScale, GROW, { Scale = s }):Play()
+			end)
+
+			navIcons[o.page] = function(isActive)
+				active = isActive
+				paint()
+			end
+		end
+
+		-- house icon: a clean "home" shape made of three solid parts plus a door cut-out.
+		--   roof  = a rounded square turned 45 degrees (16x16, corner radius 3). Its widest point
+		--           is about 20px (16 / 2 - 3) * 1.414 + 3 = 10.07 each side of the middle.
+		--   walls = a rounded block exactly 20px wide that starts at that widest point, so the roof
+		--           slopes flow straight into the walls with no ledge or eave sticking out.
+		--   fill  = a small square-cornered strip at the top of the walls so the shoulders are smooth.
+		--   door  = cut out with the sidebar colour. It is taller than the walls so its rounded
+		--           bottom corners hang outside (invisible on the sidebar), which leaves a door
+		--           that is open at the bottom and rounded at the top.
+		-- Every size and position is a whole, even number so the edges stay crisp.
+		local function buildHome(glyph)
+			local R = 3          -- corner radius shared by the roof and the walls
+			local SHOULDER = -1  -- y of the roof centre = top of the walls (relative to the icon middle)
+
+			local roof = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(16, 16),
+				Rotation = 45,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(roof, R)
+
+			local walls = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(20, 12),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(walls, R)
+
+			-- square top corners for the walls (the rounded ones would leave a tiny dip under the roof)
+			local fill = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, SHOULDER),
+				Size = UDim2.fromOffset(20, 4),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+
+			local door = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0),
+				Position = UDim2.new(0.5, 0, 0.5, 3),
+				Size = UDim2.fromOffset(6, 11),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, glyph)
+			corner(door, 3)
+
+			return { roof, walls, fill }
+		end
+
+		-- info icon (ID card): a solid rounded card with cut-outs: a person on the left,
+		-- three text lines on the right
+		local function buildInfo(glyph)
+			local card = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(24, 18),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(card, 4)
+			local function cut(x, y, w, h, r, anchorX)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(anchorX or 0, 0),
+					Position = UDim2.fromOffset(x, y),
+					Size = UDim2.fromOffset(w, h),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					ZIndex = 4,
+				}, card)
+				corner(f, r)
+			end
+			-- person: head + shoulders
+			cut(8, 4, 5, 5, 3, 0.5)
+			cut(8, 10, 9, 5, 3, 0.5)
+			-- text lines
+			cut(14, 5, 7, 2, 1)
+			cut(14, 9, 7, 2, 1)
+			cut(14, 13, 4, 2, 1)
+			return { card }
+		end
+
+		-- combat icon (crosshair): a solid ring (disc with a sidebar-coloured hole), four short
+		-- ticks that cross the ring and point at the middle, and a small centre dot.
+		--   ring   = 22px disc, hole 16px  -> ring is 3px thick
+		--   ticks  = 2px wide, 8px long, centred 9px from the middle (they stick out 2px past the ring
+		--            and reach 5px from the middle)
+		--   dot    = 4px circle in the middle
+		-- Ticks and dot sit above the hole (higher ZIndex) so they stay visible.
+		local function buildCombat(glyph)
+			local inks = {}
+
+			local disc = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(22, 22),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			}, glyph)
+			corner(disc, 100)
+			table.insert(inks, disc)
+
+			local hole = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(16, 16),
+				BackgroundColor3 = SIDEBAR_BG,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, glyph)
+			corner(hole, 100)
+
+			local function tick(x, y, w, h)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, x, 0.5, y),
+					Size = UDim2.fromOffset(w, h),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 5,
+				}, glyph)
+				corner(f, 1)
+				table.insert(inks, f)
+			end
+			tick(0, -9, 2, 8)   -- top
+			tick(0, 9, 2, 8)    -- bottom
+			tick(-9, 0, 8, 2)   -- left
+			tick(9, 0, 8, 2)    -- right
+
+			local dot = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(4, 4),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 5,
+			}, glyph)
+			corner(dot, 100)
+			table.insert(inks, dot)
+
+			return inks
+		end
+
+		-- small helper for the three outline-style icons below: a block centred in the glyph
+		-- (y = offset from the middle), optionally rounded (r = corner radius)
+		local function block(glyph, w, h, y, color, z, r)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, y),
+				Size = UDim2.fromOffset(w, h),
+				BackgroundColor3 = color,
+				BorderSizePixel = 0,
+				ZIndex = z,
+			}, glyph)
+			if r then
+				corner(f, r)
+			end
+			return f
+		end
+
+		-- one short 2px line from (x1, y1) to (x2, y2), measured from the middle of the glyph.
+		-- It is a little longer than the gap so neighbouring segments overlap and stay smooth.
+		local function segment(glyph, inks, x1, y1, x2, y2, z)
+			local dx = x2 - x1
+			local dy = y2 - y1
+			local len = math.sqrt(dx * dx + dy * dy)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, (x1 + x2) / 2, 0.5, (y1 + y2) / 2),
+				Size = UDim2.fromOffset(len + 1.5, 2),
+				Rotation = math.deg(math.atan2(dy, dx)),
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = z,
+			}, glyph)
+			corner(f, 1)
+			table.insert(inks, f)
+		end
+
+		-- visuals icon (eye): an almond outline, a ring pupil and a dot, like the reference.
+		--   lids  = two curves y = +-8 * (1 - (x / 12)^2), each drawn as 12 short 2px segments
+		--           (overlapping a little so the joints stay smooth), 24px wide and 16px tall
+		--   pupil = 10px disc with a 6px hole (ring is 2px thick)
+		--   dot   = 2px circle in the middle of the pupil
+		local function buildVisuals(glyph)
+			local inks = {}
+			local A = 12   -- half width of the eye
+			local B = 8    -- half height of the eye
+			local N = 12   -- segments per eyelid
+
+			local function seg(x1, y1, x2, y2)
+				segment(glyph, inks, x1, y1, x2, y2, 3)
+			end
+
+			for side = -1, 1, 2 do
+				local px = -A
+				local py = 0
+				for i = 1, N do
+					local x = -A + (2 * A) * i / N
+					local t = x / A
+					local y = side * B * (1 - t * t)
+					seg(px, py, x, y)
+					px = x
+					py = y
+				end
+			end
+
+			table.insert(inks, block(glyph, 10, 10, 0, ICON, 4, 100))
+			block(glyph, 6, 6, 0, SIDEBAR_BG, 5, 100)
+			table.insert(inks, block(glyph, 2, 2, 0, ICON, 6, 100))
+
+			return inks
+		end
+
+		-- world icon (globe): outer ring, a tall oval, one line across the middle and one down it.
+		--   ring  = 24px disc with a 20px hole (2px thick)
+		--   oval  = an ellipse outline (11px wide, 20px tall, 2px thick) drawn from 28 short segments,
+		--           it touches the ring at the top and bottom
+		--   lines = 2px wide, 20px long, they reach the inside of the ring
+		local function buildWorld(glyph)
+			local inks = {}
+			table.insert(inks, block(glyph, 24, 24, 0, ICON, 3, 100))
+			block(glyph, 20, 20, 0, SIDEBAR_BG, 4, 100)
+
+			local N = 28
+			local RX = 5.5
+			local RY = 10
+			local px = 0
+			local py = -RY
+			for i = 1, N do
+				local t = -math.pi / 2 + (2 * math.pi) * i / N
+				local x = RX * math.cos(t)
+				local y = RY * math.sin(t)
+				segment(glyph, inks, px, py, x, y, 5)
+				px = x
+				py = y
+			end
+
+			table.insert(inks, block(glyph, 20, 2, 0, ICON, 7, 1))   -- across the middle
+			table.insert(inks, block(glyph, 2, 20, 0, ICON, 7, 1))   -- down the middle
+			return inks
+		end
+
+		-- misc icon (person, like a normal profile picture): a ring for the head and an arch for
+		-- the shoulders.
+		--   head      = 10px disc with a 6px hole (2px thick)
+		--   shoulders = 20px disc with a 16px hole, and a sidebar-coloured strip over its lower half,
+		--               so only the top arch is left (open at the bottom)
+		local function buildMisc(glyph)
+			local inks = {}
+			table.insert(inks, block(glyph, 10, 10, -6, ICON, 3, 100))
+			block(glyph, 6, 6, -6, SIDEBAR_BG, 4, 100)
+			table.insert(inks, block(glyph, 20, 20, 11, ICON, 3, 100))
+			block(glyph, 16, 16, 11, SIDEBAR_BG, 4, 100)
+			block(glyph, 28, 12, 17, SIDEBAR_BG, 5, nil)   -- hides the lower half of the shoulders
+			return inks
+		end
+
+		-- server icon: two stacked rounded units, each with a status dot and a dash
+		local function buildServer(glyph)
+			local inks = {}
+			local function unit(y)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, 0, 0.5, y),
+					Size = UDim2.fromOffset(22, 9),
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 3,
+				}, glyph)
+				corner(f, 4)
+				table.insert(inks, f)
+				local dot = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0, 6, 0.5, 0),
+					Size = UDim2.fromOffset(3, 3),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					ZIndex = 4,
+				}, f)
+				corner(dot, 2)
+				local dash = new("Frame", {
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 11, 0.5, 0),
+					Size = UDim2.fromOffset(7, 2),
+					BackgroundColor3 = SIDEBAR_BG,
+					BorderSizePixel = 0,
+					ZIndex = 4,
+				}, f)
+				corner(dash, 1)
+			end
+			unit(-6)
+			unit(6)
+			return inks
+		end
+
+		-- rounded gear: two rounded squares (straight + rotated 45 degrees) + a hollow centre
+		local function buildGear(glyph)
+			local function shape(w, rot, r, color)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(w, w),
+					Rotation = rot,
+					BackgroundColor3 = color,
+					BorderSizePixel = 0,
+					ZIndex = 3,
+				}, glyph)
+				corner(f, r)
+				return f
+			end
+			local sq1 = shape(22, 0, 5, ICON)
+			local sq2 = shape(22, 45, 5, ICON)
+			shape(10, 0, 5, SIDEBAR_BG)
+			return { sq1, sq2 }
+		end
+
+		local tipW = math.max(66, #mainTip * 7 + 20)
+
+		-- TOP group: hangs from the top, right under the Y1 logo (the logo ends at y = 46).
+		-- Six tiles, 4px apart, so the last one ends at y = 316 and the server icon (y = 332 and
+		-- below at the normal window height) still has some room above it.
+		local STEP = TILE + 4
+		local HOME_TOP = 56                      -- top edge of the house tile
+		local INFO_TOP = HOME_TOP + STEP
+		local COMBAT_TOP = INFO_TOP + STEP
+		local VISUALS_TOP = COMBAT_TOP + STEP    -- eye
+		local WORLD_TOP = VISUALS_TOP + STEP     -- globe
+		local MISC_TOP = WORLD_TOP + STEP        -- person
+
+		-- BOTTOM group: stands on the bottom, above the profile card
+		local GEAR_Y = -(14 + TILE + 8)        -- bottom edge of the gear tile
+		local SERVER_Y = GEAR_Y - TILE - 6     -- server tile sits a tiny bit above the gear
+
+		makeNavIcon({ page = "Home", tip = "Home", tipW = 66, anchorY = 0, yScale = 0, yOffset = HOME_TOP, build = buildHome })
+		makeNavIcon({ page = "Info", tip = "Info tab", tipW = 76, anchorY = 0, yScale = 0, yOffset = INFO_TOP, build = buildInfo })
+		makeNavIcon({ page = "Combat", tip = "Combat", tipW = 70, anchorY = 0, yScale = 0, yOffset = COMBAT_TOP, build = buildCombat })
+		makeNavIcon({ page = "Visuals", tip = "Visuals", tipW = 70, anchorY = 0, yScale = 0, yOffset = VISUALS_TOP, build = buildVisuals })
+		makeNavIcon({ page = "World", tip = "World", tipW = 62, anchorY = 0, yScale = 0, yOffset = WORLD_TOP, build = buildWorld })
+		makeNavIcon({ page = "Misc", tip = "Misc", tipW = 62, anchorY = 0, yScale = 0, yOffset = MISC_TOP, build = buildMisc })
+		makeNavIcon({ page = "Main", tip = mainTip, tipW = tipW, anchorY = 1, yScale = 1, yOffset = SERVER_Y, build = buildServer })
+		makeNavIcon({ page = "Settings", tip = "Settings", tipW = 66, anchorY = 1, yScale = 1, yOffset = GEAR_Y, build = buildGear })
+
+		local placed = false
+		ui.navUpdate = function()
+			for page, setActive in pairs(navIcons) do
+				setActive(page == currentPage)
+			end
+			local p = navPos[currentPage]
+			if p then
+				if placed then
+					TweenService:Create(marker, SMOOTH, { Position = p }):Play()
+				else
+					marker.Position = p
+					placed = true
+				end
+			end
+		end
+		ui.navUpdate()
+	end
+
+	---------------------------------------------------------------------
+	-- PROFILE CARD + ACCOUNT POPUP
+	---------------------------------------------------------------------
+	do
+		local CARD_POS = UDim2.new(0, 14, 1, -14)
+		local CARD_SIZE = UDim2.fromOffset(TILE, TILE)
+		local POP_POS = UDim2.new(0, SIDEBAR_W_MIN + 12, 1, -14)
+		local POP_SIZE = UDim2.fromOffset(264, 148)
+
+		local card = new("TextButton", {
+			Name = "ProfileCard",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(0, 1),
+			Position = CARD_POS,
+			Size = CARD_SIZE,
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, window)
+		corner(card, SQUARE_RADIUS)
+		table.insert(bodyParts, card)
+
+		local cardAvatar = new("ImageLabel", {
+			Name = "Avatar",
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(TILE, TILE),
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+			Image = "",
 			ZIndex = 4,
 		}, card)
-		corner(f, r)
-	end
-	cut(8, 4, 5, 5, 3, 0.5)
-	cut(8, 10, 9, 5, 3, 0.5)
-	cut(14, 5, 7, 2, 1)
-	cut(14, 9, 7, 2, 1)
-	cut(14, 13, 4, 2, 1)
-	return { card }
-end
+		corner(cardAvatar, SQUARE_RADIUS)
 
-local function buildCombat(glyph)
-	local inks = {}
-	table.insert(inks, block(glyph, 22, 22, 0, ICON, 3, 100))
-	block(glyph, 16, 16, 0, CUT, 4, 100)
-	local function tick(x, y, w, h)
-		local f = block(glyph, w, h, y, ICON, 5, 1)
-		f.Position = UDim2.new(0.5, x, 0.5, y)
-		table.insert(inks, f)
-	end
-	tick(0, -9, 2, 8)
-	tick(0, 9, 2, 8)
-	tick(-9, 0, 8, 2)
-	tick(9, 0, 8, 2)
-	table.insert(inks, block(glyph, 4, 4, 0, ICON, 5, 100))
-	return inks
-end
+		card.MouseEnter:Connect(function()
+			hover.card = true
+			TweenService:Create(card, FAST, { BackgroundColor3 = CARD_HOVER }):Play()
+		end)
+		card.MouseLeave:Connect(function()
+			hover.card = false
+			TweenService:Create(card, FAST, { BackgroundColor3 = CARD_BG }):Play()
+		end)
 
--- VISUALS: an eye. Two arcs (the lids) meeting in points at the sides, and a solid pupil.
--- 24 wide, 17 tall, centred in the icon box; the pupil is small enough to leave a clear gap to both lids.
-local function buildVisuals(glyph)
-	local inks = {}
-	local A = 12      -- half width of the eye
-	local B = 8.5     -- half height of the eye (at the middle)
-	local N = 14      -- segments per lid
-	for side = -1, 1, 2 do
-		local px = -A
-		local py = 0
-		for i = 1, N do
-			local x = -A + (2 * A) * i / N
-			local t = x / A
-			local y = side * B * (1 - t * t)
-			segment(glyph, inks, px, py, x, y, 3)
-			px = x
-			py = y
+		local popup = new("CanvasGroup", {
+			Name = "AccountPopup",
+			AnchorPoint = Vector2.new(0, 1),
+			Position = CARD_POS,
+			Size = CARD_SIZE,
+			BackgroundColor3 = POPUP_BG,
+			BorderSizePixel = 0,
+			GroupTransparency = 1,
+			Visible = false,
+			ZIndex = 5,
+		}, window)
+		corner(popup)
+		stroke(popup, BORDER, 1, 0)
+
+		local avatar = new("ImageLabel", {
+			Position = UDim2.fromOffset(16, 16),
+			Size = UDim2.fromOffset(56, 56),
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+			Image = "",
+		}, popup)
+		corner(avatar, 14)
+
+		task.spawn(function()
+			local ok, url = pcall(function()
+				return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+			end)
+			if ok and url then
+				if avatar.Parent then
+					avatar.Image = url
+				end
+				if cardAvatar.Parent then
+					cardAvatar.Image = url
+				end
+			end
+		end)
+
+		label(popup, player.DisplayName, UDim2.fromOffset(84, 22), UDim2.fromOffset(164, 20),
+			Enum.Font.GothamMedium, 14, TEXT_COLOR)
+		label(popup, "@" .. player.Name, UDim2.fromOffset(84, 44), UDim2.fromOffset(164, 16),
+			Enum.Font.Gotham, 12, DIM_TEXT)
+
+		local idCard = new("Frame", {
+			Position = UDim2.fromOffset(16, 88),
+			Size = UDim2.fromOffset(232, 44),
+			BackgroundColor3 = CARD_BG,
+			BorderSizePixel = 0,
+		}, popup)
+		corner(idCard)
+		label(idCard, "User ID", UDim2.fromOffset(12, 6), UDim2.fromOffset(120, 12),
+			Enum.Font.Gotham, 11, DIM_TEXT)
+		label(idCard, tostring(player.UserId), UDim2.fromOffset(12, 21), UDim2.fromOffset(208, 18),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+
+		local popupOpen = false
+		local popupToken = 0
+
+		local function openPopup()
+			popupOpen = true
+			popupToken = popupToken + 1
+			popup.Position = CARD_POS
+			popup.Size = CARD_SIZE
+			popup.GroupTransparency = 1
+			popup.Visible = true
+			TweenService:Create(popup, EXPAND, {
+				Position = POP_POS,
+				Size = POP_SIZE,
+				GroupTransparency = 0,
+			}):Play()
 		end
+
+		closePopup = function()
+			if not popupOpen then
+				return
+			end
+			popupOpen = false
+			popupToken = popupToken + 1
+			local token = popupToken
+			TweenService:Create(popup, COLLAPSE, {
+				Position = CARD_POS,
+				Size = CARD_SIZE,
+				GroupTransparency = 1,
+			}):Play()
+			task.delay(0.24, function()
+				if token == popupToken then
+					popup.Visible = false
+				end
+			end)
+		end
+
+		card.Activated:Connect(function()
+			if popupOpen then
+				closePopup()
+			else
+				openPopup()
+			end
+		end)
+
+		popup.MouseEnter:Connect(function()
+			hover.popup = true
+		end)
+		popup.MouseLeave:Connect(function()
+			hover.popup = false
+		end)
+
+		table.insert(conns, UserInputService.InputBegan:Connect(function(input)
+			if not popupOpen then
+				return
+			end
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch then
+				return
+			end
+			if hover.popup or hover.card then
+				return
+			end
+			closePopup()
+		end))
 	end
-	table.insert(inks, block(glyph, 8, 8, 0, ICON, 4, 100))
-	return inks
-end
 
--- WORLD: a globe. Outline circle (24 across), one meridian (ellipse) and the equator. All lines are 2px.
-local function buildWorld(glyph)
-	local inks = {}
-	ring(glyph, inks, 24, 2, 0, 0, 3)
-	local N = 36
-	local RX = 5
-	local RY = 10
-	local px = 0
-	local py = -RY
-	for i = 1, N do
-		local t = -math.pi / 2 + (2 * math.pi) * i / N
-		local x = RX * math.cos(t)
-		local y = RY * math.sin(t)
-		segment(glyph, inks, px, py, x, y, 4)
-		px = x
-		py = y
-	end
-	table.insert(inks, block(glyph, 20, 2, 0, ICON, 4, 1))
-	return inks
-end
+	---------------------------------------------------------------------
+	-- CONTROL CLUSTER (top right)
+	---------------------------------------------------------------------
+	do
+		local GAP = 2
+		local PAD = 3
+		local btns = {}
 
--- MISC: a person. Solid head (10) and solid shoulders (the top of a 22 circle, clipped), 22 tall in total, centred.
-local function buildMisc(glyph)
-	local inks = {}
-	table.insert(inks, block(glyph, 10, 10, -6, ICON, 3, 100))
-	local clip = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0.5, 1),
-		Size = UDim2.fromOffset(22, 10),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ClipsDescendants = true,
-		ZIndex = 3,
-	}, glyph)
-	local body = new("Frame", {
-		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.fromOffset(22, 22),
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, clip)
-	corner(body, 100)
-	table.insert(inks, body)
-	return inks
-end
-
-local function buildServer(glyph)
-	local inks = {}
-	local function unit(y)
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0.5, y),
-			Size = UDim2.fromOffset(22, 9),
-			BackgroundColor3 = ICON,
+		local cluster = new("Frame", {
+			Name = "Controls",
+			AnchorPoint = Vector2.new(1, 0),
+			BackgroundColor3 = CLUSTER_BG,
 			BorderSizePixel = 0,
+		}, bar)
+		corner(cluster, RADIUS + 2)
+
+		local function makeControl(kind, hoverColor)
+			local btn = new("TextButton", {
+				Name = kind,
+				AutoButtonColor = false,
+				Text = "",
+				BackgroundColor3 = hoverColor,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+			}, cluster)
+			corner(btn, 4)
+
+			local parts = {}
+			local function line(w, h, rot)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(w, h),
+					Rotation = rot or 0,
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+				}, btn)
+				corner(f, 1)
+				table.insert(parts, { f, "BackgroundColor3" })
+			end
+
+			if kind == "minimize" then
+				line(10, 2)
+			elseif kind == "maximize" then
+				local sq = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(10, 10),
+					BackgroundTransparency = 1,
+					BorderSizePixel = 0,
+				}, btn)
+				corner(sq, 3)
+				local s = stroke(sq, ICON, 1.5, 0)
+				table.insert(parts, { s, "Color" })
+			else
+				line(14, 2, 45)
+				line(14, 2, -45)
+			end
+
+			local hovering = false
+			local function paint(isOver, pressed)
+				local bgT = 1
+				if isOver then
+					if pressed then
+						bgT = 0.35
+					else
+						bgT = 0
+					end
+				end
+				TweenService:Create(btn, FAST, { BackgroundTransparency = bgT }):Play()
+				local color = ICON
+				if isOver then
+					color = ICON_HOVER
+				end
+				for _, p in ipairs(parts) do
+					TweenService:Create(p[1], FAST, { [p[2]] = color }):Play()
+				end
+			end
+
+			btn.MouseEnter:Connect(function()
+				hovering = true
+				paint(true, false)
+			end)
+			btn.MouseLeave:Connect(function()
+				hovering = false
+				paint(false, false)
+			end)
+			btn.MouseButton1Down:Connect(function()
+				paint(true, true)
+			end)
+			btn.MouseButton1Up:Connect(function()
+				paint(hovering, false)
+			end)
+			table.insert(btns, btn)
+			return btn
+		end
+
+		ui.minimize = makeControl("minimize", HOVER_GREY)
+		ui.maximize = makeControl("maximize", HOVER_GREY)
+		ui.close = makeControl("close", HOVER_RED)
+
+		ui.layoutControls = function()
+			local w = M.ctrlW
+			local h = M.ctrlH
+			local cw = w * 3 + GAP * 2 + PAD * 2
+			local ch = h + PAD * 2
+			cluster.Position = UDim2.new(1, -8, 0, (BAR_H - ch) / 2)
+			cluster.Size = UDim2.fromOffset(cw, ch)
+			for i = 1, #btns do
+				btns[i].Position = UDim2.fromOffset(PAD + (i - 1) * (w + GAP), PAD)
+				btns[i].Size = UDim2.fromOffset(w, h)
+			end
+		end
+		ui.layoutControls()
+	end
+
+	---------------------------------------------------------------------
+	-- PAGE TITLE CARD + BACK ARROW + PAGE SWITCHING
+	---------------------------------------------------------------------
+	do
+		local PAGE_TITLES = {
+			Home = "Home", Info = "Info", Combat = "Combat", Visuals = "Visuals", World = "World",
+			Misc = "Misc", Main = mainTitle, Settings = "Settings",
+		}
+
+		local titleChip = new("Frame", {
+			Name = "TitleCard",
+			Position = UDim2.fromOffset(CHIP_X, 6),
+			Size = UDim2.fromOffset(CHIP_W, 36),
+			BackgroundColor3 = SIDEBAR_BG,
+			BorderSizePixel = 0,
+		}, window)
+		corner(titleChip, RADIUS + 2)
+		stroke(titleChip, BORDER, 1, 0)
+
+		-- small caption in the same style as the section headers on the Settings page
+		label(titleChip, "CURRENT TAB", UDim2.fromOffset(12, 5), UDim2.new(1, -24, 0, 12),
+			Enum.Font.GothamMedium, 10, DIM_TEXT)
+		local titleLabel = label(titleChip, PAGE_TITLES[currentPage] or currentPage, UDim2.fromOffset(12, 18), UDim2.new(1, -24, 0, 16),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+
+		local backBtn = new("TextButton", {
+			Name = "Back",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -8, 0, BAR_H + 2),
+			Size = UDim2.fromOffset(24, 24),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+			Visible = (currentPage == "Settings"),
 			ZIndex = 3,
-		}, glyph)
-		corner(f, 4)
-		table.insert(inks, f)
-		local dot = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0, 6, 0.5, 0),
-			Size = UDim2.fromOffset(3, 3),
-			BackgroundColor3 = CUT,
-			BorderSizePixel = 0,
-			ZIndex = 4,
-		}, f)
-		corner(dot, 2)
-		local dash = new("Frame", {
-			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.new(0, 11, 0.5, 0),
-			Size = UDim2.fromOffset(7, 2),
-			BackgroundColor3 = CUT,
-			BorderSizePixel = 0,
-			ZIndex = 4,
-		}, f)
-		corner(dash, 1)
-	end
-	unit(-6)
-	unit(6)
-	return inks
-end
+		}, window)
+		corner(backBtn, RADIUS + 2)
+		ui.back = backBtn
 
--- CONFIG: a rounded square split into four panes by a cross (22 x 22, 2px lines, true outline so no dark patches)
-local function buildConfig(glyph)
-	local inks = {}
-	local box = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(18, 18),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, glyph)
-	corner(box, 5)
-	table.insert(inks, stroke(box, ICON, 2, 0))
-	table.insert(inks, block(glyph, 2, 20, 0, ICON, 3, 1))
-	table.insert(inks, block(glyph, 20, 2, 0, ICON, 3, 1))
-	return inks
-end
-
-local function buildGear(glyph)
-	local function shape(w, rot, r, color)
-		local f = new("Frame", {
+		-- the arrow lives in a 24x24 holder so it can be scaled up in Touch Mode
+		local holder = new("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(w, w),
-			Rotation = rot,
-			BackgroundColor3 = color,
-			BorderSizePixel = 0,
-			ZIndex = 3,
-		}, glyph)
-		corner(f, r)
-		return f
-	end
-	local sq1 = shape(22, 0, 5, ICON)
-	local sq2 = shape(22, 45, 5, ICON)
-	shape(10, 0, 5, CUT)
-	return { sq1, sq2 }
-end
-
----------------------------------------------------------------------
--- TABS (edit here: id, title in the top bar, name under the icon, short text, icon). Left to right.
----------------------------------------------------------------------
-local TABS = {
-	{ id = "Home",     title = "Home",     tip = "Home",     sub = "Nothing here yet",            icon = buildHome },
-	{ id = "Info",     title = "Info",     tip = "Info",     sub = "Your info will show here",    icon = buildInfo },
-	{ id = "Combat",   title = "Combat",   tip = "Combat",   sub = "Combat options will go here", icon = buildCombat },
-	{ id = "Visuals",  title = "Visuals",  tip = "Visuals",  sub = "Visual options will go here", icon = buildVisuals },
-	{ id = "World",    title = "World",    tip = "World",    sub = "World options will go here",  icon = buildWorld },
-	{ id = "Misc",     title = "Misc",     tip = "Misc",     sub = "Extra options will go here",  icon = buildMisc },
-	{ id = "Server",   title = "Server",   tip = "Server",   sub = "Server tools will go here",   icon = buildServer },
-	{ id = "Config",   title = "Config",   tip = "Config",   sub = "Config options will go here", icon = buildConfig },
-	{ id = "Settings", title = "Settings", tip = "Settings", sub = "Settings will go here",       icon = buildGear },
-}
-
-local tabById = {}
-for i = 1, #TABS do
-	tabById[TABS[i].id] = TABS[i]
-end
-local currentTab = CONFIG.StartTab
-if not tabById[currentTab] then
-	currentTab = TABS[1].id
-end
-
----------------------------------------------------------------------
--- WINDOW
----------------------------------------------------------------------
-local WIN_W = 760
-local WIN_H = 480
-local BAR_H = 56        -- top bar
-local TAB_H = 62        -- bottom tab bar
-local SLOT_W = 78       -- width of one tab
-local GAP = 8
-
-local conns = {}
-local alive = true
-local minimized = false
-local maximized = false
-local hidden = false
-
-local gui = new("ScreenGui", {
-	Name = CONFIG.Name,
-	ResetOnSpawn = false,
-	IgnoreGuiInset = true,
-	DisplayOrder = 999,
-	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-}, playerGui)
-
-local fitScale = 1
-do
-	local cam = workspace.CurrentCamera
-	if cam then
-		local vp = cam.ViewportSize
-		fitScale = math.min(1, (vp.X - 24) / WIN_W, (vp.Y - 24) / WIN_H)
-		fitScale = math.max(0.5, fitScale)
-	end
-end
-
-local window = new("CanvasGroup", {
-	Name = "Window",
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.fromOffset(WIN_W, WIN_H),
-	BackgroundColor3 = BG,
-	BorderSizePixel = 0,
-	GroupTransparency = 1,
-}, gui)
-corner(window, 8)
-local windowScale = new("UIScale", { Scale = fitScale * 0.92 }, window)
-
-do
-	local outline = new("Frame", {
-		Name = "Outline",
-		Position = UDim2.fromOffset(1, 1),
-		Size = UDim2.new(1, -2, 1, -2),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 60,
-	}, window)
-	corner(outline, 7)
-	stroke(outline, BORDER, 1, 0)
-end
-
--- top bar (drag handle)
-local bar = new("Frame", {
-	Name = "TopBar",
-	Size = UDim2.new(1, 0, 0, BAR_H),
-	BackgroundTransparency = 1,
-}, window)
-
--- logo: "Y" in red, the last character white with the soft gradient
-do
-	local head = string.sub(CONFIG.Logo, 1, -2)
-	local tail = string.sub(CONFIG.Logo, -1)
-	local row = new("Frame", {
-		Name = "Logo",
-		Position = UDim2.fromOffset(18, 13),
-		Size = UDim2.fromOffset(0, 30),
-		AutomaticSize = Enum.AutomaticSize.X,
-		BackgroundTransparency = 1,
-		ZIndex = 4,
-	}, window)
-	new("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		HorizontalAlignment = Enum.HorizontalAlignment.Left,
-		VerticalAlignment = Enum.VerticalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}, row)
-	local function part(text, order, color)
-		return new("TextLabel", {
-			LayoutOrder = order,
+			Size = UDim2.fromOffset(24, 24),
 			BackgroundTransparency = 1,
-			Size = UDim2.fromOffset(0, 30),
-			AutomaticSize = Enum.AutomaticSize.X,
-			Font = Enum.Font.GothamBlack,
-			Text = text,
-			TextSize = 24,
-			TextColor3 = color,
 			ZIndex = 4,
-		}, row)
-	end
-	part(head, 1, CALM_RED)
-	local one = part(tail, 2, Color3.new(1, 1, 1))
-	new("UIGradient", {
-		Rotation = 90,
-		Color = ColorSequence.new({
-			ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
-			ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
-		}),
-	}, one)
-	-- thin vertical divider between the logo and the tab name
-	new("Frame", {
-		Position = UDim2.fromOffset(70, 14),
-		Size = UDim2.fromOffset(1, 28),
-		BackgroundColor3 = BORDER,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, window)
-end
+		}, backBtn)
+		local holderScale = new("UIScale", { Scale = 1 }, holder)
 
--- content card (between the top bar and the tab bar)
-local card = new("Frame", {
-	Name = "Content",
-	Position = UDim2.fromOffset(GAP, BAR_H),
-	Size = UDim2.new(1, -(GAP * 2), 1, -(BAR_H + TAB_H + GAP * 2)),
-	BackgroundColor3 = WELL,
-	BorderSizePixel = 0,
-}, window)
-corner(card, 8)
-stroke(card, BORDER, 1, 0)
-
--- bottom tab bar
-local tabBar = new("Frame", {
-	Name = "TabBar",
-	AnchorPoint = Vector2.new(0, 1),
-	Position = UDim2.new(0, GAP, 1, -GAP),
-	Size = UDim2.new(1, -(GAP * 2), 0, TAB_H),
-	BackgroundColor3 = WELL,
-	BorderSizePixel = 0,
-	ZIndex = 2,
-}, window)
-corner(tabBar, 8)
-stroke(tabBar, BORDER, 1, 0)
-
--- the tabs sit in a block that stays centred in the bar
-local tabRow = new("Frame", {
-	Name = "Tabs",
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	Position = UDim2.fromScale(0.5, 0.5),
-	Size = UDim2.fromOffset(SLOT_W * #TABS, TAB_H),
-	BackgroundTransparency = 1,
-	ZIndex = 3,
-}, tabBar)
-
----------------------------------------------------------------------
--- PAGES (empty placeholders: just a short message in the middle)
----------------------------------------------------------------------
-local PAGE_POS = UDim2.fromOffset(0, 0)
-local pages = {}
-
-local function makePage(tab)
-	local shown = (tab.id == currentTab)
-	local gt = 1
-	if shown then
-		gt = 0
-	end
-	local p = new("CanvasGroup", {
-		Name = tab.id .. "Page",
-		Position = PAGE_POS,
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		GroupTransparency = gt,
-		Visible = shown,
-	}, card)
-
-	local mid = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(320, 70),
-		BackgroundTransparency = 1,
-	}, p)
-	label(mid, tab.title, UDim2.fromOffset(0, 8), UDim2.new(1, 0, 0, 26),
-		Enum.Font.GothamBold, 20, TEXT_COLOR, Enum.TextXAlignment.Center)
-	label(mid, tab.sub, UDim2.fromOffset(0, 40), UDim2.new(1, 0, 0, 16),
-		Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center)
-	pages[tab.id] = p
-end
-for i = 1, #TABS do
-	makePage(TABS[i])
-end
-
----------------------------------------------------------------------
--- TOP BAR: current tab caption + title
----------------------------------------------------------------------
-local titleLabel = nil
-do
-	label(window, "CURRENT TAB", UDim2.fromOffset(84, 11), UDim2.fromOffset(200, 12),
-		Enum.Font.GothamMedium, 10, DIM_TEXT)
-	titleLabel = label(window, tabById[currentTab].title, UDim2.fromOffset(84, 24),
-		UDim2.fromOffset(300, 22), Enum.Font.GothamBold, 17, TEXT_COLOR)
-	titleLabel.ZIndex = 3
-end
-
----------------------------------------------------------------------
--- SEARCH BOX (top bar, between the tab name and the window buttons)
--- You can click it and type, but it shows no results yet: onSearch() is the empty hook where the
--- results will be built later. Escape clears it, the small x clears it, Enter just leaves the box.
----------------------------------------------------------------------
-local searchQuery = ""
-local searchBox = nil
-
-local function onSearch(query)
-	-- nothing shows up yet
-end
-
-do
-	local PILL_W = 260
-	local PILL_H = 32
-
-	local pill = new("Frame", {
-		Name = "Search",
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0, BAR_H / 2),
-		Size = UDim2.fromOffset(PILL_W, PILL_H),
-		BackgroundColor3 = WELL,
-		BorderSizePixel = 0,
-		Active = true,   -- clicks on the pill must not start dragging the window
-		ZIndex = 10,
-	}, window)
-	corner(pill, 100)
-	local pillStroke = stroke(pill, BORDER, 1, 0)
-
-	-- magnifier: a ring and a handle, 2.5px lines, about 20 x 20 in total
-	--   ring: 16 across (outside), centred at (9, 9) of the 22 x 22 holder
-	--   handle: 9 long, along the 45 degree line from the ring, ends at about (20, 20)
-	local LINE = 2.5
-	local holder = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset(21, PILL_H / 2),
-		Size = UDim2.fromOffset(22, 22),
-		BackgroundTransparency = 1,
-		ZIndex = 11,
-	}, pill)
-	local ring = new("Frame", {
-		Position = UDim2.fromOffset(1 + LINE, 1 + LINE),
-		Size = UDim2.fromOffset(16 - LINE * 2, 16 - LINE * 2),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 12,
-	}, holder)
-	corner(ring, 100)
-	local ringStroke = stroke(ring, ICON, LINE, 0)
-	local handle = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset(16.8, 16.8),
-		Size = UDim2.fromOffset(9, LINE),
-		Rotation = 45,
-		BackgroundColor3 = ICON,
-		BorderSizePixel = 0,
-		ZIndex = 12,
-	}, holder)
-	corner(handle, 1)
-
-	local box = new("TextBox", {
-		Name = "SearchBox",
-		Position = UDim2.fromOffset(38, 0),
-		Size = UDim2.new(1, -(38 + 34), 1, 0),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ClearTextOnFocus = false,
-		Text = "",
-		PlaceholderText = "Search features",
-		PlaceholderColor3 = DIM_TEXT,
-		TextColor3 = TEXT_COLOR,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 13,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		ZIndex = 12,
-	}, pill)
-	searchBox = box
-
-	-- clicking the magnifier also puts the cursor in the box
-	local iconHit = new("TextButton", {
-		AutoButtonColor = false,
-		Text = "",
-		BackgroundTransparency = 1,
-		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.fromOffset(36, PILL_H),
-		ZIndex = 13,
-	}, pill)
-	iconHit.Activated:Connect(function()
-		box:CaptureFocus()
-	end)
-
-	-- small x on the right, only while there is text
-	local clearBtn = new("TextButton", {
-		AutoButtonColor = false,
-		Text = "",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -8, 0.5, 0),
-		Size = UDim2.fromOffset(20, 20),
-		BackgroundTransparency = 1,
-		Visible = false,
-		ZIndex = 13,
-	}, pill)
-	local clearParts = {}
-	for i = 1, 2 do
-		local rot = 45
-		if i == 2 then
-			rot = -45
+		local arrowParts = {}
+		local function arrowStroke(w, x, y, rot)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, x, 0.5, y),
+				Size = UDim2.fromOffset(w, 2),
+				Rotation = rot,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 4,
+			}, holder)
+			corner(f, 1)
+			table.insert(arrowParts, f)
 		end
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(11, 2.5),
-			Rotation = rot,
+		arrowStroke(10, -1, 0, 0)
+		arrowStroke(5, 2.3, -2, 45)
+		arrowStroke(5, 2.3, 2, -45)
+
+		backBtn.MouseEnter:Connect(function()
+			TweenService:Create(backBtn, FAST, { BackgroundColor3 = HOVER_GREY }):Play()
+			for _, f in ipairs(arrowParts) do
+				TweenService:Create(f, FAST, { BackgroundColor3 = ICON_HOVER }):Play()
+			end
+		end)
+		backBtn.MouseLeave:Connect(function()
+			TweenService:Create(backBtn, FAST, { BackgroundColor3 = CLUSTER_BG }):Play()
+			for _, f in ipairs(arrowParts) do
+				TweenService:Create(f, FAST, { BackgroundColor3 = ICON }):Play()
+			end
+		end)
+
+		ui.layoutBack = function()
+			backBtn.Size = UDim2.fromOffset(M.backSize, M.backSize)
+			holderScale.Scale = M.backSize / 24
+		end
+		ui.layoutBack()
+
+		local titleToken = 0
+		local pageToken = 0
+		local pages = {
+			Home = homePage, Info = infoPage, Combat = combatPage, Visuals = visualsPage,
+			World = worldPage, Misc = miscPage, Main = mainPage, Settings = settingsPage,
+		}
+
+		showPage = function(name)
+			if name == currentPage or not pages[name] then
+				return
+			end
+			-- Settings remembers the page you came from so the back arrow returns there
+			if name == "Settings" then
+				returnPage = currentPage
+			end
+			currentPage = name
+			backBtn.Visible = (name == "Settings") and not minimized
+			if ui.navUpdate then
+				ui.navUpdate()
+			end
+
+			-- old page fades out, new page fades in while sliding up a little
+			pageToken = pageToken + 1
+			local pt = pageToken
+			local nxt = pages[name]
+			for _, p in pairs(pages) do
+				if p ~= nxt then
+					TweenService:Create(p, FAST, { GroupTransparency = 1 }):Play()
+					task.delay(0.14, function()
+						if pt == pageToken then
+							p.Visible = false
+						end
+					end)
+				end
+			end
+			nxt.Position = PAGE_POS + UDim2.fromOffset(0, 10)
+			nxt.GroupTransparency = 1
+			nxt.Visible = true
+			TweenService:Create(nxt, SMOOTH, { Position = PAGE_POS, GroupTransparency = 0 }):Play()
+
+			titleToken = titleToken + 1
+			local token = titleToken
+			TweenService:Create(titleLabel, FAST, { TextTransparency = 1 }):Play()
+			task.delay(0.12, function()
+				if token ~= titleToken then
+					return
+				end
+				titleLabel.Text = PAGE_TITLES[name] or name
+				TweenService:Create(titleLabel, FAST, { TextTransparency = 0 }):Play()
+			end)
+		end
+
+		backBtn.Activated:Connect(function()
+			showPage(returnPage or "Home")
+		end)
+	end
+
+	---------------------------------------------------------------------
+	-- TOAST + TOP BAR STATS
+	---------------------------------------------------------------------
+	local statsLabel = label(bar, "", UDim2.fromOffset(CHIP_X + CHIP_W + 10, 0),
+		UDim2.new(1, -(CHIP_X + CHIP_W + 10 + 116), 1, 0),
+		Enum.Font.GothamMedium, 11, DIM_TEXT, Enum.TextXAlignment.Right)
+
+	ui.layoutStats = function()
+		local clusterW = M.ctrlW * 3 + 10
+		statsLabel.Size = UDim2.new(1, -(CHIP_X + CHIP_W + 10 + clusterW + 16), 1, 0)
+	end
+
+	do
+		local MAX_TOASTS = 4
+		local active = {}
+		local order = 0
+
+		-- toasts stack upward from the bottom; newest sits at the bottom
+		local holder = new("Frame", {
+			Name = "ToastStack",
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, (SIDEBAR_W_MIN + 12) / 2, 1, -14),
+			Size = UDim2.fromOffset(360, 170),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 22,
+		}, window)
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			VerticalAlignment = Enum.VerticalAlignment.Bottom,
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, holder)
+
+		local function dismiss(item)
+			if item.gone then
+				return
+			end
+			item.gone = true
+			for i = 1, #active do
+				if active[i] == item then
+					table.remove(active, i)
+					break
+				end
+			end
+			TweenService:Create(item.lbl, FAST, { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+			TweenService:Create(item.stroke, FAST, { Transparency = 1 }):Play()
+			task.delay(FAST.Time + 0.02, function()
+				item.lbl:Destroy()
+			end)
+		end
+
+		local function arm(item, dur)
+			item.token = item.token + 1
+			local tk = item.token
+			task.delay(dur, function()
+				if tk == item.token then
+					dismiss(item)
+				end
+			end)
+		end
+
+		toast = function(msg, dur)
+			if minimized then
+				return
+			end
+			dur = dur or 2.5
+			msg = tostring(msg)
+
+			-- same text again: keep the one that is already there and restart its timer
+			for i = 1, #active do
+				if active[i].text == msg then
+					arm(active[i], dur)
+					return
+				end
+			end
+
+			order = order + 1
+			local lbl = new("TextLabel", {
+				LayoutOrder = order,
+				Size = UDim2.new(0, 0, 0, 28),
+				AutomaticSize = Enum.AutomaticSize.X,
+				BackgroundColor3 = CLUSTER_BG,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Text = msg,
+				TextColor3 = TEXT_COLOR,
+				TextTransparency = 1,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 12,
+				ZIndex = 22,
+			}, holder)
+			corner(lbl, RADIUS + 4)
+			local st = stroke(lbl, BORDER, 1, 1)
+			pad(lbl, 14, 0, 14, 0)
+
+			local item = { lbl = lbl, stroke = st, text = msg, token = 0, gone = false }
+			active[#active + 1] = item
+			TweenService:Create(lbl, FAST, { BackgroundTransparency = 0, TextTransparency = 0 }):Play()
+			TweenService:Create(st, FAST, { Transparency = 0 }):Play()
+
+			-- too many: the oldest one leaves
+			while #active > MAX_TOASTS do
+				dismiss(active[1])
+			end
+			arm(item, dur)
+		end
+	end
+
+	---------------------------------------------------------------------
+	-- SETTINGS: UI TOGGLE KEYBIND + TOUCH MODE
+	---------------------------------------------------------------------
+	do
+		local keybind = Enum.KeyCode.RightShift
+		local listening = false
+		local animToken = 0
+
+		local keysHeader = label(settingsPage, "KEYBINDS", UDim2.fromOffset(2, 6), UDim2.fromOffset(200, 14),
+			Enum.Font.GothamMedium, 11, DIM_TEXT)
+
+		local keyRow = new("Frame", {
+			Name = "ToggleKeybindRow",
+			BackgroundColor3 = SIDEBAR_BG,
+			BorderSizePixel = 0,
+		}, settingsPage)
+		corner(keyRow, RADIUS + 4)
+
+		local keyTitle = label(keyRow, "UI Toggle Keybind", UDim2.fromOffset(14, 10), UDim2.new(1, -150, 0, 16),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+		local keySub = label(keyRow, "Hide or show the whole window", UDim2.fromOffset(14, 29), UDim2.new(1, -150, 0, 14),
+			Enum.Font.Gotham, 11, DIM_TEXT)
+
+		local keyBtn = new("TextButton", {
+			Name = "KeybindButton",
+			AutoButtonColor = false,
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(104, 28),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 12,
+			TextColor3 = ICON_HOVER,
+			Text = keybind.Name,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, keyRow)
+		corner(keyBtn, RADIUS + 2)
+
+		local function paintKeyBtn(isOver)
+			local bg = CLUSTER_BG
+			if listening or isOver then
+				bg = HOVER_GREY
+			end
+			TweenService:Create(keyBtn, FAST, { BackgroundColor3 = bg }):Play()
+		end
+		keyBtn.MouseEnter:Connect(function()
+			paintKeyBtn(true)
+		end)
+		keyBtn.MouseLeave:Connect(function()
+			paintKeyBtn(false)
+		end)
+		keyBtn.Activated:Connect(function()
+			listening = not listening
+			if listening then
+				keyBtn.Text = "Press a key..."
+			else
+				keyBtn.Text = keybind.Name
+			end
+			paintKeyBtn(true)
+		end)
+
+		-- ===== Touch Mode =====
+		local uiHeader = label(settingsPage, "INTERFACE", UDim2.fromOffset(2, 100), UDim2.fromOffset(200, 14),
+			Enum.Font.GothamMedium, 11, DIM_TEXT)
+
+		local touchRow = new("Frame", {
+			Name = "TouchModeRow",
+			BackgroundColor3 = SIDEBAR_BG,
+			BorderSizePixel = 0,
+		}, settingsPage)
+		corner(touchRow, RADIUS + 4)
+
+		local touchTitle = label(touchRow, "Touch Mode", UDim2.fromOffset(14, 10), UDim2.new(1, -150, 0, 16),
+			Enum.Font.GothamMedium, 13, TEXT_COLOR)
+		local touchSub = label(touchRow, "Bigger buttons, tabs and rows for touchscreens", UDim2.fromOffset(14, 29), UDim2.new(1, -150, 0, 14),
+			Enum.Font.Gotham, 11, DIM_TEXT)
+
+		local switch = new("TextButton", {
+			Name = "TouchSwitch",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -12, 0.5, 0),
+			Size = UDim2.fromOffset(42, 22),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+		}, touchRow)
+		corner(switch, 100)
+		stroke(switch, BORDER, 1, 0)
+
+		local knob = new("Frame", {
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.new(0, 3, 0.5, 0),
+			Size = UDim2.fromOffset(16, 16),
 			BackgroundColor3 = DIM_TEXT,
 			BorderSizePixel = 0,
-			ZIndex = 14,
-		}, clearBtn)
-		corner(f, 1)
-		clearParts[i] = f
-	end
-	clearBtn.MouseEnter:Connect(function()
-		for i = 1, #clearParts do
-			TweenService:Create(clearParts[i], FAST, { BackgroundColor3 = ICON_HOVER }):Play()
-		end
-	end)
-	clearBtn.MouseLeave:Connect(function()
-		for i = 1, #clearParts do
-			TweenService:Create(clearParts[i], FAST, { BackgroundColor3 = DIM_TEXT }):Play()
-		end
-	end)
-	clearBtn.Activated:Connect(function()
-		box.Text = ""
-		box:CaptureFocus()
-	end)
+		}, switch)
+		corner(knob, 100)
 
-	-- the look changes while the box has the cursor: red outline, brighter magnifier
-	local function paintFocus(on)
-		local line = BORDER
-		local ink = ICON
-		if on then
-			line = CALM_RED
-			ink = ICON_HOVER
-		end
-		TweenService:Create(pillStroke, FAST, { Color = line }):Play()
-		TweenService:Create(ringStroke, FAST, { Color = ink }):Play()
-		TweenService:Create(handle, FAST, { BackgroundColor3 = ink }):Play()
-	end
-	box.Focused:Connect(function()
-		paintFocus(true)
-	end)
-	box.FocusLost:Connect(function(enterPressed, input)
-		paintFocus(false)
-		if input and input.KeyCode == Enum.KeyCode.Escape then
-			box.Text = ""
-		end
-	end)
-
-	box:GetPropertyChangedSignal("Text"):Connect(function()
-		searchQuery = box.Text
-		clearBtn.Visible = (box.Text ~= "")
-		onSearch(searchQuery)
-	end)
-end
-
----------------------------------------------------------------------
--- TAB BAR: icon + name for every tab, a hover pill, and the sliding red marker
----------------------------------------------------------------------
-local navIcons = {}
-local navPos = {}
-local showTab = function(_id) end
-
-local marker = new("Frame", {
-	Name = "NavMarker",
-	Position = UDim2.fromOffset(0, 0),
-	Size = UDim2.fromOffset(28, 3),
-	BackgroundColor3 = CALM_RED,
-	BorderSizePixel = 0,
-	ZIndex = 6,
-}, tabRow)
-corner(marker, 2)
-
-do
-	for i = 1, #TABS do
-		local tab = TABS[i]
-		local x0 = (i - 1) * SLOT_W
-		navPos[tab.id] = UDim2.fromOffset(x0 + (SLOT_W - 28) / 2, 0)
-
-		local slot = new("Frame", {
-			Name = tab.id .. "Tab",
-			Position = UDim2.fromOffset(x0, 0),
-			Size = UDim2.fromOffset(SLOT_W, TAB_H),
-			BackgroundTransparency = 1,
-			ZIndex = 3,
-		}, tabRow)
-
-		-- soft pill behind the tab (shows on hover, faintly on the active tab)
-		local pill = new("Frame", {
-			Position = UDim2.fromOffset(5, 7),
-			Size = UDim2.new(1, -10, 1, -14),
-			BackgroundColor3 = HOVER_GREY,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ZIndex = 3,
-		}, slot)
-		corner(pill, 8)
-
-		local glyph = new("Frame", {
-			Name = "Glyph",
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.new(0.5, 0, 0, 22),
-			Size = UDim2.fromOffset(34, 34),
-			BackgroundTransparency = 1,
-			ZIndex = 4,
-		}, slot)
-		local glyphScale = new("UIScale", { Scale = 0.85 }, glyph)
-		local inks = tab.icon(glyph)
-
-		local name = label(slot, tab.tip, UDim2.new(0, 0, 0, 40), UDim2.new(1, 0, 0, 14),
-			Enum.Font.GothamMedium, 11, DIM_TEXT, Enum.TextXAlignment.Center)
-		name.ZIndex = 4
-
-		local active = false
-		local hovering = false
-		local function paint()
-			local color = ICON
-			local nameColor = DIM_TEXT
-			local pillT = 1
-			if active then
-				color = ICON_HOVER
-				nameColor = TEXT_COLOR
-				pillT = 0.82
+		local function paintSwitch()
+			local kd = M.switchH - 6
+			local pos = UDim2.new(0, 3, 0.5, 0)
+			local trackColor = CLUSTER_BG
+			local knobColor = DIM_TEXT
+			if W.Touch then
+				pos = UDim2.new(1, -(kd + 3), 0.5, 0)
+				trackColor = JOIN_BG
+				knobColor = BLACK
 			end
-			if hovering then
-				color = ICON_HOVER
-				if not active then
-					nameColor = ICON
+			TweenService:Create(knob, SMOOTH, { Position = pos, Size = UDim2.fromOffset(kd, kd) }):Play()
+			TweenService:Create(knob, FAST, { BackgroundColor3 = knobColor }):Play()
+			TweenService:Create(switch, FAST, { BackgroundColor3 = trackColor }):Play()
+		end
+
+		switch.Activated:Connect(function()
+			applyTouch(not W.Touch)
+		end)
+
+		ui.layoutSettings = function()
+			local off = M.setOff
+			local h = M.setRowH
+			local ty = math.floor((h - 34) / 2)
+			local textW = M.keyW + 40
+
+			keysHeader.Position = UDim2.fromOffset(2, 6 + off)
+			keyRow.Position = UDim2.fromOffset(0, 28 + off)
+			keyRow.Size = UDim2.new(1, -8, 0, h)
+			keyBtn.Size = UDim2.fromOffset(M.keyW, M.keyH)
+			keyTitle.Position = UDim2.fromOffset(14, ty)
+			keyTitle.Size = UDim2.new(1, -textW, 0, 16)
+			keySub.Position = UDim2.fromOffset(14, ty + 19)
+			keySub.Size = UDim2.new(1, -textW, 0, 14)
+
+			local y2 = 28 + off + h + 18
+			uiHeader.Position = UDim2.fromOffset(2, y2)
+			touchRow.Position = UDim2.fromOffset(0, y2 + 22)
+			touchRow.Size = UDim2.new(1, -8, 0, h)
+			touchTitle.Position = UDim2.fromOffset(14, ty)
+			touchTitle.Size = UDim2.new(1, -(M.switchW + 40), 0, 16)
+			touchSub.Position = UDim2.fromOffset(14, ty + 19)
+			touchSub.Size = UDim2.new(1, -(M.switchW + 40), 0, 14)
+			switch.Size = UDim2.fromOffset(M.switchW, M.switchH)
+			paintSwitch()
+		end
+
+		-- hide / show animation: the window shrinks a little and fades out, and pops back in
+		local HIDE_INFO = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		local SHOW_INFO = TweenInfo.new(0.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local FADE_IN = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+		local function setUIVisible(show)
+			if uiHidden == (not show) then
+				return
+			end
+			uiHidden = not show
+
+			-- while minimized only the little Y1 square is affected
+			if minimized then
+				if ui.miniShow then
+					ui.miniShow(show)
 				end
-				pillT = 0.55
+				return
 			end
-			for k = 1, #inks do
-				local ink = inks[k]
-				local prop = "BackgroundColor3"
-				if ink:IsA("UIStroke") then
-					prop = "Color"
-				end
-				TweenService:Create(ink, FAST, { [prop] = color }):Play()
+
+			animToken = animToken + 1
+			local token = animToken
+
+			local baseScale = fitScale
+			if maximized then
+				baseScale = 1
 			end
-			TweenService:Create(name, FAST, { TextColor3 = nameColor }):Play()
-			TweenService:Create(pill, FAST, { BackgroundTransparency = pillT }):Play()
-		end
 
-		local hit = new("TextButton", {
-			Name = "Hit",
-			Text = "",
-			AutoButtonColor = false,
-			BackgroundTransparency = 1,
-			Size = UDim2.fromScale(1, 1),
-			ZIndex = 8,
-		}, slot)
-		hit.Activated:Connect(function()
-			showTab(tab.id)
-		end)
-
-		hit.MouseEnter:Connect(function()
-			hovering = true
-			TweenService:Create(glyphScale, GROW, { Scale = 0.98 }):Play()
-			paint()
-		end)
-		hit.MouseLeave:Connect(function()
-			hovering = false
-			TweenService:Create(glyphScale, GROW, { Scale = 0.85 }):Play()
-			paint()
-		end)
-		hit.MouseButton1Down:Connect(function()
-			TweenService:Create(glyphScale, FAST, { Scale = 0.78 }):Play()
-		end)
-		hit.MouseButton1Up:Connect(function()
-			local s = 0.85
-			if hovering then
-				s = 0.98
-			end
-			TweenService:Create(glyphScale, GROW, { Scale = s }):Play()
-		end)
-
-		navIcons[tab.id] = function(isActive)
-			active = isActive
-			paint()
-		end
-	end
-end
-
-local markerPlaced = false
-local function navUpdate()
-	for id, setActive in pairs(navIcons) do
-		setActive(id == currentTab)
-	end
-	local p = navPos[currentTab]
-	if p then
-		if markerPlaced then
-			TweenService:Create(marker, SMOOTH, { Position = p }):Play()
-		else
-			marker.Position = p
-			markerPlaced = true
-		end
-	end
-end
-navUpdate()
-
----------------------------------------------------------------------
--- TAB SWITCHING
----------------------------------------------------------------------
-do
-	local pageToken = 0
-	local titleToken = 0
-	showTab = function(id)
-		if id == currentTab or not pages[id] then
-			return
-		end
-		currentTab = id
-		navUpdate()
-
-		pageToken = pageToken + 1
-		local pt = pageToken
-		local nxt = pages[id]
-		for pid, p in pairs(pages) do
-			if p ~= nxt then
-				TweenService:Create(p, FAST, { GroupTransparency = 1 }):Play()
-				task.delay(0.14, function()
-					if pt == pageToken then
-						p.Visible = false
+			if show then
+				window.Visible = true
+				TweenService:Create(windowScale, SHOW_INFO, { Scale = baseScale }):Play()
+				TweenService:Create(window, FADE_IN, { GroupTransparency = 0 }):Play()
+			else
+				closePopup()
+				TweenService:Create(windowScale, HIDE_INFO, { Scale = baseScale * 0.9 }):Play()
+				TweenService:Create(window, HIDE_INFO, { GroupTransparency = 1 }):Play()
+				task.delay(HIDE_INFO.Time + 0.02, function()
+					if token == animToken then
+						window.Visible = false
 					end
 				end)
 			end
 		end
-		nxt.Position = PAGE_POS + UDim2.fromOffset(0, 10)
-		nxt.GroupTransparency = 1
-		nxt.Visible = true
-		TweenService:Create(nxt, SMOOTH, { Position = PAGE_POS, GroupTransparency = 0 }):Play()
 
-		titleToken = titleToken + 1
-		local tk = titleToken
-		TweenService:Create(titleLabel, FAST, { TextTransparency = 1 }):Play()
-		task.delay(0.12, function()
-			if tk ~= titleToken then
+		table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
+			if listening then
+				if input.UserInputType ~= Enum.UserInputType.Keyboard then
+					return
+				end
+				listening = false
+				if input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode ~= Enum.KeyCode.Unknown then
+					keybind = input.KeyCode
+				end
+				keyBtn.Text = keybind.Name
+				paintKeyBtn(false)
 				return
 			end
-			titleLabel.Text = tabById[id].title
-			TweenService:Create(titleLabel, FAST, { TextTransparency = 0 }):Play()
-		end)
-	end
-end
-
----------------------------------------------------------------------
--- KEYBINDS PANEL (small card docked on the right side of the screen)
---   * opens / closes with the keyboard button in the top bar (left of minimize), closes with its x,
---     drag it by its title bar
---   * click a key box, then press a key or a mouse button to change it (Escape = cancel, Backspace = none)
---   * right now it has NO rows: it is only a visual (the window still hides with CONFIG.HideKey).
---     Add rows in the BINDS table when the binds should work.
---   * IsBind(id, input) and GetBind(id) are returned at the bottom of the file so other code can use the binds
----------------------------------------------------------------------
--- empty for now: the panel is only a visual. Add rows here later, for example:
---   { id = "Menu", title = "Menu", wired = true, default = { kind = "Key", key = Enum.KeyCode.RightShift } },
-local BINDS = {
-}
-local bindDef = {}
-local binds = {}
-for i = 1, #BINDS do
-	bindDef[BINDS[i].id] = BINDS[i]
-	binds[BINDS[i].id] = BINDS[i].default
-end
-
-local function bindName(b)
-	if not b then
-		return "None"
-	end
-	if b.kind == "Mouse" then
-		return "Mouse " .. tostring(b.n)
-	end
-	return b.key.Name
-end
-
-local function bindMatches(id, input)
-	local b = binds[id]
-	if not b then
-		return false
-	end
-	if b.kind == "Key" then
-		return input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == b.key
-	end
-	local t = input.UserInputType
-	if b.n == 1 then
-		return t == Enum.UserInputType.MouseButton1
-	elseif b.n == 2 then
-		return t == Enum.UserInputType.MouseButton2
-	end
-	return t == Enum.UserInputType.MouseButton3
-end
-
-local KB_W = 232
-local KB_HEAD = 42
-local KB_ROW = 34
-local KB_LINE_HOVER = Color3.fromRGB(96, 96, 102)
-local kbOpen = true
-local kbSuppressed = false
-local kbListening = nil     -- id of the bind that is waiting for a key
-local kbLastBind = 0
-local kbToken = 0
-local kbPills = {}
-local kbLines = {}
-
-local kbPanel = new("CanvasGroup", {
-	Name = "Keybinds",
-	AnchorPoint = Vector2.new(1, 0.5),
-	Position = UDim2.new(1, -16, 0.5, 0),
-	Size = UDim2.fromOffset(KB_W, KB_HEAD + math.max(#BINDS, 1) * KB_ROW + 12),
-	BackgroundColor3 = BG,
-	BorderSizePixel = 0,
-	GroupTransparency = 1,
-	Visible = false,
-}, gui)
-corner(kbPanel, 8)
-local kbScale = new("UIScale", { Scale = 0.92 }, kbPanel)
-do
-	local outline = new("Frame", {
-		Position = UDim2.fromOffset(1, 1),
-		Size = UDim2.new(1, -2, 1, -2),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 30,
-	}, kbPanel)
-	corner(outline, 7)
-	stroke(outline, BORDER, 1, 0)
-end
-
-local kbHead = new("Frame", {
-	Name = "Head",
-	Size = UDim2.new(1, 0, 0, KB_HEAD),
-	BackgroundTransparency = 1,
-	Active = true,
-	ZIndex = 2,
-}, kbPanel)
-
--- keyboard icon (calm red)
-do
-	local ico = new("Frame", {
-		Position = UDim2.fromOffset(14, 13),
-		Size = UDim2.fromOffset(18, 16),
-		BackgroundTransparency = 1,
-		ZIndex = 3,
-	}, kbPanel)
-	local body = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(14, 10),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, ico)
-	corner(body, 3)
-	stroke(body, CALM_RED, 2, 0)
-	for k = -1, 1 do
-		local d = block(ico, 2, 2, -2, CALM_RED, 4, 1)
-		d.Position = UDim2.new(0.5, k * 4, 0.5, -2)
-	end
-	block(ico, 8, 2, 2, CALM_RED, 4, 1)
-end
-label(kbPanel, "Keybinds", UDim2.fromOffset(40, 0), UDim2.new(1, -90, 0, KB_HEAD),
-	Enum.Font.GothamBold, 14, TEXT_COLOR).ZIndex = 3
-
-new("Frame", {
-	Position = UDim2.fromOffset(14, KB_HEAD - 1),
-	Size = UDim2.new(1, -28, 0, 1),
-	BackgroundColor3 = BORDER,
-	BorderSizePixel = 0,
-	ZIndex = 3,
-}, kbPanel)
-
--- shown while there are no rows
-if #BINDS == 0 then
-	label(kbPanel, "Nothing here yet", UDim2.fromOffset(0, KB_HEAD + 4), UDim2.new(1, 0, 0, KB_ROW - 4),
-		Enum.Font.GothamMedium, 12, DIM_TEXT, Enum.TextXAlignment.Center).ZIndex = 3
-end
-
-local function kbRefresh()
-	local show = kbOpen and not kbSuppressed
-	kbToken = kbToken + 1
-	local tk = kbToken
-	if show then
-		kbPanel.Visible = true
-		TweenService:Create(kbScale, POP, { Scale = 1 }):Play()
-		TweenService:Create(kbPanel, FAST, { GroupTransparency = 0 }):Play()
-	else
-		kbListening = nil
-		for id, pill in pairs(kbPills) do
-			pill.Text = bindName(binds[id])
-			pill.TextColor3 = bindDef[id].wired and ICON or DIM_TEXT
-			kbLines[id].Color = BORDER
-		end
-		TweenService:Create(kbScale, LEAVE, { Scale = 0.92 }):Play()
-		TweenService:Create(kbPanel, LEAVE, { GroupTransparency = 1 }):Play()
-		task.delay(LEAVE.Time + 0.02, function()
-			if tk == kbToken then
-				kbPanel.Visible = false
+			if processed or confirmOpen then
+				return
 			end
-		end)
+			if input.KeyCode == keybind then
+				setUIVisible(uiHidden)
+			end
+		end))
 	end
-end
 
-local function kbSetSuppressed(on)
-	kbSuppressed = on
-	kbRefresh()
-end
+	---------------------------------------------------------------------
+	-- WINDOW BEHAVIOUR: minimize (Y1 square) / maximize / unload dialog / drag
+	---------------------------------------------------------------------
+	do
+		local normalPos = window.Position   -- where the window was before it was maximized
+		local preSize = WINDOW_SIZE         -- size it had before it was maximized
+		local sizeTweens = {}               -- running maximize / restore animations
+		local winToken = 0
+		local miniToken = 0
+		local miniSaved = nil   -- where you last left the square (nil = left middle)
+		local GuiService = game:GetService("GuiService")
 
--- close button (x)
-do
-	local x = new("TextButton", {
-		AutoButtonColor = false,
-		Text = "",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -10, 0, KB_HEAD / 2),
-		Size = UDim2.fromOffset(26, 24),
-		BackgroundColor3 = CALM_RED,
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ZIndex = 6,
-	}, kbPanel)
-	corner(x, 6)
-	local parts = {}
-	for i = 1, 2 do
-		local rot = 45
-		if i == 2 then
-			rot = -45
-		end
-		local f = new("Frame", {
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(11, 2),
-			Rotation = rot,
-			BackgroundColor3 = ICON,
-			BorderSizePixel = 0,
-			ZIndex = 7,
-		}, x)
-		corner(f, 1)
-		parts[i] = f
-	end
-	x.MouseEnter:Connect(function()
-		TweenService:Create(x, FAST, { BackgroundTransparency = 0 }):Play()
-		for i = 1, #parts do
-			TweenService:Create(parts[i], FAST, { BackgroundColor3 = ICON_HOVER }):Play()
-		end
-	end)
-	x.MouseLeave:Connect(function()
-		TweenService:Create(x, FAST, { BackgroundTransparency = 1 }):Play()
-		for i = 1, #parts do
-			TweenService:Create(parts[i], FAST, { BackgroundColor3 = ICON }):Play()
-		end
-	end)
-	x.Activated:Connect(function()
-		kbOpen = false
-		kbRefresh()
-	end)
-end
+		-- tiny draggable square that stands in for the window while it is minimized
+		local MINI_SIZE = 44
+		local MINI_IN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local MINI_OUT = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		local WIN_HIDE = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+		local WIN_SHOW = TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
--- one row per bind: name on the left, key box on the right
-local function kbPaint(id)
-	local pill = kbPills[id]
-	if not pill then
-		return
-	end
-	if kbListening == id then
-		pill.Text = "Press a key"
-		TweenService:Create(pill, FAST, { TextColor3 = CALM_RED }):Play()
-		TweenService:Create(kbLines[id], FAST, { Color = CALM_RED }):Play()
-	else
-		pill.Text = bindName(binds[id])
-		local c = ICON
-		if not bindDef[id].wired then
-			c = DIM_TEXT
-		end
-		TweenService:Create(pill, FAST, { TextColor3 = c }):Play()
-		TweenService:Create(kbLines[id], FAST, { Color = BORDER }):Play()
-	end
-end
-
-for i = 1, #BINDS do
-	local def = BINDS[i]
-	local y = KB_HEAD + 4 + (i - 1) * KB_ROW
-	local nameColor = TEXT_COLOR
-	if not def.wired then
-		nameColor = DIM_TEXT
-	end
-	label(kbPanel, def.title, UDim2.fromOffset(16, y), UDim2.new(1, -130, 0, KB_ROW - 4),
-		Enum.Font.GothamMedium, 13, nameColor).ZIndex = 3
-
-	local pill = new("TextButton", {
-		Name = def.id .. "Key",
-		AutoButtonColor = false,
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -14, 0, y + (KB_ROW - 4) / 2),
-		Size = UDim2.fromOffset(0, 26),
-		AutomaticSize = Enum.AutomaticSize.X,
-		BackgroundColor3 = WELL,
-		BorderSizePixel = 0,
-		Font = Enum.Font.GothamMedium,
-		Text = bindName(binds[def.id]),
-		TextSize = 12,
-		TextColor3 = def.wired and ICON or DIM_TEXT,
-		ZIndex = 4,
-	}, kbPanel)
-	corner(pill, 6)
-	new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 11) }, pill)
-	new("UISizeConstraint", { MinSize = Vector2.new(66, 26) }, pill)
-	local line = stroke(pill, BORDER, 1, 0)
-	kbPills[def.id] = pill
-	kbLines[def.id] = line
-
-	pill.MouseEnter:Connect(function()
-		if kbListening ~= def.id then
-			TweenService:Create(line, FAST, { Color = KB_LINE_HOVER }):Play()
-			TweenService:Create(pill, FAST, { TextColor3 = ICON_HOVER }):Play()
-		end
-	end)
-	pill.MouseLeave:Connect(function()
-		if kbListening ~= def.id then
-			kbPaint(def.id)
-		end
-	end)
-	pill.Activated:Connect(function()
-		-- the click that just set a key must not start listening again
-		if os.clock() - kbLastBind < 0.2 then
-			return
-		end
-		local prev = kbListening
-		if prev == def.id then
-			kbListening = nil
-		else
-			kbListening = def.id
-		end
-		if prev then
-			kbPaint(prev)
-		end
-		kbPaint(def.id)
-	end)
-end
-
--- the next key / mouse button pressed becomes the bind
-table.insert(conns, UserInputService.InputBegan:Connect(function(input)
-	if not kbListening then
-		return
-	end
-	local id = kbListening
-	local t = input.UserInputType
-	local newBind = nil
-	local clear = false
-	if t == Enum.UserInputType.Keyboard then
-		if input.KeyCode == Enum.KeyCode.Escape then
-			-- cancel: keep the old key
-		elseif input.KeyCode == Enum.KeyCode.Backspace then
-			clear = true
-		elseif input.KeyCode ~= Enum.KeyCode.Unknown then
-			newBind = { kind = "Key", key = input.KeyCode }
-		else
-			return
-		end
-	elseif t == Enum.UserInputType.MouseButton1 then
-		newBind = { kind = "Mouse", n = 1 }
-	elseif t == Enum.UserInputType.MouseButton2 then
-		newBind = { kind = "Mouse", n = 2 }
-	elseif t == Enum.UserInputType.MouseButton3 then
-		newBind = { kind = "Mouse", n = 3 }
-	else
-		return
-	end
-	if clear then
-		binds[id] = nil
-	elseif newBind then
-		binds[id] = newBind
-	end
-	kbListening = nil
-	kbLastBind = os.clock()
-	kbPaint(id)
-end))
-
--- drag the panel by its title bar
-do
-	local dragging = false
-	local dragStart = nil
-	local startPos = nil
-	kbHead.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = kbPanel.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
-	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not dragging then
-			return
-		end
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			local d = input.Position - dragStart
-			kbPanel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
-				startPos.Y.Scale, startPos.Y.Offset + d.Y)
-		end
-	end))
-end
-
-kbRefresh()
-
----------------------------------------------------------------------
--- WINDOW CONTROLS (top right): keybinds, minimize, maximize, close
----------------------------------------------------------------------
-local controls = {}
-do
-	local BTN_W = 30
-	local BTN_H = 26
-	if touch then
-		BTN_W = 40
-		BTN_H = 32
-	end
-	local cluster = new("Frame", {
-		Name = "Controls",
-		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -12, 0, 12),
-		Size = UDim2.fromOffset(BTN_W * 4 + 12, BTN_H),
-		BackgroundTransparency = 1,
-		ZIndex = 20,
-	}, window)
-	new("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		HorizontalAlignment = Enum.HorizontalAlignment.Right,
-		VerticalAlignment = Enum.VerticalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 4),
-	}, cluster)
-
-	local function makeControl(kind, order, hoverColor)
-		local btn = new("TextButton", {
-			Name = kind,
+		local mini = new("TextButton", {
+			Name = "MiniButton",
 			AutoButtonColor = false,
 			Text = "",
-			LayoutOrder = order,
-			Size = UDim2.fromOffset(BTN_W, BTN_H),
-			BackgroundColor3 = hoverColor,
-			BackgroundTransparency = 1,
+			AnchorPoint = Vector2.new(0, 0),
+			Position = UDim2.new(0, 12, 0.5, -MINI_SIZE / 2),
+			Size = UDim2.fromOffset(MINI_SIZE, MINI_SIZE),
+			BackgroundColor3 = BLACK,
 			BorderSizePixel = 0,
-			ZIndex = 21,
-		}, cluster)
-		corner(btn, 6)
+			Visible = false,
+			ZIndex = 5,
+		}, gui)
+		corner(mini, SQUARE_RADIUS)
+		local miniStroke = stroke(mini, BORDER, 1, 0)
+		local miniScale = new("UIScale", { Scale = 0.6 }, mini)
+		local miniLogo = new("TextLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			Font = Enum.Font.GothamBlack,
+			Text = logoName,
+			TextSize = 20,
+			TextColor3 = Color3.new(1, 1, 1),
+			ZIndex = 6,
+		}, mini)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, miniLogo)
 
-		local parts = {}
-		local function line(w, h, rot)
-			local f = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(w, h),
-				Rotation = rot or 0,
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 22,
-			}, btn)
-			corner(f, 1)
-			table.insert(parts, { f, "BackgroundColor3" })
-		end
-
-		if kind == "keybinds" then
-			-- a small keyboard: outline + space bar
-			local kbd = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(11, 7),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ZIndex = 22,
-			}, btn)
-			corner(kbd, 2)
-			table.insert(parts, { stroke(kbd, ICON, 1.5, 0), "Color" })
-			local sp = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, 1.5),
-				Size = UDim2.fromOffset(6, 1.5),
-				BackgroundColor3 = ICON,
-				BorderSizePixel = 0,
-				ZIndex = 22,
-			}, btn)
-			corner(sp, 1)
-			table.insert(parts, { sp, "BackgroundColor3" })
-		elseif kind == "minimize" then
-			line(10, 2)
-		elseif kind == "maximize" then
-			local sq = new("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(10, 10),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ZIndex = 22,
-			}, btn)
-			corner(sq, 3)
-			table.insert(parts, { stroke(sq, ICON, 1.5, 0), "Color" })
-		else
-			line(13, 2, 45)
-			line(13, 2, -45)
-		end
-
-		local over = false
-		local function paint(isOver, pressed)
-			local bgT = 1
-			if isOver then
-				if pressed then
-					bgT = 0.35
-				else
-					bgT = 0
-				end
-			end
-			TweenService:Create(btn, FAST, { BackgroundTransparency = bgT }):Play()
-			local color = ICON
-			if isOver then
-				color = ICON_HOVER
-			end
-			for _, p in ipairs(parts) do
-				TweenService:Create(p[1], FAST, { [p[2]] = color }):Play()
-			end
-		end
-		btn.MouseEnter:Connect(function()
-			over = true
-			paint(true, false)
+		mini.MouseEnter:Connect(function()
+			TweenService:Create(miniStroke, FAST, { Color = HOVER_GREY }):Play()
+			TweenService:Create(mini, FAST, { BackgroundColor3 = SIDEBAR_BG }):Play()
 		end)
-		btn.MouseLeave:Connect(function()
-			over = false
-			paint(false, false)
+		mini.MouseLeave:Connect(function()
+			TweenService:Create(miniStroke, FAST, { Color = BORDER }):Play()
+			TweenService:Create(mini, FAST, { BackgroundColor3 = BLACK }):Play()
 		end)
-		btn.MouseButton1Down:Connect(function()
-			paint(true, true)
-		end)
-		btn.MouseButton1Up:Connect(function()
-			paint(over, false)
-		end)
-		return btn
-	end
 
-	controls.keybinds = makeControl("keybinds", 0, HOVER_GREY)
-	controls.keybinds.Activated:Connect(function()
-		kbOpen = not kbOpen
-		kbRefresh()
-	end)
-	controls.minimize = makeControl("minimize", 1, HOVER_GREY)
-	controls.maximize = makeControl("maximize", 2, HOVER_GREY)
-	controls.close = makeControl("close", 3, CALM_RED)
-end
-
----------------------------------------------------------------------
--- WINDOW BEHAVIOUR: minimize square, maximize, close, hide key, drag
----------------------------------------------------------------------
-local function unload()
-	if not alive then
-		return
-	end
-	alive = false
-	for i = 1, #conns do
-		pcall(function()
-			conns[i]:Disconnect()
-		end)
-	end
-	conns = {}
-	local ok, env = pcall(getgenv)
-	if ok and type(env) == "table" and env.__Y1_PREVIEW_STOP == unload then
-		env.__Y1_PREVIEW_STOP = nil
-	end
-	gui:Destroy()
-end
-do
-	local ok, env = pcall(getgenv)
-	if ok and type(env) == "table" then
-		env.__Y1_PREVIEW_STOP = unload
-	end
-end
-
-do
-	local normalPos = window.Position
-	local sizeTweens = {}
-	local winToken = 0
-	local miniToken = 0
-	local miniSaved = nil
-	local MINI = 44
-
-	-- the small Y1 square that stands in for the window while it is minimized
-	local mini = new("TextButton", {
-		Name = "MiniButton",
-		AutoButtonColor = false,
-		Text = "",
-		Position = UDim2.new(0, 12, 0.5, -MINI / 2),
-		Size = UDim2.fromOffset(MINI, MINI),
-		BackgroundColor3 = BG,
-		BorderSizePixel = 0,
-		Visible = false,
-		ZIndex = 5,
-	}, gui)
-	corner(mini, 10)
-	local miniStroke = stroke(mini, BORDER, 1, 0)
-	local miniScale = new("UIScale", { Scale = 0.6 }, mini)
-	new("TextLabel", {
-		BackgroundTransparency = 1,
-		Size = UDim2.fromScale(1, 1),
-		Font = Enum.Font.GothamBlack,
-		Text = "<font color=\"rgb(196,92,92)\">" .. string.sub(CONFIG.Logo, 1, -2) .. "</font>" .. string.sub(CONFIG.Logo, -1),
-		RichText = true,
-		TextSize = 20,
-		TextColor3 = Color3.new(1, 1, 1),
-		ZIndex = 6,
-	}, mini)
-	mini.MouseEnter:Connect(function()
-		TweenService:Create(miniStroke, FAST, { Color = CALM_RED }):Play()
-	end)
-	mini.MouseLeave:Connect(function()
-		TweenService:Create(miniStroke, FAST, { Color = BORDER }):Play()
-	end)
-
-	local function miniShow(show)
-		miniToken = miniToken + 1
-		local tk = miniToken
-		if show then
-			miniScale.Scale = 0.6
-			mini.Visible = true
-			TweenService:Create(miniScale, POP, { Scale = 1 }):Play()
-		else
-			TweenService:Create(miniScale, LEAVE, { Scale = 0.6 }):Play()
-			task.delay(LEAVE.Time + 0.02, function()
-				if tk == miniToken then
-					mini.Visible = false
-				end
-			end)
-		end
-	end
-
-	local function baseScale()
-		if maximized then
-			return 1
-		end
-		return fitScale
-	end
-
-	local function minimizeWindow()
-		if minimized or not alive then
-			return
-		end
-		minimized = true
-		hidden = false
-		kbSetSuppressed(true)
-		winToken = winToken + 1
-		local tk = winToken
-		TweenService:Create(windowScale, LEAVE, { Scale = baseScale() * 0.85 }):Play()
-		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-		task.delay(LEAVE.Time + 0.02, function()
-			if tk == winToken then
-				window.Visible = false
-			end
-		end)
-		if miniSaved then
-			mini.Position = miniSaved
-		else
-			mini.Position = UDim2.new(0, 12, 0.5, -MINI / 2)
-		end
-		miniShow(true)
-	end
-
-	local function restore()
-		if not minimized then
-			return
-		end
-		minimized = false
-		kbSetSuppressed(false)
-		winToken = winToken + 1
-		miniShow(false)
-		windowScale.Scale = baseScale() * 0.85
-		window.GroupTransparency = 1
-		window.Visible = true
-		TweenService:Create(windowScale, POP, { Scale = baseScale() }):Play()
-		TweenService:Create(window, FAST, { GroupTransparency = 0 }):Play()
-	end
-
-	controls.minimize.Activated:Connect(minimizeWindow)
-
-	controls.maximize.Activated:Connect(function()
-		if minimized then
-			return
-		end
-		for i = 1, #sizeTweens do
-			sizeTweens[i]:Cancel()
-		end
-		sizeTweens = {}
-		local t1 = nil
-		local t2 = nil
-		if maximized then
-			maximized = false
-			t1 = TweenService:Create(window, SMOOTH, { Size = UDim2.fromOffset(WIN_W, WIN_H), Position = normalPos })
-			t2 = TweenService:Create(windowScale, SMOOTH, { Scale = fitScale })
-		else
-			normalPos = window.Position
-			maximized = true
-			t1 = TweenService:Create(window, SMOOTH, {
-				Size = UDim2.new(1, -48, 1, -48),
-				Position = UDim2.fromScale(0.5, 0.5),
-			})
-			t2 = TweenService:Create(windowScale, SMOOTH, { Scale = 1 })
-		end
-		sizeTweens = { t1, t2 }
-		t1:Play()
-		t2:Play()
-	end)
-
-	controls.close.Activated:Connect(function()
-		if not alive then
-			return
-		end
-		TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-		TweenService:Create(windowScale, LEAVE, { Scale = windowScale.Scale * 0.92 }):Play()
-		task.delay(LEAVE.Time + 0.03, unload)
-	end)
-
-	-- drag the little square anywhere; a tap without moving opens the window again
-	local mDragging = false
-	local mMoved = false
-	local mGrab = nil
-	local mStart = nil
-
-	local function pointer(input)
-		local inset = GuiService:GetGuiInset()
-		return Vector2.new(input.Position.X + inset.X, input.Position.Y + inset.Y)
-	end
-
-	mini.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			mDragging = true
-			mMoved = false
-			mStart = pointer(input)
-			mGrab = mStart - mini.AbsolutePosition
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					local was = mDragging
-					mDragging = false
-					if was and not mMoved then
-						restore()
-					elseif was and mMoved then
-						miniSaved = mini.Position
+		ui.miniShow = function(show)
+			miniToken = miniToken + 1
+			local tk = miniToken
+			if show then
+				miniScale.Scale = 0.6
+				mini.Visible = true
+				TweenService:Create(miniScale, MINI_IN, { Scale = 1 }):Play()
+			else
+				TweenService:Create(miniScale, MINI_OUT, { Scale = 0.6 }):Play()
+				task.delay(MINI_OUT.Time + 0.02, function()
+					if tk == miniToken then
+						mini.Visible = false
 					end
-				end
-			end)
-		end
-	end)
-
-	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not mDragging then
-			return
-		end
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			local p = pointer(input)
-			if not mMoved and (p - mStart).Magnitude > 4 then
-				mMoved = true
-			end
-			if mMoved then
-				local vp = gui.AbsoluteSize
-				local nx = math.clamp(p.X - mGrab.X, 0, math.max(0, vp.X - MINI))
-				local ny = math.clamp(p.Y - mGrab.Y, 0, math.max(0, vp.Y - MINI))
-				mini.Position = UDim2.fromOffset(nx, ny)
+				end)
 			end
 		end
-	end))
 
-	-- hide / show with the key (the window shrinks a little and fades)
-	local animToken = 0
-	local function setHidden(hide)
-		if minimized or hidden == hide then
-			return
-		end
-		hidden = hide
-		kbSetSuppressed(hide)
-		animToken = animToken + 1
-		local tk = animToken
-		if hide then
-			TweenService:Create(windowScale, LEAVE, { Scale = baseScale() * 0.92 }):Play()
-			TweenService:Create(window, LEAVE, { GroupTransparency = 1 }):Play()
-			task.delay(LEAVE.Time + 0.02, function()
-				if tk == animToken then
+		local function minimizeWindow()
+			if minimized or confirmOpen then
+				return
+			end
+			closePopup()
+			minimized = true
+			winToken = winToken + 1
+			local tk = winToken
+			TweenService:Create(windowScale, WIN_HIDE, { Scale = windowScale.Scale * 0.85 }):Play()
+			TweenService:Create(window, WIN_HIDE, { GroupTransparency = 1 }):Play()
+			task.delay(WIN_HIDE.Time + 0.02, function()
+				if tk == winToken then
 					window.Visible = false
 				end
 			end)
-		else
+			-- the square appears where you last left it (first time: left middle of the screen)
+			if miniSaved then
+				mini.Position = miniSaved
+			else
+				mini.Position = UDim2.new(0, 12, 0.5, -MINI_SIZE / 2)
+			end
+			uiHidden = false
+			ui.miniShow(true)
+		end
+
+		local function restore()
+			if not minimized then
+				return
+			end
+			minimized = false
+			uiHidden = false
+			winToken = winToken + 1
+			ui.miniShow(false)
+			local base = fitScale
+			if maximized then
+				base = 1
+			end
+			windowScale.Scale = base * 0.85
+			window.GroupTransparency = 1
 			window.Visible = true
-			TweenService:Create(windowScale, POP, { Scale = baseScale() }):Play()
+			TweenService:Create(windowScale, WIN_SHOW, { Scale = base }):Play()
 			TweenService:Create(window, FAST, { GroupTransparency = 0 }):Play()
 		end
-	end
 
-	table.insert(conns, UserInputService.InputBegan:Connect(function(input, processed)
-		if processed then
-			return
-		end
-		if input.KeyCode == CONFIG.HideKey then
-			setHidden(not hidden)
-		end
-	end))
+		ui.minimize.Activated:Connect(minimizeWindow)
 
-	-- drag the window by the top bar (not while maximized)
-	local dragging = false
-	local dragStart = nil
-	local startPos = nil
-	bar.InputBegan:Connect(function(input)
-		if maximized or minimized then
-			return
+		ui.maximize.Activated:Connect(function()
+			if minimized or confirmOpen then
+				return
+			end
+			-- stop animations that are still running so quick double clicks cannot fight each other
+			for i = 1, #sizeTweens do
+				sizeTweens[i]:Cancel()
+			end
+			sizeTweens = {}
+
+			if maximized then
+				maximized = false
+				if ui.gripVis then
+					ui.gripVis()
+				end
+				-- always goes back to the normal small size. The top-left corner of the window ends up
+				-- where it was before maximizing (the window is centre-anchored, so the centre moves).
+				local sc = fitScale
+				local backPos = UDim2.new(
+					normalPos.X.Scale, normalPos.X.Offset + (WINDOW_SIZE.X.Offset - preSize.X.Offset) * sc / 2,
+					normalPos.Y.Scale, normalPos.Y.Offset + (WINDOW_SIZE.Y.Offset - preSize.Y.Offset) * sc / 2
+				)
+				local t1 = TweenService:Create(window, SMOOTH, { Size = WINDOW_SIZE, Position = backPos })
+				local t2 = TweenService:Create(windowScale, SMOOTH, { Scale = fitScale })
+				sizeTweens = { t1, t2 }
+				t1:Play()
+				t2:Play()
+				normalPos = backPos
+				return
+			end
+
+			preSize = window.Size
+			normalPos = window.Position
+			maximized = true
+			if ui.gripVis then
+				ui.gripVis()
+			end
+			local t1 = TweenService:Create(window, SMOOTH, {
+				Size = UDim2.new(1, -48, 1, -48),
+				Position = UDim2.fromScale(0.5, 0.5),
+			})
+			local t2 = TweenService:Create(windowScale, SMOOTH, { Scale = 1 })
+			sizeTweens = { t1, t2 }
+			t1:Play()
+			t2:Play()
+		end)
+
+		-- drag the square anywhere; a tap without moving opens the window again
+		-- input positions leave out the top inset, the gui does not, so add it back
+		local mDragging = false
+		local mMoved = false
+		local mGrab = nil
+		local mStartPtr = nil
+
+		local function pointer(input)
+			local inset = GuiService:GetGuiInset()
+			return Vector2.new(input.Position.X + inset.X, input.Position.Y + inset.Y)
 		end
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = window.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-					normalPos = window.Position
+
+		mini.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				mDragging = true
+				mMoved = false
+				mStartPtr = pointer(input)
+				mGrab = mStartPtr - mini.AbsolutePosition
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						local was = mDragging
+						mDragging = false
+						if was and not mMoved then
+							restore()
+						elseif was and mMoved then
+							miniSaved = mini.Position
+						end
+					end
+				end)
+			end
+		end)
+
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			if not mDragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				local p = pointer(input)
+				if not mMoved and (p - mStartPtr).Magnitude > 4 then
+					mMoved = true
+				end
+				if mMoved then
+					local vp = gui.AbsoluteSize
+					local nx = math.clamp(p.X - mGrab.X, 0, math.max(0, vp.X - MINI_SIZE))
+					local ny = math.clamp(p.Y - mGrab.Y, 0, math.max(0, vp.Y - MINI_SIZE))
+					mini.Position = UDim2.fromOffset(nx, ny)
+				end
+			end
+		end))
+
+		-- ===== unload confirmation (pops up when you press X) =====
+		-- It is modal: while it is open nothing behind it can be clicked, dragged, resized,
+		-- minimized, maximized or toggled with the keybind. Only Cancel and Confirm work.
+		local PAD = 3
+		local DLG_W = 320
+		local BTN_W = 135
+		local confirmToken = 0
+		local confirming = false
+
+		local overlay = new("CanvasGroup", {
+			Name = "ConfirmOverlay",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+			BackgroundTransparency = 0.4,
+			BorderSizePixel = 0,
+			Active = true,
+			GroupTransparency = 1,
+			Visible = false,
+			ZIndex = 30,
+		}, window)
+		corner(overlay, RADIUS)
+
+		-- full size button that swallows every click and tap outside the dialog
+		new("TextButton", {
+			Name = "Blocker",
+			AutoButtonColor = false,
+			Text = "",
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 30,
+		}, overlay)
+
+		local dialog = new("Frame", {
+			Name = "Dialog",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(DLG_W, 160),
+			BackgroundColor3 = SIDEBAR_BG,
+			BorderSizePixel = 0,
+			ZIndex = 31,
+		}, overlay)
+		corner(dialog, RADIUS + 3)
+		stroke(dialog, BORDER, 1, 0)
+
+		local dialogScale = new("UIScale", { Scale = 0.9 }, dialog)
+
+		-- title: "Yur1" with the same soft white-to-grey gradient as the logo
+		local dialogTitle = new("TextLabel", {
+			Name = "Title",
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(20, 16),
+			Size = UDim2.fromOffset(DLG_W - 40, 24),
+			Font = Enum.Font.GothamBlack,
+			Text = "Yur1",
+			TextSize = 20,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 32,
+		}, dialog)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(250, 250, 255)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(128, 128, 138)),
+			}),
+		}, dialogTitle)
+
+		local dialogText = new("TextLabel", {
+			Name = "Message",
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(20, 48),
+			Size = UDim2.fromOffset(DLG_W - 40, 54),
+			Font = Enum.Font.Gotham,
+			Text = "You will completely unload the script and you'll have to rerun the script again.",
+			TextSize = 13,
+			TextColor3 = ICON,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			ZIndex = 32,
+		}, dialog)
+
+		local trayFrame = new("Frame", {
+			Name = "ButtonTray",
+			Position = UDim2.fromOffset(20, 112),
+			Size = UDim2.fromOffset(DLG_W - 40, 30),
+			BackgroundColor3 = CLUSTER_BG,
+			BorderSizePixel = 0,
+			ZIndex = 32,
+		}, dialog)
+		corner(trayFrame, RADIUS + 2)
+
+		-- cancel icon: a ring with a diagonal slash through it (the "no" sign)
+		local function buildCancelIcon(holder, inks)
+			local ring = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(12, 12),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 35,
+			}, holder)
+			corner(ring, 100)
+			local ringStroke = stroke(ring, ICON, 2, 0)
+			inks[#inks + 1] = { ringStroke, "Color" }
+
+			local slash = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(14, 2),
+				Rotation = 45,
+				BackgroundColor3 = ICON,
+				BorderSizePixel = 0,
+				ZIndex = 35,
+			}, holder)
+			corner(slash, 1)
+			inks[#inks + 1] = { slash, "BackgroundColor3" }
+		end
+
+		-- confirm icon: an open door frame with an arrow leaving through it
+		local function buildExitIcon(holder, inks)
+			local function bar(cx, cy, w, h, rot)
+				local f = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(cx, cy),
+					Size = UDim2.fromOffset(w, h),
+					Rotation = rot,
+					BackgroundColor3 = ICON,
+					BorderSizePixel = 0,
+					ZIndex = 35,
+				}, holder)
+				corner(f, 1)
+				inks[#inks + 1] = { f, "BackgroundColor3" }
+			end
+			-- door frame (open on the right): post, top, bottom
+			bar(1, 8, 2, 16, 0)
+			bar(4.5, 1, 9, 2, 0)
+			bar(4.5, 15, 9, 2, 0)
+			-- arrow: shaft + two head strokes, pointing out of the door
+			bar(12.5, 8, 13, 2, 0)
+			bar(16.9, 5.9, 6, 2, 45)
+			bar(16.9, 10.1, 6, 2, -45)
+		end
+
+		-- button with an icon on the left of its text; hover paints background, text and icon
+		local function dialogButton(text, x, hoverColor, buildIcon, iconW, iconH)
+			local b = new("TextButton", {
+				AutoButtonColor = false,
+				Text = "",
+				Position = UDim2.fromOffset(x, PAD),
+				Size = UDim2.fromOffset(BTN_W, 24),
+				BackgroundColor3 = hoverColor,
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ZIndex = 33,
+			}, trayFrame)
+			corner(b, 4)
+
+			local row = new("Frame", {
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 34,
+			}, b)
+			new("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				Padding = UDim.new(0, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}, row)
+
+			local holder = new("Frame", {
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				Size = UDim2.fromOffset(iconW, iconH),
+				LayoutOrder = 1,
+				ZIndex = 34,
+			}, row)
+			local inks = {}
+			buildIcon(holder, inks)
+
+			local lbl = new("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 1, 0),
+				LayoutOrder = 2,
+				Font = Enum.Font.GothamMedium,
+				Text = text,
+				TextSize = 13,
+				TextColor3 = ICON,
+				ZIndex = 34,
+			}, row)
+
+			local function paint(over)
+				local bgT = 1
+				local col = ICON
+				if over then
+					bgT = 0
+					col = ICON_HOVER
+				end
+				TweenService:Create(b, FAST, { BackgroundTransparency = bgT }):Play()
+				TweenService:Create(lbl, FAST, { TextColor3 = col }):Play()
+				for i = 1, #inks do
+					TweenService:Create(inks[i][1], FAST, { [inks[i][2]] = col }):Play()
+				end
+			end
+			b.MouseEnter:Connect(function()
+				paint(true)
+			end)
+			b.MouseLeave:Connect(function()
+				paint(false)
+			end)
+			return b
+		end
+
+		-- Cancel on the left, Confirm on the right
+		local cancelBtn = dialogButton("Cancel", PAD, HOVER_GREY, buildCancelIcon, 18, 18)
+		local confirmBtn = dialogButton("Confirm", PAD + BTN_W + 4, HOVER_RED, buildExitIcon, 20, 16)
+
+		ui.layoutDialog = function()
+			local th = M.dlgBtn + PAD * 2
+			dialog.Size = UDim2.fromOffset(DLG_W, 112 + th + 20)
+			trayFrame.Size = UDim2.fromOffset(DLG_W - 40, th)
+			cancelBtn.Size = UDim2.fromOffset(BTN_W, M.dlgBtn)
+			confirmBtn.Size = UDim2.fromOffset(BTN_W, M.dlgBtn)
+		end
+		ui.layoutDialog()
+
+		local CONFIRM_IN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+		local CONFIRM_OUT = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+		local function showConfirm()
+			if confirmOpen then
+				return
+			end
+			confirmOpen = true
+			confirming = false
+			confirmToken = confirmToken + 1
+			closePopup()
+			overlay.GroupTransparency = 1
+			dialogScale.Scale = 0.9
+			overlay.Visible = true
+			TweenService:Create(overlay, FAST, { GroupTransparency = 0 }):Play()
+			TweenService:Create(dialogScale, CONFIRM_IN, { Scale = 1 }):Play()
+		end
+
+		local function hideConfirm()
+			if not confirmOpen or confirming then
+				return
+			end
+			confirmOpen = false
+			confirmToken = confirmToken + 1
+			local token = confirmToken
+			TweenService:Create(overlay, CONFIRM_OUT, { GroupTransparency = 1 }):Play()
+			TweenService:Create(dialogScale, CONFIRM_OUT, { Scale = 0.92 }):Play()
+			task.delay(CONFIRM_OUT.Time + 0.02, function()
+				if token == confirmToken then
+					overlay.Visible = false
 				end
 			end)
 		end
-	end)
 
-	table.insert(conns, UserInputService.InputChanged:Connect(function(input)
-		if not dragging then
+		ui.close.Activated:Connect(function()
+			if minimized then
+				restore()
+			end
+			showConfirm()
+		end)
+
+		confirmBtn.Activated:Connect(function()
+			if confirming then
+				return
+			end
+			confirming = true
+			confirmToken = confirmToken + 1
+			TweenService:Create(window, CONFIRM_OUT, { GroupTransparency = 1 }):Play()
+			TweenService:Create(windowScale, CONFIRM_OUT, { Scale = windowScale.Scale * 0.92 }):Play()
+			task.delay(CONFIRM_OUT.Time + 0.02, function()
+				W:Unload()
+			end)
+		end)
+
+		cancelBtn.Activated:Connect(hideConfirm)
+
+		-- ===== drag the top bar (or the empty sidebar) to move; disabled while maximized =====
+		local dragging = false
+		local dragStart = nil
+		local startPos = nil
+
+		local function bindDrag(handle)
+			handle.InputBegan:Connect(function(input)
+				if maximized or minimized or confirmOpen then
+					return
+				end
+				if input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch then
+					dragging = true
+					dragStart = input.Position
+					startPos = window.Position
+					input.Changed:Connect(function()
+						if input.UserInputState == Enum.UserInputState.End then
+							dragging = false
+							normalPos = window.Position
+						end
+					end)
+				end
+			end)
+		end
+		bindDrag(bar)
+		bindDrag(sidebar)
+
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			if not dragging then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				local d = input.Position - dragStart
+				window.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + d.X,
+					startPos.Y.Scale, startPos.Y.Offset + d.Y
+				)
+				normalPos = window.Position
+			end
+		end))
+
+		-- ===== resize: drag the grip in the bottom-right corner =====
+		-- the window can only grow from its original size, never get smaller
+		local MIN_W = WINDOW_SIZE.X.Offset
+		local MIN_H = WINDOW_SIZE.Y.Offset
+		local resizing = false
+		local rStart = nil
+		local rSize = nil
+		local rPos = nil
+
+		local grip = new("TextButton", {
+			Name = "ResizeGrip",
+			AutoButtonColor = false,
+			Text = "",
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, -4, 1, -4),
+			Size = UDim2.fromOffset(18, 18),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 25,
+		}, window)
+
+		local gripInks = {}
+		local function gripLine(len, c)
+			local f = new("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromOffset(c, c),
+				Size = UDim2.fromOffset(len, 2),
+				Rotation = -45,
+				BackgroundColor3 = DIM_TEXT,
+				BorderSizePixel = 0,
+				ZIndex = 26,
+			}, grip)
+			corner(f, 1)
+			gripInks[#gripInks + 1] = f
+		end
+		gripLine(5, 14)
+		gripLine(10, 9)
+
+		local function paintGrip(on)
+			local col = DIM_TEXT
+			if on then
+				col = ICON_HOVER
+			end
+			for i = 1, #gripInks do
+				TweenService:Create(gripInks[i], FAST, { BackgroundColor3 = col }):Play()
+			end
+		end
+		grip.MouseEnter:Connect(function()
+			paintGrip(true)
+		end)
+		grip.MouseLeave:Connect(function()
+			if not resizing then
+				paintGrip(false)
+			end
+		end)
+
+		ui.gripVis = function()
+			grip.Visible = not maximized
+		end
+
+		grip.InputBegan:Connect(function(input)
+			if maximized or minimized or confirmOpen then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				resizing = true
+				rStart = input.Position
+				rSize = window.Size
+				rPos = window.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						resizing = false
+						paintGrip(false)
+						normalPos = window.Position
+					end
+				end)
+			end
+		end)
+
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			if not resizing then
+				return
+			end
+			if input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch then
+				local sc = windowScale.Scale
+				local d = input.Position - rStart
+				local vp = gui.AbsoluteSize
+				local maxW = math.max(MIN_W, math.floor((vp.X - 12) / sc))
+				local maxH = math.max(MIN_H, math.floor((vp.Y - 12) / sc))
+				local nw = math.clamp(rSize.X.Offset + d.X / sc, MIN_W, maxW)
+				local nh = math.clamp(rSize.Y.Offset + d.Y / sc, MIN_H, maxH)
+				window.Size = UDim2.fromOffset(nw, nh)
+				-- the window is centre-anchored, so shift it to keep the top-left corner still
+				window.Position = UDim2.new(
+					rPos.X.Scale, rPos.X.Offset + (nw - rSize.X.Offset) * sc / 2,
+					rPos.Y.Scale, rPos.Y.Offset + (nh - rSize.Y.Offset) * sc / 2
+				)
+			end
+		end))
+	end
+
+	---------------------------------------------------------------------
+	-- TOUCH MODE + PUBLIC API
+	---------------------------------------------------------------------
+	applyTouch = function(on)
+		W.Touch = on
+		setMetrics(on)
+		ui.layoutControls()
+		ui.layoutBack()
+		ui.layoutSettings()
+		ui.layoutDialog()
+		ui.layoutStats()
+		for i = 1, #touchFns do
+			local ok, err = pcall(touchFns[i], on)
+			if not ok then
+				warn("[ui] touch callback error: " .. tostring(err))
+			end
+		end
+	end
+
+	function W:ShowPage(name)
+		showPage(name)
+	end
+
+	function W:SetTouch(on)
+		applyTouch(on)
+	end
+
+	function W:OnTouchChange(fn)
+		table.insert(touchFns, fn)
+	end
+
+	function W:OnUnload(fn)
+		table.insert(unloadFns, fn)
+	end
+
+	function W:Track(conn)
+		table.insert(conns, conn)
+		return conn
+	end
+
+	function W:Toast(msg, seconds)
+		toast(msg, seconds)
+	end
+
+	function W:SetStats(text)
+		statsLabel.Text = text
+	end
+
+	function W:IsHidden()
+		return uiHidden
+	end
+
+	function W:IsMinimized()
+		return minimized
+	end
+
+	function W:Unload()
+		if unloaded then
 			return
 		end
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			local d = input.Position - dragStart
-			window.Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + d.X,
-				startPos.Y.Scale, startPos.Y.Offset + d.Y
-			)
-			normalPos = window.Position
+		unloaded = true
+		for i = 1, #unloadFns do
+			local ok, err = pcall(unloadFns[i])
+			if not ok then
+				warn("[ui] unload callback error: " .. tostring(err))
+			end
 		end
-	end))
+		for i = 1, #conns do
+			pcall(function()
+				conns[i]:Disconnect()
+			end)
+		end
+		conns = {}
+		gui:Destroy()
+	end
+
+	-- first layout pass with the starting mode (touch-only devices start in Touch Mode)
+	ui.layoutSettings()
+	ui.layoutStats()
+
+	return W
 end
 
----------------------------------------------------------------------
--- INTRO: the window pops in
----------------------------------------------------------------------
-TweenService:Create(window, SMOOTH, { GroupTransparency = 0 }):Play()
-TweenService:Create(windowScale, POP, { Scale = fitScale }):Play()
-
-return {
-	ShowTab = showTab,
-	Unload = unload,
-	IsBind = bindMatches,
-	GetBind = function(id)
-		return bindName(binds[id])
-	end,
-	GetSearch = function()
-		return searchQuery
-	end,
-	SetSearch = function(text)
-		if searchBox then
-			searchBox.Text = tostring(text or "")
-		end
-	end,
-}
+return UI
